@@ -60,6 +60,7 @@ jobs:
           $python_root_dir=$python_dir.Substring(0, $python_dir.Length - 4)
           mkdir Python3.11
           cd Python3.11
+          New-Item -Path . -Name "newfile.txt" -ItemType File
           # cp -r $python_root_dir/* .
           # dir
           cd ..
