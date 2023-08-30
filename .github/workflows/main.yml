@@ -23,10 +23,11 @@ jobs:
         $hash=git log -1 --pretty=%H
         $hash_version=$hash.Substring(0, 7)
         echo $hash_version
-        cd ..
+        
 
     - name: Download MoviePilot-Frontend
       run: |
+          cd ..
           mkdir MoviePilot-Frontend
           cd MoviePilot-Frontend
           New-Item -Path . -Name "newfile.txt" -ItemType File
@@ -53,18 +54,19 @@ jobs:
           # $zipFilePath = './dist.zip'
           # Expand-Archive -Path $zipFilePath -DestinationPath dist
           dir
-          cd ..
+          
 
     - name: Make Python package
       run: |
+          cd ..
           $python_dir=$(python -c "import os; print(os.path.dirname(os.__file__))")
           $python_root_dir=$python_dir.Substring(0, $python_dir.Length - 4)
           mkdir Python3.11
           cd Python3.11
           New-Item -Path . -Name "newfile.txt" -ItemType File
           # cp -r $python_root_dir/* .
-          # dir
-          cd ..
+          dir
+          
 
 #    - name: Exe Build
 #      run: |
@@ -79,10 +81,13 @@ jobs:
 
     - name: Compile Inno Setup Script
       run: |
+        cd ..
+        dir
         git clone https://github.com/developer-wlj/Inno-Setup-MoviePilot.git
         cd Inno-Setup-MoviePilot
         Copy-Item -Path ".\ChineseSimplified.isl" -Destination "C:\Users\runneradmin\AppData\Local\Temp\inno\Languages"
         iscc /DAppVersion=$first_version.$hash_version build.iss
+
 
     - name: Upload windows file
       uses: actions/upload-artifact@v3
