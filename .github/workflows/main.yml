@@ -29,6 +29,7 @@ jobs:
       run: |
           mkdir MoviePilot-Frontend
           cd MoviePilot-Frontend
+          New-Item -Path . -Name "newfile.txt" -ItemType File
           $response = Invoke-WebRequest -Uri 'https://api.github.com/repos/jxxghp/MoviePilot-Frontend/releases/latest' -Method GET
           # 将响应内容转换为JSON对象
           $json = $response.Content | ConvertFrom-Json
