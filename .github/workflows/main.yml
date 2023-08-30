@@ -5,6 +5,8 @@ on:
 jobs:
   Windows-build:
     runs-on: windows-latest
+    secrets:
+      - TOKEN
     steps:
     - name: Init Python 3.11.4
       uses: actions/setup-python@v4
@@ -60,8 +62,8 @@ jobs:
           $python_root_dir=$python_dir.Substring(0, $python_dir.Length - 4)
           mkdir Python3.11
           cd Python3.11
-          cp -r $python_root_dir/* .
-          dir
+#          cp -r $python_root_dir/* .
+#          dir
           cd ..
 
 #    - name: Exe Build
@@ -77,6 +79,8 @@ jobs:
 
     - name: Compile Inno Setup Script
       run: |
+        Get-ChildItem -Path D:\ -Include BrazilianPortuguese.isl -File -Recurse -ErrorAction SilentlyContinue
+        Get-ChildItem -Path C:\ -Include BrazilianPortuguese.isl -File -Recurse -ErrorAction SilentlyContinue
         git clone https://github.com/developer-wlj/Inno-Setup-MoviePilot.git
         cd Inno-Setup-MoviePilot
         iscc /DAppVersion=$first_version.$hash_version build.iss
