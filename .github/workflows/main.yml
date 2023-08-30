@@ -5,8 +5,6 @@ on:
 jobs:
   Windows-build:
     runs-on: windows-latest
-    secrets:
-      - TOKEN
     steps:
     - name: Init Python 3.11.4
       uses: actions/setup-python@v4
