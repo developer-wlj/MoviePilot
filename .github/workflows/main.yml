@@ -1,6 +1,8 @@
 name: Windows MoviePilot Builder
 on:
-  workflow_dispatch:
+  push:
+    branches:
+      - wlj0807
 
 jobs:
   Windows-build:
