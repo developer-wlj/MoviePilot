@@ -94,7 +94,7 @@ jobs:
       uses: actions/upload-artifact@v3
       with:
         name: windows
-        path: D:\a\MoviePilot\exe\build\Windows_MoviePilot_Setup_v${{first_version}}.${{hash_version}}.exe
+        path: D:\a\MoviePilot\exe\build\Windows_MoviePilot_Setup_v${{env.first_version}}.${{env.hash_version}}.exe
 #
 #    - name: Generate Release
 #      uses: softprops/action-gh-release@v1
@@ -119,7 +119,7 @@ jobs:
           pwd
           ls -all
           mkdir releases
-          mv ./windows/nas-tools.exe ./releases/Windows_MoviePilot_Setup_v${{first_version}}.${{hash_version}}.exe
+          mv ./windows/nas-tools.exe ./releases/Windows_MoviePilot_Setup_v${{env.first_version}}.${{env.hash_version}}.exe
           pwd
           ls -all
 
@@ -129,8 +129,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: v${{first_version}}.${{hash_version}}
-          release_name: v${{first_version}}.${{hash_version}}
+          tag_name: v${{env.first_version}}.${{env.hash_version}}
+          release_name: v${{env.first_version}}.${{env.hash_version}}
           body: ${{ github.event.commits[0].message }}
           draft: false
           prerelease: false
