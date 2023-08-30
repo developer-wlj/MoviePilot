@@ -12,10 +12,11 @@ jobs:
         python-version: '3.11.4'
 
     - name: Checkout
-      uses: actions/checkout@wlj0807
+      uses: actions/checkout@3
 
     - name: Install dependent packages
       run: |
+        git checkout wlj0807
         dir
         python -m pip install --upgrade pip
         pip install -r requirements.txt
