@@ -62,8 +62,8 @@ jobs:
           $python_root_dir=$python_dir.Substring(0, $python_dir.Length - 4)
           mkdir Python3.11
           cd Python3.11
-#          cp -r $python_root_dir/* .
-#          dir
+          # cp -r $python_root_dir/* .
+          # dir
           cd ..
 
 #    - name: Exe Build
