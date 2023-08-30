@@ -20,8 +20,8 @@ jobs:
         dir
         python -m pip install --upgrade pip
         pip install -r requirements.txt
-        hash=${git log -1 --pretty=%H}
-        hash_version=${hash:0:7}
+        $hash=git log -1 --pretty=%H
+        $hash_version=$hash.Substring(0, 7)
         echo $hash_version
         cd ..
 
@@ -41,11 +41,11 @@ jobs:
 
     - name: Make Python package
       run: |
-          python_dir=$(python -c "import os; print(os.path.dirname(os.__file__))")
-          python_root_dir=${python_dir:0:-4}
+          $python_dir=$(python -c "import os; print(os.path.dirname(os.__file__))")
+          $python_root_dir=$python_dir.Substring(0, $python_dir.Length - 4)
           mkdir Python3.11
           cd Python3.11
-          cp -r ${python_root_dir}/* .
+          cp -r $python_root_dir/* .
           dir
           cd ..
 
@@ -64,13 +64,13 @@ jobs:
       run: |
         git clone https://github.com/developer-wlj/Inno-Setup-MoviePilot.git
         cd Inno-Setup-MoviePilot
-        iscc /DAppVersion=${first_version}.${hash_version} build.iss
+        iscc /DAppVersion=$first_version.$hash_version build.iss
 
     - name: Upload windows file
       uses: actions/upload-artifact@v3
       with:
         name: windows
-        path: ./Windows_MoviePilot_Setup_v${first_version}.${hash_version}.exe
+        path: ./Windows_MoviePilot_Setup_v$first_version.$hash_version.exe
 
     - name: Generate Release
       uses: softprops/action-gh-release@v1
