@@ -37,8 +37,8 @@ jobs:
           # 输出tag_name的值
           echo "正在下载前端程序 $tagName..."
           curl -sL "https://github.com/jxxghp/MoviePilot-Frontend/releases/download/$tagName/dist.zip"
-          $zipFilePath = 'dist.zip'
-          Expand-Archive -Path $zipFilePath -DestinationPath dist -Verbose
+          $zipFilePath = 'D:\a\MoviePilot\MoviePilot\MoviePilot-Frontend\dist.zip'
+          Expand-Archive -Path $zipFilePath -DestinationPath dist
           dir
           cd ..
 
