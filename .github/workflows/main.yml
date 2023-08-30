@@ -36,7 +36,6 @@ jobs:
           $tagName = $json.tag_name
           # 输出tag_name的值
           echo "正在下载前端程序 $tagName..."
-#          curl -sL "https://github.com/jxxghp/MoviePilot-Frontend/releases/download/$tagName/dist.zip"
           # 设置URL和下载路径
           $url = "https://github.com/jxxghp/MoviePilot-Frontend/releases/download/$tagName/dist.zip"
           echo "正在下载前端程序 $url"
