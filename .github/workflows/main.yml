@@ -23,7 +23,7 @@ jobs:
         $hash=git log -1 --pretty=%H
         $hash_version=$hash.Substring(0, 7)
         echo $hash_version
-        
+
 
     - name: Download MoviePilot-Frontend
       run: |
@@ -54,7 +54,7 @@ jobs:
           # $zipFilePath = './dist.zip'
           # Expand-Archive -Path $zipFilePath -DestinationPath dist
           dir
-          
+
 
     - name: Make Python package
       run: |
@@ -66,7 +66,7 @@ jobs:
           New-Item -Path . -Name "newfile.txt" -ItemType File
           # cp -r $python_root_dir/* .
           dir
-          
+
 
 #    - name: Exe Build
 #      run: |
@@ -93,13 +93,13 @@ jobs:
       uses: actions/upload-artifact@v3
       with:
         name: windows
-        path: ./Windows_MoviePilot_Setup_v$first_version.$hash_version.exe
+        path: D:\a\MoviePilot\exe\build\Windows_MoviePilot_Setup_v$first_version.$hash_version.exe
 
     - name: Generate Release
       uses: softprops/action-gh-release@v1
       with:
-        tag_name: v${ first_version }.${ hash_version }
-        name: v${ first_version }.${ hash_version }
+        tag_name: v$first_version.$hash_version
+        name: v$first_version.$hash_version
         draft: false
         prerelease: false
       env:
