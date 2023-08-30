@@ -58,7 +58,7 @@ jobs:
 #        iscc /DAppVersion=1.2 build.iss
 
     - name: Install Inno Setup Compiler
-      uses: jurplel/install-innosetup-action@v3
+      uses: nadeemjazmawe/inno-setup-action-cli@v6.0.5
       with:
         version: '6.2.2'
         arch: 'win64_mingw'
