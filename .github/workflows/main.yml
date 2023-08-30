@@ -77,8 +77,6 @@ jobs:
 
     - name: Compile Inno Setup Script
       run: |
-        Get-ChildItem -Path D:\ -Include BrazilianPortuguese.isl -File -Recurse -ErrorAction SilentlyContinue
-        Get-ChildItem -Path C:\ -Include BrazilianPortuguese.isl -File -Recurse -ErrorAction SilentlyContinue
         git clone https://github.com/developer-wlj/Inno-Setup-MoviePilot.git
         cd Inno-Setup-MoviePilot
         iscc /DAppVersion=$first_version.$hash_version build.iss
