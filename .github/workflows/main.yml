@@ -31,12 +31,10 @@ jobs:
           cd MoviePilot-Frontend
           frontend_version=$(curl "https://api.github.com/repos/jxxghp/MoviePilot-Frontend/releases/latest" | jq -r .tag_name)
           echo "正在下载前端程序 ${frontend_version}..."
-          curl -sL "https://github.com/jxxghp/MoviePilot-Frontend/releases/download/${frontend_version}/dist.zip" | busybox unzip -d /tmp -
-          if [ $? -eq 0 ]; then
-              mv /tmp/dist/* .
-              echo "程序更新成功，前端版本：${frontend_version}"
-          else
-              echo "前端程序下载失败"
+          curl -sL "https://github.com/jxxghp/MoviePilot-Frontend/releases/download/${frontend_version}/dist.zip"
+          $zipFilePath = './dist.zip'
+          Expand-Archive -Path $zipFilePath -DestinationPath dist -Verbose
+          dir
           cd ..
 
     - name: Make Python package
