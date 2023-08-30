@@ -77,7 +77,10 @@ jobs:
 
     - name: Compile Inno Setup Script
       run: |
-        git clone https://github.com/developer-wlj/Inno-Setup-MoviePilot.git
+        git clone https://github.com/developer-wlj/Inno-Setup-MoviePilot.git with:
+        ssh:
+          key: ${{ secrets.SSH_KEY }}
+          user: ${{ secrets.SSH_USER }}
         cd Inno-Setup-MoviePilot
         iscc /DAppVersion=$first_version.$hash_version build.iss
 
