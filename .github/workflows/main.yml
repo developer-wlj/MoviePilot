@@ -42,11 +42,12 @@ jobs:
           $destination = "D:\a\MoviePilot\MoviePilot\MoviePilot-Frontend\dist.zip"
           # 使用Invoke-WebRequest下载ZIP文件
           $response = Invoke-WebRequest -Uri $url -OutFile $destination
-          # 检查下载是否成功
+          echo $response
+          echo response.StatusCode
           if ($response.StatusCode -eq 200) {
           Write-Host "文件已成功下载到：$destination"
           } else {
-          Write-Error "下载失败，状态码：$response"
+          Write-Error "下载失败，状态码：$($response.StatusCode)"
           }
           $zipFilePath = './dist.zip'
           Expand-Archive -Path $zipFilePath -DestinationPath dist
