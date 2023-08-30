@@ -87,8 +87,8 @@ jobs:
         cd Inno-Setup-MoviePilot
         Copy-Item -Path ".\ChineseSimplified.isl" -Destination "C:\Users\runneradmin\AppData\Local\Temp\inno\Languages"
         iscc /DAppVersion=$first_version.$hash_version build.iss
-        echo "first_version=$first_version" >> $GITHUB_ENV
-        echo "hash_version=$hash_version" >> $GITHUB_ENV
+        echo "first_version=$first_version" >> $env:$GITHUB_ENV
+        echo "hash_version=$hash_version" >> $env:$GITHUB_ENV
 
     - name: Upload windows file
       uses: actions/upload-artifact@v3
