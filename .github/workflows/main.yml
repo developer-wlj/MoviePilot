@@ -93,13 +93,13 @@ jobs:
       uses: actions/upload-artifact@v3
       with:
         name: windows
-        path: D:\a\MoviePilot\exe\build\Windows_MoviePilot_Setup_v$first_version.$hash_version.exe
+        path: D:\a\MoviePilot\exe\build\Windows_MoviePilot_Setup_v${first_version}.${hash_version}.exe
 
     - name: Generate Release
       uses: softprops/action-gh-release@v1
       with:
-        tag_name: v$first_version.$hash_version
-        name: v$first_version.$hash_version
+        tag_name: v${first_version}.${hash_version}
+        name: v${first_version}.${hash_version}
         draft: false
         prerelease: false
       env:
