@@ -1,0 +1,85 @@
+name: Windows MoviePilot Builder
+on:
+  workflow_dispatch:
+
+jobs:
+  Windows-build:
+    runs-on: windows-latest
+    steps:
+    - name: Init Python 3.11.4
+      uses: actions/setup-python@v6
+      with:
+        python-version: '3.11.4'
+
+    - name: Checkout
+      uses: actions/checkout@wlj0807
+
+    - name: Install dependent packages
+      run: |
+        dir
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        hash=${git log -1 --pretty=%H}
+        hash_version=${hash:0:7}
+        echo $hash_version
+        cd ..
+
+    - name: Download MoviePilot-Frontend
+      run: |
+          mkdir MoviePilot-Frontend
+          cd MoviePilot-Frontend
+          frontend_version=$(curl "https://api.github.com/repos/jxxghp/MoviePilot-Frontend/releases/latest" | jq -r .tag_name)
+          echo "正在下载前端程序 ${frontend_version}..."
+          curl -sL "https://github.com/jxxghp/MoviePilot-Frontend/releases/download/${frontend_version}/dist.zip" | busybox unzip -d /tmp -
+          if [ $? -eq 0 ]; then
+              mv /tmp/dist/* .
+              echo "程序更新成功，前端版本：${frontend_version}"
+          else
+              echo "前端程序下载失败"
+          cd ..
+
+    - name: Make Python package
+      run: |
+          python_dir=$(python -c "import os; print(os.path.dirname(os.__file__))")
+          python_root_dir=${python_dir:0:-4}
+          mkdir Python3.11
+          cd Python3.11
+          cp -r ${python_root_dir}/* .
+          dir
+          cd ..
+
+#    - name: Exe Build
+#      run: |
+#        mkdir build
+#        cd build
+#        sed -i 's/old_value/new_value/g' build.iss
+#        sed -i 's/1.0.9.a0ec38a/1.0.19.a0ec38a/g' 111.iss
+#        iscc /DAppVersion=1.2 build.iss
+
+    - name: Install Inno Setup Compiler
+      uses: jurplel/install-innosetup-action@v3
+      with:
+        version: '6.2.2'
+        arch: 'win64_mingw'
+
+    - name: Compile Inno Setup Script
+      run: |
+        git clone https://github.com/developer-wlj/Inno-Setup-MoviePilot.git
+        cd Inno-Setup-MoviePilot
+        iscc /DAppVersion=${first_version}.${hash_version} build.iss
+
+    - name: Upload windows file
+      uses: actions/upload-artifact@v3
+      with:
+        name: windows
+        path: ./Windows_MoviePilot_Setup_v${first_version}.${hash_version}.exe
+
+    - name: Generate Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: v${{ first_version }}.${{ hash_version }}
+        name: v${{ first_version }}.${{ hash_version }}
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
