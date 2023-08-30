@@ -89,7 +89,6 @@ jobs:
         iscc /DAppVersion=$first_version.$hash_version build.iss
         $env:first_version = $first_version
         $env:hash_version = $hash_version
-        $env:version = Windows_MoviePilot_Setup_v$first_version.$env.hash_version.exe
 
     - name: Upload windows file
       uses: actions/upload-artifact@v3
