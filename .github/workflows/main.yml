@@ -43,7 +43,7 @@ jobs:
           # 使用Invoke-WebRequest下载ZIP文件
           $response = Invoke-WebRequest -Uri $url -OutFile $destination
           echo $response
-          echo response.StatusCode
+          echo $response.StatusCode
           if ($response.StatusCode -eq 200) {
           Write-Host "文件已成功下载到：$destination"
           } else {
