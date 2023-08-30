@@ -29,8 +29,13 @@ jobs:
       run: |
           mkdir MoviePilot-Frontend
           cd MoviePilot-Frontend
-          frontend_version=$(curl "https://api.github.com/repos/jxxghp/MoviePilot-Frontend/releases/latest" | jq -r .tag_name)
-          echo "正在下载前端程序 ${frontend_version}..."
+          $response = Invoke-WebRequest -Uri 'https://api.github.com/repos/jxxghp/MoviePilot-Frontend/releases/latest' -Method GET
+          # 将响应内容转换为JSON对象
+          $json = $response.Content | ConvertFrom-Json
+          # 提取tag_name的值
+          $tagName = $json.tag_name
+          # 输出tag_name的值
+          echo "正在下载前端程序 $tagName..."
           curl -sL "https://github.com/jxxghp/MoviePilot-Frontend/releases/download/${frontend_version}/dist.zip"
           $zipFilePath = './dist.zip'
           Expand-Archive -Path $zipFilePath -DestinationPath dist -Verbose
