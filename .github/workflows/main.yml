@@ -79,6 +79,7 @@ jobs:
       run: |
         git clone https://github.com/developer-wlj/Inno-Setup-MoviePilot.git
         cd Inno-Setup-MoviePilot
+        Copy-Item -Path ".\ChineseSimplified.isl" -Destination "C:\Users\runneradmin\AppData\Local\Temp\inno\Languages"
         iscc /DAppVersion=$first_version.$hash_version build.iss
 
     - name: Upload windows file
