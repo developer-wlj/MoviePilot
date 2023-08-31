@@ -103,7 +103,7 @@ jobs:
         cd ..
         cat $env:GITHUB_OUTPUT
         echo 999
-        echo $env:KEY
+        echo ${{ steps.Make_Python_package.outputs.KEY }}
         echo 888
         echo "${{ steps.Make_Python_package.outputs.KEY }}"
         echo 999
