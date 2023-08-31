@@ -16,7 +16,6 @@ jobs:
 
     - name: Install dependent packages
       run: |
-        Get-ChildItem Env:
         git checkout wlj0807
         dir
         # python -m pip install --upgrade pip
@@ -41,8 +40,8 @@ jobs:
           # 输出tag_name的值
           echo "正在下载前端程序 $tagName..."
           echo "FIRST_VERSION = $tagName" >> $env:GITHUB_ENV
-          echo $env:GITHUB_ENV
-          cat $env:GITHUB_ENV
+          echo ${{ env.GITHUB_ENV }}
+          cat ${{ env.GITHUB_ENV }}
           # 设置URL和下载路径
           $url = "https://github.com/jxxghp/MoviePilot-Frontend/releases/download/$tagName/dist.zip"
           echo "正在下载前端程序 $url"
