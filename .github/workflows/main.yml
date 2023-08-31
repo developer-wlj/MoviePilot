@@ -93,7 +93,7 @@ jobs:
         echo $env:FIRST_VERSION
         echo $env:HASH_VERSION
         echo "$env:FIRST_VERSION.$env:HASH_VERSION"
-        echo "LATEST_VERSION="+"$env:FIRST_VERSION.$env:HASH_VERSION" >> $env:GITHUB_ENV
+        echo ("LATEST_VERSION="+"$env:FIRST_VERSION.$env:HASH_VERSION") >> $env:GITHUB_ENV
         echo 111
         echo $LATEST_VERSION
         # iscc /DAppVersion="$env:FIRST_VERSION.$env:HASH_VERSION" build.iss
