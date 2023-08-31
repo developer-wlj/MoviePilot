@@ -29,6 +29,7 @@ jobs:
     - name: Download MoviePilot-Frontend
       run: |
           cd ..
+          echo $env:HASH_VERSION
           mkdir MoviePilot-Frontend
           cd MoviePilot-Frontend
           New-Item -Path . -Name "newfile.txt" -ItemType File
@@ -40,8 +41,10 @@ jobs:
           # 输出tag_name的值
           echo "正在下载前端程序 $tagName..."
           echo "FIRST_VERSION = $tagName" >> $env:GITHUB_ENV
-          echo ${{ env.GITHUB_ENV }}
-          cat ${{ env.GITHUB_ENV }}
+          echo $env:HASH_VERSION
+          echo $FIRST_VERSION
+          echo "$FIRST_VERSION.$env:HASH_VERSION"
+          cat $env:GITHUB_ENV
           # 设置URL和下载路径
           $url = "https://github.com/jxxghp/MoviePilot-Frontend/releases/download/$tagName/dist.zip"
           echo "正在下载前端程序 $url"
@@ -93,7 +96,7 @@ jobs:
         echo $env:FIRST_VERSION
         echo $env:HASH_VERSION
         echo $env:FIRST_VERSION.$env:HASH_VERSION
-        iscc /DAppVersion=$env:FIRST_VERSION.$env:HASH_VERSION build.iss
+        iscc /DAppVersion="$env:FIRST_VERSION.$env:HASH_VERSION" build.iss
         # $env:FIRST_VERSION = $first_version
         # $env:HASH_VERSION = $hash_version
         # echo "HASH_VERSION = $hash_version" >> $env:GITHUB_ENV
