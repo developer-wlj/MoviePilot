@@ -28,6 +28,7 @@ jobs:
       run: |
           cd ..
           echo 888
+          cat $env:GITHUB_ENV
           echo $env:HASH_VERSION
           mkdir MoviePilot-Frontend
           cd MoviePilot-Frontend
