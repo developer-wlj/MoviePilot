@@ -76,11 +76,12 @@ jobs:
 
 
     - name: Make Python package
+      id: Make_Python_package
       run: |
           cd ..
           echo $env:LATEST_VERSION
           cat $env:GITHUB_OUTPUT
-          echo "KEY=$LATEST_VERSION" >> $env:GITHUB_OUTPUT
+          echo "KEY=1.1.22" >> $env:GITHUB_OUTPUT
           cat $env:GITHUB_OUTPUT
           echo 999
           echo $KEY
@@ -103,7 +104,7 @@ jobs:
         cat $env:GITHUB_OUTPUT
         echo 999
         echo $env:KEY
-        echo "${{ steps.Windows-build.outputs.KEY }}"
+        echo "${{ steps.Make_Python_package.outputs.KEY }}"
         echo $env:LATEST_VERSION
         dir
         git clone https://github.com/developer-wlj/Inno-Setup-MoviePilot.git
