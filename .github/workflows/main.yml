@@ -23,10 +23,8 @@ jobs:
         $hash=git log -1 --pretty=%H
         $hash_version=$hash.Substring(0, 7)
         echo $hash_version
-        echo "HASH_VERSION = $hash_version" >> $env:GITHUB_ENV
+        echo "HASH_VERSION=$hash_version" >> $env:GITHUB_ENV
         echo $HASH_VERSION
-        cat $env:GITHUB_ENV
-        Start-Sleep -s 10
         cat $env:GITHUB_ENV
 
 
