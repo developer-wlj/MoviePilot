@@ -24,7 +24,9 @@ jobs:
         echo "${{ env.HASH_VERSION }}"
         echo 222
         echo "HASH_VERSION = $hash_version" >> $env:GITHUB_ENV
+        cat $env:GITHUB_ENV
         echo ("HASH_VERSION="+$hash_version) >> $env:GITHUB_ENV
+        cat $env:GITHUB_ENV
         echo 888
         echo $env:HASH_VERSION
 
