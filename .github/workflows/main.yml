@@ -149,6 +149,10 @@ jobs:
         shell: bash
         run: |
           cat $GITHUB_OUTPUT
+          echo 111
+          echo $KEY
+          echo 222
+          echo $env:KEY
           pwd
           ls -all
 
