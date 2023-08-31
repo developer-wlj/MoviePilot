@@ -5,8 +5,6 @@ on:
 jobs:
   Windows-build:
     runs-on: windows-latest
-    outputs:
-      output1: ${{ steps.step1.outputs.test }}
     steps:
     - name: Init Python 3.11.4
       uses: actions/setup-python@v4
@@ -147,8 +145,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: ${{ env.OUTPUT1 }}
-          release_name: ${{ env.OUTPUT1 }}
+          tag_name: v0.0.3
+          release_name: v0.0.3
           body: ${{ github.event.commits[0].message }}
           draft: false
           prerelease: false
