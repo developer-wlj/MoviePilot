@@ -72,6 +72,7 @@ jobs:
         echo $LATEST_VERSION
         # Write-Output "::set-output name=key::$LATEST_VERSION"
         echo "KEY=$LATEST_VERSION" >> $env:GITHUB_OUTPUT
+        cat $env:GITHUB_OUTPUT
         echo 999
         echo $KEY
         echo $env:KEY
@@ -81,7 +82,7 @@ jobs:
     - name: Make Python package
       run: |
           cd ..
-          echo "Output variable from Task 1: ${{ steps.Windows-build.outputs.key }}"
+          echo "Output variable from Task 1: ${{ steps.Windows-build.outputs.KEY }}"
           $python_dir=$(python -c "import os; print(os.path.dirname(os.__file__))")
           $python_root_dir=$python_dir.Substring(0, $python_dir.Length - 4)
           mkdir Python3.11
@@ -138,7 +139,7 @@ jobs:
       - name: get release_informations
         shell: bash
         run: |
-          cat $GITHUB_ENV
+          cat $env:GITHUB_OUTPUT
           pwd
           ls -all
 
