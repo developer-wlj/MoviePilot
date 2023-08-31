@@ -29,6 +29,8 @@ jobs:
     - name: Download MoviePilot-Frontend
       run: |
           cd ..
+          echo 888
+          echo $env:HASH_VERSION
           mkdir MoviePilot-Frontend
           cd MoviePilot-Frontend
           New-Item -Path . -Name "newfile.txt" -ItemType File
