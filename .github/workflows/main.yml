@@ -75,6 +75,7 @@ jobs:
         $env:LATEST_VER=$LATEST_VERSION
         echo 99999
         echo $env:LATEST_VER
+        Write-Output "::set-output name=key::$LATEST_VERSION"
 
 
     - name: Make Python package
@@ -146,8 +147,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: ${{ env.LATEST_VER }}
-          release_name: ${ env.LATEST_VER }
+          tag_name: ${{ steps.Download MoviePilot-Frontend.outputs.key }}
+          release_name: ${{ steps.Download MoviePilot-Frontend.outputs.key }}
           body: ${{ github.event.commits[0].message }}
           draft: false
           prerelease: false
