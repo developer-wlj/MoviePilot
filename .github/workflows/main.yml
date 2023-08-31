@@ -120,9 +120,8 @@ jobs:
         run: |
           pwd
           ls -all
-          cd windows
-          # mkdir releases
-          # mv ./windows/nas-tools.exe ./releases/Windows_MoviePilot_Setup_v${{env.first_version}}.${{env.hash_version}}.exe
+#          mkdir releases
+#          mv ./windows/nas-tools.exe ./releases/Windows_MoviePilot_Setup_v${{env.first_version}}.${{env.hash_version}}.exe
           pwd
           ls -all
 
@@ -132,8 +131,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: v${{env.first_version}}.${{env.hash_version}}
-          release_name: v${{env.first_version}}.${{env.hash_version}}
+          tag_name: v${{ env.FIRST_VERSION }}.${{ env.HASH_VERSION }}
+          release_name: v${{ env.FIRST_VERSION }}.${{ env.HASH_VERSION }}
           body: ${{ github.event.commits[0].message }}
           draft: false
           prerelease: false
@@ -145,7 +144,7 @@ jobs:
         with:
           release_id: ${{ steps.create_release.outputs.id }}
           assets_path: |
-            ./releases/
+            ./windows/
 
 
 
