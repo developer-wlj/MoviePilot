@@ -94,7 +94,7 @@ jobs:
         echo $env:HASH_VERSION
         echo "$env:FIRST_VERSION.$env:HASH_VERSION"
         $content = Get-Content -Path build.iss
-        $content | Foreach-Object { $_ -replace 'v1.2.3.4', "$env:LATEST_VERSION" }
+        $content | Foreach-Object { $_ -replace 'v1.2.3.4', "$($env:LATEST_VERSION)" }
         $content | Set-Content -Path build.iss
         # iscc /DAppVersion="$env:FIRST_VERSION.$env:HASH_VERSION" build.iss
         # iscc /dMyAppVersion="$env:LATEST_VERSION" build.iss
