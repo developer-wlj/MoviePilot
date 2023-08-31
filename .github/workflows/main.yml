@@ -1,6 +1,8 @@
 name: Windows MoviePilot Builder
 on:
   workflow_dispatch:
+env:
+  LATEST_VER: "aaaa"
 
 jobs:
   Windows-build:
@@ -70,6 +72,9 @@ jobs:
         dir
         echo ("LATEST_VERSION="+"$tagName.$env:HASH_VERSION") >> $env:GITHUB_ENV
         echo $LATEST_VERSION
+        $env:LATEST_VER=$LATEST_VERSION
+        echo 99999
+        echo $env:LATEST_VER
 
 
     - name: Make Python package
@@ -141,8 +146,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: $LATEST_VERSION
-          release_name: $LATEST_VERSION
+          tag_name: ${{ LATEST_VER }}
+          release_name: ${ LATEST_VER }
           body: ${{ github.event.commits[0].message }}
           draft: false
           prerelease: false
