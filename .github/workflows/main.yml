@@ -70,8 +70,12 @@ jobs:
         dir
         echo ("LATEST_VERSION="+"$tagName.$env:HASH_VERSION") >> $env:GITHUB_ENV
         echo $LATEST_VERSION
-        Write-Output "::set-output name=key::$LATEST_VERSION"
+        # Write-Output "::set-output name=key::$LATEST_VERSION"
+        echo "KEY=$LATEST_VERSION" >> $env:GITHUB_OUTPUT
         echo 999
+        echo $KEY
+        echo $env:KEY
+        
 
 
     - name: Make Python package
@@ -134,6 +138,7 @@ jobs:
       - name: get release_informations
         shell: bash
         run: |
+          cat $GITHUB_ENV
           pwd
           ls -all
 
@@ -143,8 +148,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: ${{ steps.Windows-build.outputs.key }}
-          release_name: ${{ steps.Windows-build.outputs.key }}
+          tag_name: ${{ steps.Windows-build.outputs.KEY }}
+          release_name: ${{ steps.Windows-build.outputs.KEY }}
           body: ${{ github.event.commits[0].message }}
           draft: false
           prerelease: false
