@@ -20,8 +20,9 @@ jobs:
         dir
         # python -m pip install --upgrade pip
         # pip install -r requirements.txt
-        $hash=git log -1 --pretty=%H
-        $hash_version=$hash.Substring(0, 7)
+        $src_hash=git ls-remote -h https://github.com/jxxghp/MoviePilot.git
+        # $hash=git log -1 --pretty=%H
+        $hash_version=$src_hash.Substring(0, 7)
         echo $hash_version
         echo "HASH_VERSION=$hash_version" >> $env:GITHUB_ENV
         echo $HASH_VERSION
@@ -30,40 +31,42 @@ jobs:
 
     - name: Download MoviePilot-Frontend
       run: |
-          cd ..
-          cat $env:GITHUB_ENV
-          echo $env:HASH_VERSION
-          mkdir MoviePilot-Frontend
-          cd MoviePilot-Frontend
-          New-Item -Path . -Name "newfile.txt" -ItemType File
-          $response = Invoke-WebRequest -Uri 'https://api.github.com/repos/jxxghp/MoviePilot-Frontend/releases/latest' -Method GET
-          # 将响应内容转换为JSON对象
-          $json = $response.Content | ConvertFrom-Json
-          # 提取tag_name的值
-          $tagName = $json.tag_name
-          # 输出tag_name的值
-          echo "正在下载前端程序 $tagName..."
-          echo "FIRST_VERSION=$tagName" >> $env:GITHUB_ENV
-          echo $FIRST_VERSION
-          echo ("LATEST_VERSION="+"$tagName.$env:HASH_VERSION") >> $env:GITHUB_ENV
-          cat $env:GITHUB_ENV
-          echo $LATEST_VERSION
-          # 设置URL和下载路径
-          $url = "https://github.com/jxxghp/MoviePilot-Frontend/releases/download/$tagName/dist.zip"
-          echo "正在下载前端程序 $url"
-          # $destination = "D:\a\MoviePilot\MoviePilot\MoviePilot-Frontend\dist.zip"
-          # # 使用Invoke-WebRequest下载ZIP文件
-          # $response = Invoke-WebRequest -Uri $url -OutFile $destination
-          # echo $response
-          # echo $response.StatusCode
-          # if ($response.StatusCode -eq 200) {
-          # Write-Host "文件已成功下载到：$destination"
-          # } else {
-          # Write-Error "下载失败，状态码：$($response.StatusCode)"
-          # }
-          # $zipFilePath = './dist.zip'
-          # Expand-Archive -Path $zipFilePath -DestinationPath dist
-          dir
+        cd ..
+        mkdir MoviePilot-Frontend
+        cd MoviePilot-Frontend
+        # 测试用
+        # New-Item -Path . -Name "newfile.txt" -ItemType File
+        # 用于获取后端主版本号
+        $response = Invoke-WebRequest -Uri https://api.github.com/repos/jxxghp/MoviePilot/releases/latest | ConvertFrom-Json
+        # 前端打包后的下载地址
+        $extract_release = Invoke-WebRequest https://api.github.com/repos/jxxghp/MoviePilot-Frontend/releases/latest | ConvertFrom-Json
+        $extract_assets = $extract_release.assets
+        $extract_url = ""
+        Write-Host "Download zip"
+        foreach ($asset in $extract_assets) {
+        if ($asset.name -match 'dist\.zip$') {
+        Write-Host "zip found name ${asset.name}"
+        $extract_url = $asset.browser_download_url
+        }
+        }
+        if (-not $extract_url) {
+        Write-Host "zip not found"
+        exit 1
+        }
+        Write-Host "前端 Downloading..."
+        # 下载
+        Invoke-WebRequest -URI $extract_url -OutFile innoextract.zip
+        Write-Host "Extracting zip"
+        # 解压
+        Expand-Archive dist.zip -DestinationPath .
+        dir
+        Get-ChildItem -Path .\dist -Recurse | Copy-Item -Destination .
+        # 提取tag_name的值
+        $tagName = $response.tag_name
+        echo "FIRST_VERSION = $tagName" >> $env:GITHUB_ENV
+        echo ${{ env.GITHUB_ENV }}
+        cat ${{ env.GITHUB_ENV }}
+        dir
 
 
     - name: Make Python package
@@ -76,15 +79,6 @@ jobs:
           New-Item -Path . -Name "newfile.txt" -ItemType File
           # cp -r $python_root_dir/* .
           dir
-
-
-#    - name: Exe Build
-#      run: |
-#        mkdir build
-#        cd build
-#        sed -i 's/old_value/new_value/g' build.iss
-#        sed -i 's/1.0.9.a0ec38a/1.0.19.a0ec38a/g' 111.iss
-#        iscc /DAppVersion=1.2 build.iss
 
     - name: Install Inno Setup Compiler
       uses: pwall2222/inno-setup-download@v0.0.4
@@ -134,10 +128,6 @@ jobs:
         run: |
           pwd
           ls -all
-          # mkdir releases
-          # mv ./windows/nas-tools.exe ./releases/Windows_MoviePilot_Setup_v${{env.first_version}}.${{env.hash_version}}.exe
-          pwd
-          ls -all
 
       - name: Create release
         id: create_release
@@ -159,7 +149,3 @@ jobs:
           release_id: ${{ steps.create_release.outputs.id }}
           assets_path: |
             ./windows/
-
-
-
-
