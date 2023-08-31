@@ -104,6 +104,7 @@ jobs:
         cat $env:GITHUB_OUTPUT
         echo 999
         echo $env:KEY
+        echo 888
         echo "${{ steps.Make_Python_package.outputs.KEY }}"
         echo 999
         echo $env:LATEST_VERSION
@@ -152,7 +153,7 @@ jobs:
           echo 111
           echo $KEY
           echo 222
-          echo $env:KEY
+          echo ${{ steps.Windows-build.outputs.KEY }}
           pwd
           ls -all
 
