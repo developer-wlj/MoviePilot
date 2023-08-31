@@ -44,10 +44,10 @@ jobs:
           # 输出tag_name的值
           echo "正在下载前端程序 $tagName..."
           echo "FIRST_VERSION=$tagName" >> $env:GITHUB_ENV
-          cat $env:GITHUB_ENV
           echo $FIRST_VERSION
-          echo "$FIRST_VERSION.$env:HASH_VERSION"
+          echo ("LATEST_VERSION="+"$tagName.$env:HASH_VERSION") >> $env:GITHUB_ENV
           cat $env:GITHUB_ENV
+          echo $LATEST_VERSION
           # 设置URL和下载路径
           $url = "https://github.com/jxxghp/MoviePilot-Frontend/releases/download/$tagName/dist.zip"
           echo "正在下载前端程序 $url"
@@ -92,6 +92,7 @@ jobs:
     - name: Compile Inno Setup Script
       run: |
         cd ..
+        echo $env:LATEST_VERSION
         dir
         git clone https://github.com/developer-wlj/Inno-Setup-MoviePilot.git
         cd Inno-Setup-MoviePilot
@@ -99,7 +100,8 @@ jobs:
         echo $env:FIRST_VERSION
         echo $env:HASH_VERSION
         echo "$env:FIRST_VERSION.$env:HASH_VERSION"
-        iscc /DAppVersion="$env:FIRST_VERSION.$env:HASH_VERSION" build.iss
+        # iscc /DAppVersion="$env:FIRST_VERSION.$env:HASH_VERSION" build.iss
+        iscc /DAppVersion="$env:LATEST_VERSION" build.iss
         # $env:FIRST_VERSION = $first_version
         # $env:HASH_VERSION = $hash_version
         # echo "HASH_VERSION = $hash_version" >> $env:GITHUB_ENV
