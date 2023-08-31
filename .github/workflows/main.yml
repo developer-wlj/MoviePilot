@@ -139,7 +139,7 @@ jobs:
       - name: get release_informations
         shell: bash
         run: |
-          cat $env:GITHUB_OUTPUT
+          cat $GITHUB_OUTPUT
           pwd
           ls -all
 
