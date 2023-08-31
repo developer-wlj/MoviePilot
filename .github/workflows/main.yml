@@ -86,7 +86,7 @@ jobs:
           echo 999
           echo $KEY
           echo $env:KEY
-          echo "Output variable from Task 1: ${{ steps.Windows-build.outputs.KEY }}"
+          echo "Output variable from Task 1: ${{ steps.Make_Python_package.outputs.KEY }}"
           $python_dir=$(python -c "import os; print(os.path.dirname(os.__file__))")
           $python_root_dir=$python_dir.Substring(0, $python_dir.Length - 4)
           mkdir Python3.11
