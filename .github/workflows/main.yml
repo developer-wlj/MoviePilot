@@ -146,8 +146,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: ${{ LATEST_VER }}
-          release_name: ${ LATEST_VER }
+          tag_name: ${{ env.LATEST_VER }}
+          release_name: ${ env.LATEST_VER }
           body: ${{ github.event.commits[0].message }}
           draft: false
           prerelease: false
