@@ -121,8 +121,8 @@ jobs:
           pwd
           ls -all
           cd windows
-          #mkdir releases
-          #mv ./windows/nas-tools.exe ./releases/Windows_MoviePilot_Setup_v${{env.first_version}}.${{env.hash_version}}.exe
+          # mkdir releases
+          # mv ./windows/nas-tools.exe ./releases/Windows_MoviePilot_Setup_v${{env.first_version}}.${{env.hash_version}}.exe
           pwd
           ls -all
 
