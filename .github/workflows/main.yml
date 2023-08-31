@@ -71,17 +71,20 @@ jobs:
         echo ("LATEST_VERSION="+"$tagName.$env:HASH_VERSION") >> $env:GITHUB_ENV
         echo $LATEST_VERSION
         # Write-Output "::set-output name=key::$LATEST_VERSION"
-        echo "KEY=$LATEST_VERSION" >> $env:GITHUB_OUTPUT
-        cat $env:GITHUB_OUTPUT
-        echo 999
-        echo $KEY
-        echo $env:KEY
+        
         
 
 
     - name: Make Python package
       run: |
           cd ..
+          echo $env:LATEST_VERSION
+          cat $env:GITHUB_OUTPUT
+          echo "KEY=$LATEST_VERSION" >> $env:GITHUB_OUTPUT
+          cat $env:GITHUB_OUTPUT
+          echo 999
+          echo $KEY
+          echo $env:KEY
           echo "Output variable from Task 1: ${{ steps.Windows-build.outputs.KEY }}"
           $python_dir=$(python -c "import os; print(os.path.dirname(os.__file__))")
           $python_root_dir=$python_dir.Substring(0, $python_dir.Length - 4)
@@ -97,6 +100,10 @@ jobs:
     - name: Compile Inno Setup Script
       run: |
         cd ..
+        cat $env:GITHUB_OUTPUT
+        echo 999
+        echo $env:KEY
+        echo "${{ steps.Windows-build.outputs.KEY }}"
         echo $env:LATEST_VERSION
         dir
         git clone https://github.com/developer-wlj/Inno-Setup-MoviePilot.git
