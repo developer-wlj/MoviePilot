@@ -45,7 +45,6 @@ jobs:
         Write-Host "Download zip"
         foreach ($asset in $extract_assets) {
         if ($asset.name -match 'dist\.zip$') {
-        Write-Host "zip found name ${asset.name}"
         $extract_url = $asset.browser_download_url
         }
         }
@@ -56,6 +55,7 @@ jobs:
         Write-Host "前端 Downloading..."
         # 下载
         Invoke-WebRequest -URI $extract_url -OutFile innoextract.zip
+        dir
         Write-Host "Extracting zip"
         # 解压
         Expand-Archive dist.zip -DestinationPath .
