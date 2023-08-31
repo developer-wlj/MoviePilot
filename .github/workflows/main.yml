@@ -43,6 +43,8 @@ jobs:
           echo "正在下载前端程序 $tagName..."
           echo "FIRST_VERSION = $tagName" >> $env:GITHUB_ENV
           Get-ChildItem Env:
+          echo $env:GITHUB_ENV
+          cat $env:GITHUB_ENV
           # 设置URL和下载路径
           $url = "https://github.com/jxxghp/MoviePilot-Frontend/releases/download/$tagName/dist.zip"
           echo "正在下载前端程序 $url"
