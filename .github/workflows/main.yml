@@ -24,6 +24,7 @@ jobs:
         $hash_version=$hash.Substring(0, 7)
         echo $hash_version
         echo "HASH_VERSION = $hash_version" >> $env:GITHUB_ENV
+        echo $HASH_VERSION
 
 
     - name: Download MoviePilot-Frontend
@@ -41,6 +42,7 @@ jobs:
           # 输出tag_name的值
           echo "正在下载前端程序 $tagName..."
           echo "FIRST_VERSION = $tagName" >> $env:GITHUB_ENV
+          echo $FIRST_VERSION
           echo $env:HASH_VERSION
           echo $FIRST_VERSION
           echo "$FIRST_VERSION.$env:HASH_VERSION"
