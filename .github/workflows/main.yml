@@ -131,8 +131,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: v${{ env.FIRST_VERSION }}.${{ env.HASH_VERSION }}
-          release_name: v${{ env.FIRST_VERSION }}.${{ env.HASH_VERSION }}
+          tag_name: v0.0.3
+          release_name: v0.0.3
           body: ${{ github.event.commits[0].message }}
           draft: false
           prerelease: false
