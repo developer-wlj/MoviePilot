@@ -63,7 +63,7 @@ jobs:
         Remove-Item -Path "dist.zip"
         Remove-Item -Path "dist" -Recurse
         # 提取tag_name的值
-        $tagName = $response.tag_name
+        $tagName = $response.tag_name.Substring(1)
         echo "FIRST_VERSION=$tagName" >> $env:GITHUB_ENV
         dir
         echo ("LATEST_VERSION="+"$tagName.$env:HASH_VERSION") >> $env:GITHUB_ENV
