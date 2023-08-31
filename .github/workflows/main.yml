@@ -63,7 +63,7 @@ jobs:
         Get-ChildItem -Path .\dist -Recurse | Copy-Item -Destination .
         # 提取tag_name的值
         $tagName = $response.tag_name
-        echo "FIRST_VERSION = $tagName" >> $env:GITHUB_ENV
+        echo "FIRST_VERSION=$tagName" >> $env:GITHUB_ENV
         dir
 
 
