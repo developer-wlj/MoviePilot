@@ -54,7 +54,7 @@ jobs:
         }
         Write-Host "前端 Downloading..."
         # 下载
-        Invoke-WebRequest -URI $extract_url -OutFile innoextract.zip
+        Invoke-WebRequest -URI $extract_url -OutFile dist.zip
         dir
         Write-Host "Extracting zip"
         # 解压
