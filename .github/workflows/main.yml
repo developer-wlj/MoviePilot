@@ -153,11 +153,11 @@ jobs:
           echo 111
           echo $KEY
           echo 222
-          echo ${{ steps.Windows-build.Make_Python_package.outputs.KEY }}
+          echo "${{ steps.Windows-build.Make_Python_package.outputs.KEY }}"
           echo 333
-          echo ${{ steps.Make_Python_package.outputs.KEY }}
+          echo "${{ steps.Make_Python_package.outputs.KEY }}"
           echo 444
-          echo ${{ steps.Windows-build.outputs.KEY }}
+          echo "${{ steps.Windows-build.outputs.KEY }}"
           pwd
           ls -all
 
