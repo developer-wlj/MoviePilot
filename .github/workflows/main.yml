@@ -22,8 +22,8 @@ jobs:
       run: |
         # git checkout wlj0807
         dir
-        # python -m pip install --upgrade pip
-        # pip install -r requirements.txt
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
         $src_hash=git ls-remote -h https://github.com/jxxghp/MoviePilot.git
         # $hash=git log -1 --pretty=%H
         $hash_version=$src_hash.Substring(0, 7)
