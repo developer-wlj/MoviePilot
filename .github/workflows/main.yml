@@ -105,6 +105,7 @@ jobs:
         echo 999
         echo $env:KEY
         echo "${{ steps.Make_Python_package.outputs.KEY }}"
+        echo 999
         echo $env:LATEST_VERSION
         dir
         git clone https://github.com/developer-wlj/Inno-Setup-MoviePilot.git
