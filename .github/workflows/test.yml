@@ -42,7 +42,9 @@ jobs:
           echo $HASH_VERSION
           cat $env:GITHUB_ENV
           echo 888
+          echo $env:HASH_VERSION
           echo $env:HASH_VERSION.$env:HASH_VERSION
+          echo "$env:HASH_VERSION,xxxx$env:HASH_VERSION"
           mkdir MoviePilot-Frontend
           cd MoviePilot-Frontend
           New-Item -Path . -Name "newfile.txt" -ItemType File
