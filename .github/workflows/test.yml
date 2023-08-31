@@ -17,6 +17,7 @@ jobs:
         $hash_version=$hash.Substring(0, 7)
         echo $hash_version
         echo $env:GITHUB_REF
+        echo $env:GITHUB_ENV
         echo "HASH_VERSION = $hash_version" >> $env:GITHUB_ENV
 
 
