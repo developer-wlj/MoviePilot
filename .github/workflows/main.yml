@@ -155,22 +155,25 @@ jobs:
           echo 111
           echo $KEY
           echo 222
-          echo "${{ steps.Windows-build.Make_Python_package.outputs.KEY }}"
+          echo "${{needs.Windows-build.outputs.output1}}"
           echo 333
-          echo "${{ steps.Make_Python_package.outputs.KEY }}"
+          echo ${{needs.Windows-build.outputs.output1}}
           echo 444
-          echo "${{ steps.Windows-build.outputs.KEY }}"
+          echo $OUTPUT1
           pwd
           ls -all
+        env:
+          OUTPUT1: ${{needs.Windows-build.outputs.output1}}
 
       - name: Create release
         id: create_release
         uses: actions/create-release@latest
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OUTPUT1: ${{needs.Windows-build.outputs.output1}}
         with:
-          tag_name: ${{ steps.Windows-build.outputs.KEY }}
-          release_name: ${{ steps.Windows-build.outputs.KEY }}
+          tag_name: ${{needs.Windows-build.outputs.output1}}
+          release_name: ${{needs.Windows-build.outputs.output1}}
           body: ${{ github.event.commits[0].message }}
           draft: false
           prerelease: false
