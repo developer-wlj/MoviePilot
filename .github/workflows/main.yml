@@ -33,7 +33,7 @@ jobs:
         cat $env:GITHUB_ENV
 
 
-    - name: Download MoviePilot-Frontend
+    - name: Download MoviePilot Frontend
       run: |
         cd ..
         mkdir MoviePilot-Frontend
@@ -147,8 +147,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: ${{ steps.Download MoviePilot-Frontend.outputs.key }}
-          release_name: ${{ steps.Download MoviePilot-Frontend.outputs.key }}
+          tag_name: ${{ steps.Download MoviePilot Frontend.outputs.key }}
+          release_name: ${{ steps.Download MoviePilot Frontend.outputs.key }}
           body: ${{ github.event.commits[0].message }}
           draft: false
           prerelease: false
