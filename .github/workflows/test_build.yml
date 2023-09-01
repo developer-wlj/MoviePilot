@@ -16,6 +16,9 @@ jobs:
       - name: 后端代码目录打印
         run: |
           cd MoviePilot
+          git log --pretty=format:"%h - %an: %s"
+          echo 000
+          echo (git log --pretty=format:"%h - %an: %s")
           pwd
           echo 111
           echo (git log -1 --pretty=format:"%h")
