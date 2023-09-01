@@ -18,13 +18,13 @@ jobs:
           cd MoviePilot
           pwd
           echo 111
-          git log -1 --pretty=format:"%h"
+          echo (git log -1 --pretty=format:"%h")
           echo 222
-          git log -2 --pretty=format:"%h"
+          echo (git log -2 --pretty=format:"%h")
           echo 333
-          git log -2 --pretty=format:"%h" | Select-Object -Skip 1
+          echo (git log -2 --pretty=format:"%h" | Select-Object -Skip 1)
           echo 444
-          $hash_version=git log -2 --pretty=format:"%h" | Select-Object -Skip 1
+          $hash_version=(git log -2 --pretty=format:"%h" | Select-Object -Skip 1)
           echo 555
           echo $hash_version
           echo 666
