@@ -1,39 +1,27 @@
-name: Build
+name: Sync Fork
+
 on:
-  workflow_dispatch:
+  schedule:
+    - cron: '* */3 * * *' 
+  workflow_dispatch: # on button click
 
 jobs:
-  Windows-build:
-    runs-on: windows-latest
-    steps:
-      - name: 拉取后端代码
-        uses: actions/checkout@v2
-        with:
-          ref: wlj0807
-          repository: developer-wlj/MoviePilot
-          path: 'MoviePilot'
-          fetch-depth: 2
+  sync:
 
-      - name: 后端代码目录打印
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: repo-sync
         run: |
-          cd MoviePilot
-          echo 000
-          echo (git log --pretty=format:"%h - %an: %s")
-          pwd
-          echo 111
-          echo (git log -1 --pretty=format:"%h")
-          echo 222
-          echo (git log -2 --pretty=format:"%h")
-          echo 333
-          echo (git log -2 --pretty=format:"%h" | Select-Object -Skip 1)
-          echo 444
-          $hash_version=(git log -2 --pretty=format:"%h" | Select-Object -Skip 1)
-          echo 555
-          echo $hash_version
-          echo 666
-          echo "HASH_VERSION=$hash_version" >> $env:GITHUB_ENV
-          echo 777
-          echo $HASH_VERSION
-          echo 888
-          cat $env:GITHUB_ENV
-          echo 999
+          # curl -L \
+          # -X POST \
+          # -H "Accept: application/vnd.github+json" \
+          # -H "Authorization: Bearer ${{ secrets.API_TOKEN }}" \
+          # -H "X-GitHub-Api-Version: 2022-11-28" \
+          # https://api.github.com/repos/developer-wlj/MoviePilot/merge-upstream \
+          # -d '{"branch":"wlj0807"}'
+          curl -L -X POST -H "Accept: application/vnd.github+json" \
+          -H "Authorization: Bearer ${{ secrets.API_TOKEN }}" \
+          -H "X-GitHub-Api-Version: 2022-11-28" \
+          -s --write-out "%{http_code}\n" https://api.github.com/repos/developer-wlj/MoviePilot/merge-upstream \
+          -d '{"branch":"wlj0807"}'
