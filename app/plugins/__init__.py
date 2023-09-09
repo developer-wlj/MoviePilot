@@ -65,7 +65,8 @@ class _PluginBase(metaclass=ABCMeta):
         [{
             "cmd": "/xx",
             "event": EventType.xx,
-            "desc": "xxxx",
+            "desc": "名称",
+            "category": "分类，需要注册到Wechat时必须有分类",
             "data": {}
         }]
         """
@@ -183,13 +184,3 @@ class _PluginBase(metaclass=ABCMeta):
             channel=channel, mtype=mtype, title=title, text=text,
             image=image, link=link, userid=userid
         ))
-
-    def close(self):
-        """
-        关闭数据库连接
-        """
-        if self.db:
-            self.db.close()
-
-    def __del__(self):
-        self.close()

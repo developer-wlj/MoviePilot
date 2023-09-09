@@ -25,6 +25,14 @@ class Jellyfin(metaclass=Singleton):
         self.user = self.get_user()
         self.serverid = self.get_server_id()
 
+    def is_inactive(self) -> bool:
+        """
+        判断是否需要重连
+        """
+        if not self._host or not self._apikey:
+            return False
+        return True if not self.user else False
+
     def __get_jellyfin_librarys(self) -> List[dict]:
         """
         获取Jellyfin媒体库的信息
@@ -293,7 +301,7 @@ class Jellyfin(metaclass=Singleton):
             if not item_id:
                 return {}
         # 验证tmdbid是否相同
-        item_tmdbid = self.get_iteminfo(item_id).get("ProviderIds", {}).get("Tmdb")
+        item_tmdbid = (self.get_iteminfo(item_id).get("ProviderIds") or {}).get("Tmdb")
         if tmdb_id and item_tmdbid:
             if str(tmdb_id) != str(item_tmdbid):
                 return {}
@@ -371,6 +379,7 @@ class Jellyfin(metaclass=Singleton):
         """
         解析Jellyfin报文
         """
+        logger.info(f"接收到jellyfin webhook：{message}")
         eventItem = WebhookEventInfo(
             event=message.get('NotificationType', ''),
             item_id=message.get('ItemId'),

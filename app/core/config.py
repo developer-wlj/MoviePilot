@@ -39,6 +39,8 @@ class Settings(BaseSettings):
     SEARCH_SOURCE: str = "themoviedb"
     # 刮削入库的媒体文件
     SCRAP_METADATA: bool = True
+    # 新增已入库媒体是否跟随TMDB信息变化
+    SCRAP_FOLLOW_TMDB: bool = True
     # 刮削来源
     SCRAP_SOURCE: str = "themoviedb"
     # TMDB图片地址
@@ -109,6 +111,8 @@ class Settings(BaseSettings):
     QB_USER: str = None
     # Qbittorrent密码
     QB_PASSWORD: str = None
+    # Qbittorrent分类自动管理
+    QB_CATEGORY: bool = False
     # Transmission地址，IP:PORT
     TR_HOST: str = None
     # Transmission用户名
