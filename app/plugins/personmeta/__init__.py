@@ -1,6 +1,8 @@
+import base64
 import copy
 import datetime
 import json
+import re
 import threading
 import time
 from pathlib import Path
@@ -10,11 +12,13 @@ import pytz
 import zhconv
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
+from requests import RequestException
 
 from app.chain.mediaserver import MediaServerChain
 from app.chain.tmdb import TmdbChain
 from app.core.config import settings
 from app.core.event import eventmanager, Event
+from app.core.meta import MetaBase
 from app.log import logger
 from app.modules.emby import Emby
 from app.modules.jellyfin import Jellyfin
@@ -22,6 +26,8 @@ from app.modules.plex import Plex
 from app.plugins import _PluginBase
 from app.schemas import MediaInfo, MediaServerItem
 from app.schemas.types import EventType, MediaType
+from app.utils.common import retry
+from app.utils.http import RequestUtils
 from app.utils.string import StringUtils
 
 
@@ -58,6 +64,7 @@ class PersonMeta(_PluginBase):
     _onlyonce = False
     _cron = None
     _delay = 0
+    _remove_nozh = False
 
     def init_plugin(self, config: dict = None):
         self.tmdbchain = TmdbChain(self.db)
@@ -67,6 +74,7 @@ class PersonMeta(_PluginBase):
             self._onlyonce = config.get("onlyonce")
             self._cron = config.get("cron")
             self._delay = config.get("delay") or 0
+            self._remove_nozh = config.get("remove_nozh") or False
 
         # 停止现有任务
         self.stop_service()
@@ -108,7 +116,8 @@ class PersonMeta(_PluginBase):
             "enabled": self._enabled,
             "onlyonce": self._onlyonce,
             "cron": self._cron,
-            "delay": self._delay
+            "delay": self._delay,
+            "remove_nozh": self._remove_nozh
         })
 
     def get_state(self) -> bool:
@@ -204,6 +213,27 @@ class PersonMeta(_PluginBase):
                                 ]
                             }
                         ]
+                    },
+                    {
+                        'component': 'VRow',
+                        'content': [
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12,
+                                    'md': 6
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VSwitch',
+                                        'props': {
+                                            'model': 'remove_nozh',
+                                            'label': '删除非中文演员',
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
                     }
                 ]
             }
@@ -211,7 +241,8 @@ class PersonMeta(_PluginBase):
             "enabled": False,
             "onlyonce": False,
             "cron": "",
-            "delay": 30
+            "delay": 30,
+            "remove_nozh": False
         }
 
     def get_page(self) -> List[dict]:
@@ -226,7 +257,8 @@ class PersonMeta(_PluginBase):
             return
         # 事件数据
         mediainfo: MediaInfo = event.event_data.get("mediainfo")
-        if not mediainfo:
+        meta: MetaBase = event.event_data.get("meta")
+        if not mediainfo or not meta:
             return
         # 延迟
         if self._delay:
@@ -242,7 +274,8 @@ class PersonMeta(_PluginBase):
             logger.warn(f"演职人员刮削 {mediainfo.title_year} 条目详情获取失败")
             return
         # 刮削演职人员信息
-        self.__update_item(server=existsinfo.server, item=iteminfo, mediainfo=mediainfo)
+        self.__update_item(server=existsinfo.server, item=iteminfo,
+                           mediainfo=mediainfo, season=meta.begin_season)
 
     def scrap_library(self):
         """
@@ -274,7 +307,8 @@ class PersonMeta(_PluginBase):
                 logger.info(f"媒体库 {library.name} 的演员信息刮削完成")
             logger.info(f"服务器 {server} 的演员信息刮削完成")
 
-    def __update_item(self, server: str, item: MediaServerItem, mediainfo: MediaInfo = None):
+    def __update_item(self, server: str, item: MediaServerItem,
+                      mediainfo: MediaInfo = None, season: int = None):
         """
         更新媒体服务器中的条目
         """
@@ -289,11 +323,15 @@ class PersonMeta(_PluginBase):
                 logger.warn(f"{item.title} 未识别到媒体信息")
                 return
 
+        # 获取豆瓣演员信息
+        douban_actors = self.__get_douban_actors(mediainfo=mediainfo, season=season)
+
         # 获取媒体项
         iteminfo = self.get_iteminfo(server=server, itemid=item.item_id)
         if not iteminfo:
             logger.warn(f"{item.title} 未找到媒体项")
             return
+
         # 处理媒体项中的人物信息
         if iteminfo.get("People"):
             """
@@ -313,16 +351,22 @@ class PersonMeta(_PluginBase):
                 if not people.get("Name"):
                     continue
                 if StringUtils.is_chinese(people.get("Name")):
+                    peoples.append(people)
                     continue
-                info = self.__update_people(server=server, people=people)
+                if self._event.is_set():
+                    logger.info(f"演职人员刮削服务停止")
+                    return
+                info = self.__update_people(server=server, people=people,
+                                            douban_actors=douban_actors)
                 if info:
                     peoples.append(info)
-                else:
+                elif not self._remove_nozh:
                     peoples.append(people)
             # 保存媒体项信息
             if peoples:
                 iteminfo["People"] = peoples
                 self.set_iteminfo(server=server, itemid=item.item_id, iteminfo=iteminfo)
+
         # 处理季和集人物
         if iteminfo.get("Type") and "Series" in iteminfo["Type"]:
             # 获取季媒体项
@@ -331,6 +375,8 @@ class PersonMeta(_PluginBase):
                 logger.warn(f"{item.title} 未找到季媒体项")
                 return
             for season in seasons["Items"]:
+                # 获取豆瓣演员信息
+                season_actors = self.__get_douban_actors(mediainfo=mediainfo, season=season.get("IndexNumber"))
                 # 如果是Jellyfin，更新季的人物，Emby/Plex季没有人物
                 if server == "jellyfin":
                     seasoninfo = self.get_iteminfo(server=server, itemid=season.get("Id"))
@@ -340,21 +386,28 @@ class PersonMeta(_PluginBase):
                     # 更新季媒体项人物
                     peoples = []
                     if seasoninfo.get("People"):
+                        logger.info(f"开始更新季 {seasoninfo.get('Id')} 的人物信息 ...")
                         for people in seasoninfo["People"]:
                             if not people.get("Name"):
                                 continue
                             if StringUtils.is_chinese(people.get("Name")):
+                                peoples.append(people)
                                 continue
+                            if self._event.is_set():
+                                logger.info(f"演职人员刮削服务停止")
+                                return
                             # 更新人物信息
-                            info = self.__update_people(server=server, people=people)
+                            info = self.__update_people(server=server, people=people,
+                                                        douban_actors=season_actors)
                             if info:
                                 peoples.append(info)
-                            else:
+                            elif not self._remove_nozh:
                                 peoples.append(people)
                         # 保存季媒体项信息
                         if peoples:
                             seasoninfo["People"] = peoples
                             self.set_iteminfo(server=server, itemid=season.get("Id"), iteminfo=seasoninfo)
+                        logger.info(f"季 {seasoninfo.get('Id')} 的人物信息更新完成")
                 # 获取集媒体项
                 episodes = self.get_items(server=server, parentid=season.get("Id"), mtype="Episode")
                 if not episodes:
@@ -369,24 +422,31 @@ class PersonMeta(_PluginBase):
                         continue
                     # 更新集媒体项人物
                     if episodeinfo.get("People"):
+                        logger.info(f"开始更新集 {episodeinfo.get('Id')} 的人物信息 ...")
                         peoples = []
                         for people in episodeinfo["People"]:
                             if not people.get("Name"):
                                 continue
                             if StringUtils.is_chinese(people.get("Name")):
+                                peoples.append(people)
                                 continue
+                            if self._event.is_set():
+                                logger.info(f"演职人员刮削服务停止")
+                                return
                             # 更新人物信息
-                            info = self.__update_people(server=server, people=people)
+                            info = self.__update_people(server=server, people=people,
+                                                        douban_actors=season_actors)
                             if info:
                                 peoples.append(info)
-                            else:
+                            elif not self._remove_nozh:
                                 peoples.append(people)
                         # 保存集媒体项信息
                         if peoples:
                             episodeinfo["People"] = peoples
                             self.set_iteminfo(server=server, itemid=episode.get("Id"), iteminfo=episodeinfo)
+                        logger.info(f"集 {episodeinfo.get('Id')} 的人物信息更新完成")
 
-    def __update_people(self, server: str, people: dict) -> Optional[dict]:
+    def __update_people(self, server: str, people: dict, douban_actors: list = None) -> Optional[dict]:
         """
         更新人物信息，返回替换后的人物信息
         """
@@ -415,46 +475,96 @@ class PersonMeta(_PluginBase):
             # 查询媒体库人物详情
             personinfo = self.get_iteminfo(server=server, itemid=people.get("Id"))
             if not personinfo:
-                logger.debug(f"未找到人物 {people.get('Id')} 的信息")
+                logger.debug(f"未找到人物 {people.get('Name')} 的信息")
                 return None
+
+            # 是否更新标志
+            updated_name = False
+            updated_overview = False
+            profile_path = None
+
             # 获取人物的TMDBID
             person_tmdbid, person_imdbid = __get_peopleid(personinfo)
-            if not person_tmdbid:
-                logger.warn(f"未找到人物 {people.get('Id')} 的tmdbid")
-                return None
-            # 是否更新标志
-            updated = False
-            # 查询人物TMDB详情
-            person_tmdbinfo = self.tmdbchain.person_detail(int(person_tmdbid))
-            if person_tmdbinfo:
-                cn_name = self.__get_chinese_name(person_tmdbinfo)
-                if cn_name:
-                    updated = True
-                    # 更新中文名
-                    personinfo["Name"] = cn_name
-                    ret_people["Name"] = cn_name
-                    if "Name" not in personinfo["LockedFields"]:
-                        personinfo["LockedFields"].append("Name")
-                    # 更新中文描述
-                    biography = person_tmdbinfo.get("biography")
-                    if StringUtils.is_chinese(biography):
-                        personinfo["Overview"] = biography
-                        if "Overview" not in personinfo["LockedFields"]:
-                            personinfo["LockedFields"].append("Overview")
-                    # 更新人物图片
-                    profile_path = f"https://image.tmdb.org/t/p/original{person_tmdbinfo.get('profile_path')}"
-                    if profile_path:
-                        logger.info(f"更新人物 {people.get('Id')} 的图片：{profile_path}")
-                        self.set_item_image(server=server, itemid=people.get("Id"), imageurl=profile_path)
+            if person_tmdbid:
+                person_tmdbinfo = self.tmdbchain.person_detail(int(person_tmdbid))
+                if person_tmdbinfo:
+                    cn_name = self.__get_chinese_name(person_tmdbinfo)
+                    if cn_name:
+                        logger.info(f"{people.get('Name')} 从TMDB获取到中文名：{cn_name}")
+                        # 更新中文名
+                        personinfo["Name"] = cn_name
+                        ret_people["Name"] = cn_name
+                        updated_name = True
+                        # 更新中文描述
+                        biography = person_tmdbinfo.get("biography")
+                        if StringUtils.is_chinese(biography):
+                            updated_overview = True
+                            personinfo["Overview"] = biography
+                        # 图片
+                        profile_path = f"https://image.tmdb.org/t/p/original{person_tmdbinfo.get('profile_path')}"
+
+            if not updated_name or not updated_overview:
+                # 从豆瓣演员中匹配中文名称
+                if douban_actors:
+                    for douban_actor in douban_actors:
+                        if douban_actor.get("latin_name") == people.get("Name"):
+                            logger.info(f"{people.get('Name')} 从豆瓣中获取到中文名：{douban_actor.get('name')}")
+                            # 名称
+                            personinfo["Name"] = douban_actor.get("name")
+                            ret_people["Name"] = douban_actor.get("name")
+                            # 饰演角色
+                            if douban_actor.get("character"):
+                                # "饰 詹姆斯·邦德 James Bond 007"
+                                character = re.sub(r"饰\s+", "",
+                                                   douban_actor.get("character"))
+                                ret_people["Role"] = character
+                            updated_name = True
+                            # 图片
+                            if douban_actor.get("avatar", {}).get("large"):
+                                profile_path = douban_actor.get("avatar", {}).get("large")
+                            break
+
+            # 更新人物图片
+            if profile_path:
+                logger.info(f"更新人物 {people.get('Name')} 的图片：{profile_path}")
+                self.set_item_image(server=server, itemid=people.get("Id"), imageurl=profile_path)
+
+            # 锁定人物信息
+            if updated_name:
+                if "Name" not in personinfo["LockedFields"]:
+                    personinfo["LockedFields"].append("Name")
+            if updated_overview:
+                if "Overview" not in personinfo["LockedFields"]:
+                    personinfo["LockedFields"].append("Overview")
+
             # 更新人物信息
-            if updated:
-                logger.info(f"更新人物 {people.get('Id')} 的信息：{personinfo}")
+            if updated_name or updated_overview:
+                logger.info(f"更新人物 {people.get('Name')} 的信息：{personinfo}")
                 ret = self.set_iteminfo(server=server, itemid=people.get("Id"), iteminfo=personinfo)
                 if ret:
                     return ret_people
+            else:
+                logger.info(f"人物 {people.get('Name')} 未找到中文数据")
         except Exception as err:
             logger.error(f"更新人物信息失败：{err}")
         return None
+
+    def __get_douban_actors(self, mediainfo: MediaInfo, season: int = None) -> List[dict]:
+        """
+        获取豆瓣演员信息
+        """
+        # 随机休眠1-5秒
+        time.sleep(1 + int(time.time()) % 5)
+        # 匹配豆瓣信息
+        doubaninfo = self.chain.match_doubaninfo(name=mediainfo.title,
+                                                 mtype=mediainfo.type.value,
+                                                 year=mediainfo.year,
+                                                 season=season)
+        # 豆瓣演员
+        if doubaninfo:
+            doubanitem = self.chain.douban_info(doubaninfo.get("id")) or {}
+            return (doubanitem.get("actors") or []) + (doubanitem.get("directors") or [])
+        return []
 
     @staticmethod
     def get_iteminfo(server: str, itemid: str) -> dict:
@@ -658,7 +768,10 @@ class PersonMeta(_PluginBase):
             try:
                 res = Emby().post_data(
                     url=f'[HOST]emby/Items/{itemid}?api_key=[APIKEY]&reqformat=json',
-                    data=json.dumps(iteminfo)
+                    data=json.dumps(iteminfo),
+                    headers={
+                        "Content-Type": "application/json"
+                    }
                 )
                 if res and res.status_code in [200, 204]:
                     return True
@@ -676,7 +789,10 @@ class PersonMeta(_PluginBase):
             try:
                 res = Jellyfin().post_data(
                     url=f'[HOST]Items/{itemid}?api_key=[APIKEY]',
-                    data=json.dumps(iteminfo)
+                    data=json.dumps(iteminfo),
+                    headers={
+                        "Content-Type": "application/json"
+                    }
                 )
                 if res and res.status_code in [200, 204]:
                     return True
@@ -713,19 +829,45 @@ class PersonMeta(_PluginBase):
             return __set_plex_iteminfo()
 
     @staticmethod
+    @retry(RequestException, logger=logger)
     def set_item_image(server: str, itemid: str, imageurl: str):
         """
         更新媒体项图片
         """
 
-        def __set_emby_item_image():
+        def __download_image():
+            """
+            下载图片
+            """
+            try:
+                logger.info(f"正在下载图片：{imageurl} ...")
+                if "doubanio.com" in imageurl:
+                    r = RequestUtils(headers={
+                        'Referer': "https://movie.douban.com/"
+                    }, ua=settings.USER_AGENT).get_res(url=imageurl, raise_exception=True)
+                else:
+                    r = RequestUtils().get_res(url=imageurl, raise_exception=True)
+                if r:
+                    return base64.b64encode(r.content).decode()
+                else:
+                    logger.info(f"{imageurl} 图片下载失败，请检查网络连通性")
+            except Exception as err:
+                logger.error(f"下载图片失败：{err}")
+            return None
+
+        def __set_emby_item_image(_base64: str):
             """
             更新Emby媒体项图片
             """
             try:
-                url = f'[HOST]emby/Items/{itemid}/Images/Primary/0/Url?api_key=[APIKEY]'
-                data = json.dumps({'Url': imageurl})
-                res = Emby().post_data(url=url, data=data)
+                url = f'[HOST]emby/Items/{itemid}/Images/Primary?api_key=[APIKEY]'
+                res = Emby().post_data(
+                    url=url,
+                    data=_base64,
+                    headers={
+                        "Content-Type": "image/png"
+                    }
+                )
                 if res and res.status_code in [200, 204]:
                     return True
                 else:
@@ -738,6 +880,7 @@ class PersonMeta(_PluginBase):
         def __set_jellyfin_item_image():
             """
             更新Jellyfin媒体项图片
+            # FIXME 改为预下载图片
             """
             try:
                 url = f'[HOST]Items/{itemid}/RemoteImages/Download?' \
@@ -755,6 +898,7 @@ class PersonMeta(_PluginBase):
         def __set_plex_item_image():
             """
             更新Plex媒体项图片
+            # FIXME 改为预下载图片
             """
             try:
                 plexitem = Plex().get_plex().library.fetchItem(ekey=itemid)
@@ -765,11 +909,15 @@ class PersonMeta(_PluginBase):
             return False
 
         if server == "emby":
-            return __set_emby_item_image()
+            # 下载图片获取base64
+            image_base64 = __download_image()
+            if image_base64:
+                return __set_emby_item_image(image_base64)
         elif server == "jellyfin":
             return __set_jellyfin_item_image()
         else:
             return __set_plex_item_image()
+        return None
 
     @staticmethod
     def __get_chinese_name(personinfo: dict) -> str:

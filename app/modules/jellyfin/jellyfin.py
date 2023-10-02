@@ -192,7 +192,7 @@ class Jellyfin(metaclass=Singleton):
             res = RequestUtils().get_res(req_url)
             if res:
                 result = res.json()
-                schemas.Statistic(
+                return schemas.Statistic(
                     movie_count=result.get("MovieCount") or 0,
                     tv_count=result.get("SeriesCount") or 0,
                     episode_count=result.get("EpisodeCount") or 0
@@ -304,11 +304,10 @@ class Jellyfin(metaclass=Singleton):
             if not item_id:
                 return None, {}
         # 验证tmdbid是否相同
-        item_info = self.get_iteminfo(item_id) or {}
+        item_info = self.get_iteminfo(item_id)
         if item_info:
-            item_tmdbid = (item_info.get("ProviderIds") or {}).get("Tmdb")
-            if tmdb_id and item_tmdbid:
-                if str(tmdb_id) != str(item_tmdbid):
+            if tmdb_id and item_info.tmdbid:
+                if str(tmdb_id) != str(item_info.tmdbid):
                     return None, {}
         if not season:
             season = ""
@@ -566,11 +565,12 @@ class Jellyfin(metaclass=Singleton):
             logger.error(f"连接Jellyfin出错：" + str(e))
             return None
 
-    def post_data(self, url: str, data: str = None):
+    def post_data(self, url: str, data: str = None, headers: dict = None) -> Optional[Response]:
         """
         自定义URL从媒体服务器获取数据，其中[HOST]、[APIKEY]、[USER]会被替换成实际的值
         :param url: 请求地址
         :param data: 请求数据
+        :param headers: 请求头
         """
         if not self._host or not self._apikey:
             return None
@@ -579,9 +579,7 @@ class Jellyfin(metaclass=Singleton):
             .replace("[USER]", self.user)
         try:
             return RequestUtils(
-                headers={
-                    "Content-Type": "application/json"
-                }
+                headers=headers
             ).post_res(url=url, data=data)
         except Exception as e:
             logger.error(f"连接Jellyfin出错：" + str(e))
