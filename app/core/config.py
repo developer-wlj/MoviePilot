@@ -1,3 +1,4 @@
+import os
 import secrets
 from pathlib import Path
 from typing import List
@@ -27,7 +28,7 @@ class Settings(BaseSettings):
     # 是否开发模式
     DEV: bool = False
     # 配置文件目录
-    CONFIG_DIR: str = None
+    CONFIG_DIR: str = "/config"
     # 超级管理员
     SUPERUSER: str = "admin"
     # 超级管理员初始密码
@@ -268,8 +269,8 @@ class Settings(BaseSettings):
             return [Path(path) for path in self.LIBRARY_PATH.split(",")]
         return []
 
-    def __init__(self):
-        super().__init__()
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
         with self.CONFIG_PATH as p:
             if not p.exists():
                 p.mkdir(parents=True, exist_ok=True)
@@ -284,4 +285,7 @@ class Settings(BaseSettings):
         case_sensitive = True
 
 
-settings = Settings()
+settings = Settings(
+    _env_file=Path(os.environ.get("CONFIG_DIR", "/config")) / "app.env",
+    _env_file_encoding="utf-8"
+)

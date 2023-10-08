@@ -3,11 +3,13 @@
 import logging
 import os
 import time
+from datetime import datetime
 from functools import lru_cache
 
 import requests
 import requests.exceptions
 
+from app.utils.http import RequestUtils
 from .exceptions import TMDbException
 
 logger = logging.getLogger(__name__)
@@ -24,7 +26,15 @@ class TMDb(object):
     TMDB_DOMAIN = "TMDB_DOMAIN"
     REQUEST_CACHE_MAXSIZE = None
 
-    def __init__(self, obj_cached=True):
+    _req = None
+    _session = None
+
+    def __init__(self, obj_cached=True, session=None):
+        if session is not None:
+            self._req = RequestUtils(session=session, proxies=self.proxies)
+        else:
+            self._session = requests.Session()
+            self._req = RequestUtils(session=self._session, proxies=self.proxies)
         self._remaining = 40
         self._reset = None
         self._timeout = 15
@@ -128,10 +138,18 @@ class TMDb(object):
         os.environ[self.TMDB_CACHE_ENABLED] = str(cache)
 
     @lru_cache(maxsize=REQUEST_CACHE_MAXSIZE)
-    def cached_request(self, method, url, data, json):
-        with requests.Session() as s:
-            return s.request(method, url, data=data, json=json,
-                             timeout=self._timeout, proxies=self.proxies)
+    def cached_request(self, method, url, data, json,
+                       _ts=datetime.strftime(datetime.now(), '%Y%m%d')):
+        """
+        缓存请求，时间默认1天
+        """
+        return self.request(method, url, data, json)
+
+    def request(self, method, url, data, json):
+        if method == "GET":
+            return self._req.get_res(url, params=data, json=json)
+        else:
+            return self._req.post_res(url, data=data, json=json)
 
     def cache_clear(self):
         return self.cached_request.cache_clear()
@@ -152,9 +170,7 @@ class TMDb(object):
         if self.cache and self.obj_cached and call_cached and method != "POST":
             req = self.cached_request(method, url, data, json)
         else:
-            with requests.Session() as s:
-                req = s.request(method, url, data=data, json=json,
-                                timeout=self._timeout, proxies=self.proxies)
+            req = self.request(method, url, data, json)
 
         headers = req.headers
 
@@ -199,3 +215,7 @@ class TMDb(object):
         if key:
             return json.get(key)
         return json
+
+    def __del__(self):
+        if self._session:
+            self._session.close()
