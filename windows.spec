@@ -1,6 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 
-def collect_pkg_data(package, include_py_files=False, subdir=None):
+def collect_pkg_data(package: str, include_py_files: bool = False, subdir: str = None):
     """
     Collect all data files from the given package.
     """
@@ -27,22 +27,22 @@ def collect_pkg_data(package, include_py_files=False, subdir=None):
     return data_toc
 
 
-def collect_local_submodules(package):
+def collect_local_submodules(package: str):
     """
     Collect all local submodules from the given package.
     """
     import os
-    base_dir = '..'
-    package_dir = os.path.join(base_dir, package.replace('.', os.sep))
-    submodules = []
-    for dir_path, dir_names, files in os.walk(package_dir):
-        for f in files:
-            if f == '__init__.py':
-                submodules.append(f"{package}.{os.path.basename(dir_path)}")
-            elif f.endswith('.py'):
-                submodules.append(f"{package}.{os.path.basename(dir_path)}.{os.path.splitext(f)[0]}")
-        for d in dir_names:
-            submodules.append(f"{package}.{os.path.basename(dir_path)}.{d}")
+    from pathlib import Path
+    package_dir = Path(package.replace('.', os.sep))
+    submodules = [package]
+    # Walk through all file in the given package, looking for data files.
+    for file in package_dir.rglob('*.py'):
+        if file.name == '__init__.py':
+            module = f"{file.parent}".replace(os.sep, '.')
+        else:
+            module = f"{file.parent}.{file.stem}".replace(os.sep, '.')
+        if module not in submodules:
+            submodules.append(module)
     return submodules
 
 
@@ -50,8 +50,7 @@ hiddenimports = [
                     'passlib.handlers.bcrypt',
                     'app.modules',
                     'app.plugins',
-                ] + collect_local_submodules('app.modules') \
-                + collect_local_submodules('app.plugins')
+                ] + collect_local_submodules('app.modules') + collect_local_submodules('app.plugins')
 
 block_cipher = None
 
@@ -75,7 +74,7 @@ exe = EXE(
     a.scripts,
     a.binaries,
     a.zipfiles,
-    a.datas,
+    a.datas + [('./app.ico', './app.ico', 'DATA')],
     collect_pkg_data('config'),
     collect_pkg_data('nginx'),
     collect_pkg_data('cf_clearance'),
@@ -88,7 +87,7 @@ exe = EXE(
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=True,
+    console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
