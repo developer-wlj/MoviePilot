@@ -3,15 +3,18 @@ ARG MOVIEPILOT_VERSION
 ENV LANG="C.UTF-8" \
     TZ="Asia/Shanghai" \
     HOME="/moviepilot" \
+    CONFIG_DIR="/config" \
     TERM="xterm" \
     PUID=0 \
     PGID=0 \
     UMASK=000 \
     PORT=3001 \
     NGINX_PORT=3000 \
+    PROXY_HOST="" \
     MOVIEPILOT_AUTO_UPDATE=true \
     MOVIEPILOT_AUTO_UPDATE_DEV=false \
-    CONFIG_DIR="/config"
+    AUTH_SITE="iyuu" \
+    IYUU_SIGN=""
 WORKDIR "/app"
 RUN apt-get update -y \
     && apt-get -y install \
@@ -28,6 +31,7 @@ RUN apt-get update -y \
         dumb-init \
         jq \
         haproxy \
+        rclone \
     && \
     if [ "$(uname -m)" = "x86_64" ]; \
         then ln -s /usr/lib/x86_64-linux-musl/libc.so /lib/libc.musl-x86_64.so.1; \
