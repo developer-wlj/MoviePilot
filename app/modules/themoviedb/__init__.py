@@ -63,7 +63,10 @@ class TheMovieDbModule(_ModuleBase):
                 # 直接查询详情
                 info = self.tmdb.get_info(mtype=mtype, tmdbid=tmdbid)
             elif meta:
-                logger.info(f"正在识别 {meta.name} ...")
+                if meta.begin_season:
+                    logger.info(f"正在识别 {meta.name} 第{meta.begin_season}季 ...")
+                else:
+                    logger.info(f"正在识别 {meta.name} ...")
                 if meta.type == MediaType.UNKNOWN and not meta.year:
                     info = self.tmdb.match_multi(meta.name)
                 else:
@@ -280,6 +283,8 @@ class TheMovieDbModule(_ModuleBase):
         :param mediainfo:  识别的媒体信息
         :return: 更新后的媒体信息
         """
+        if not mediainfo.tmdb_id:
+            return mediainfo
         if mediainfo.logo_path \
                 and mediainfo.poster_path \
                 and mediainfo.backdrop_path:
