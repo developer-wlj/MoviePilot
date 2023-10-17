@@ -65,6 +65,15 @@ class ChainBase(metaclass=ABCMeta):
             del cache
             gc.collect()
 
+    @staticmethod
+    def remove_cache(filename: str) -> None:
+        """
+        删除本地缓存
+        """
+        cache_path = settings.TEMP_PATH / filename
+        if cache_path.exists():
+            Path(cache_path).unlink()
+
     def run_module(self, method: str, *args, **kwargs) -> Any:
         """
         运行包含该方法的所有模块，然后返回结果
@@ -398,14 +407,15 @@ class ChainBase(metaclass=ABCMeta):
         """
         return self.run_module("post_torrents_message", message=message, torrents=torrents)
 
-    def scrape_metadata(self, path: Path, mediainfo: MediaInfo) -> None:
+    def scrape_metadata(self, path: Path, mediainfo: MediaInfo, transfer_type: str) -> None:
         """
         刮削元数据
         :param path: 媒体文件路径
         :param mediainfo:  识别的媒体信息
+        :param transfer_type:  转移模式
         :return: 成功或失败
         """
-        self.run_module("scrape_metadata", path=path, mediainfo=mediainfo)
+        self.run_module("scrape_metadata", path=path, mediainfo=mediainfo, transfer_type=transfer_type)
 
     def register_commands(self, commands: Dict[str, dict]) -> None:
         """

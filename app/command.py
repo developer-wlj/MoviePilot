@@ -1,6 +1,7 @@
 import importlib
+import threading
 import traceback
-from threading import Thread, Event
+from threading import Thread
 from typing import Any, Union, Dict
 
 from app.chain import ChainBase
@@ -13,13 +14,13 @@ from app.core.event import Event as ManagerEvent
 from app.core.event import eventmanager, EventManager
 from app.core.plugin import PluginManager
 from app.db import SessionFactory
+from app.helper.thread import ThreadHelper
 from app.log import logger
 from app.scheduler import Scheduler
 from app.schemas import Notification
 from app.schemas.types import EventType, MessageChannel
 from app.utils.object import ObjectUtils
 from app.utils.singleton import Singleton
-from app.utils.system import SystemUtils
 
 
 class CommandChian(ChainBase):
@@ -39,7 +40,7 @@ class Command(metaclass=Singleton):
     _commands = {}
 
     # 退出事件
-    _event = Event()
+    _event = threading.Event()
 
     def __init__(self):
         # 数据库连接
@@ -52,6 +53,8 @@ class Command(metaclass=Singleton):
         self.chain = CommandChian(self._db)
         # 定时服务管理
         self.scheduler = Scheduler()
+        # 线程管理器
+        self.threader = ThreadHelper()
         # 内置命令
         self._commands = {
             "/cookiecloud": {
@@ -133,14 +136,26 @@ class Command(metaclass=Singleton):
                 "data": {}
             },
             "/clear_cache": {
-                "func": SystemChain(self._db).remote_clear_cache,
+                "func": SystemChain().remote_clear_cache,
                 "description": "清理缓存",
                 "category": "管理",
                 "data": {}
             },
             "/restart": {
-                "func": SystemUtils.restart,
+                "func": SystemChain().restart,
                 "description": "重启系统",
+                "category": "管理",
+                "data": {}
+            },
+            "/version": {
+                "func": SystemChain().version,
+                "description": "当前版本",
+                "category": "管理",
+                "data": {}
+            },
+            "/update": {
+                "func": SystemChain().update,
+                "description": "更新系统",
                 "category": "管理",
                 "data": {}
             }
@@ -164,6 +179,8 @@ class Command(metaclass=Singleton):
         self._thread = Thread(target=self.__run)
         # 启动事件处理线程
         self._thread.start()
+        # 重启msg
+        SystemChain().restart_finish()
 
     def __run(self):
         """
@@ -179,7 +196,11 @@ class Command(metaclass=Singleton):
                         [class_name, method_name] = names
                         if class_name in self.pluginmanager.get_plugin_ids():
                             # 插件事件
-                            self.pluginmanager.run_plugin_method(class_name, method_name, event)
+                            self.threader.submit(
+                                self.pluginmanager.run_plugin_method,
+                                class_name, method_name, event
+                            )
+
                         else:
                             # 检查全局变量中是否存在
                             if class_name not in globals():
@@ -193,7 +214,10 @@ class Command(metaclass=Singleton):
                                 class_obj = globals()[class_name]()
                             # 检查类是否存在并调用方法
                             if hasattr(class_obj, method_name):
-                                getattr(class_obj, method_name)(event)
+                                self.threader.submit(
+                                    getattr(class_obj, method_name),
+                                    event
+                                )
                     except Exception as e:
                         logger.error(f"事件处理出错：{str(e)} - {traceback.format_exc()}")
 

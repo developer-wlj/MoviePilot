@@ -1,4 +1,3 @@
-import glob
 import re
 import shutil
 import threading
@@ -237,7 +236,7 @@ class TransferChain(ChainBase):
                 # 自定义识别
                 if formaterHandler:
                     # 开始集、结束集、PART
-                    begin_ep, end_ep, part = formaterHandler.split_episode(file_path.stem)
+                    begin_ep, end_ep, part = formaterHandler.split_episode(file_path.name)
                     if begin_ep is not None:
                         file_meta.begin_episode = begin_ep
                         file_meta.part = part
@@ -358,7 +357,9 @@ class TransferChain(ChainBase):
                 )
                 # 刮削单个文件
                 if settings.SCRAP_METADATA:
-                    self.scrape_metadata(path=transferinfo.target_path, mediainfo=file_mediainfo)
+                    self.scrape_metadata(path=transferinfo.target_path,
+                                         mediainfo=file_mediainfo,
+                                         transfer_type=transfer_type)
                 # 更新进度
                 processed_num += 1
                 self.progress.update(value=processed_num / total_num * 100,
@@ -489,7 +490,7 @@ class TransferChain(ChainBase):
     def re_transfer(self, logid: int,
                     mtype: MediaType = None, tmdbid: int = None) -> Tuple[bool, str]:
         """
-        根据历史记录，重新识别转移，只处理对应的src目录
+        根据历史记录，重新识别转移，只支持简单条件
         :param logid: 历史记录ID
         :param mtype: 媒体类型
         :param tmdbid: TMDB ID
@@ -499,7 +500,7 @@ class TransferChain(ChainBase):
         if not history:
             logger.error(f"历史记录不存在，ID：{logid}")
             return False, "历史记录不存在"
-        # 没有下载记录，按源目录路径重新转移
+        # 按源目录路径重新转移
         src_path = Path(history.src)
         if not src_path.exists():
             return False, f"源目录不存在：{src_path}"
@@ -539,9 +540,10 @@ class TransferChain(ChainBase):
                         season: int = None,
                         transfer_type: str = None,
                         epformat: EpisodeFormat = None,
-                        min_filesize: int = 0) -> Tuple[bool, Union[str, list]]:
+                        min_filesize: int = 0,
+                        force: bool = False) -> Tuple[bool, Union[str, list]]:
         """
-        手动转移
+        手动转移，支持复杂条件，带进度显示
         :param in_path: 源文件路径
         :param target: 目标路径
         :param tmdbid: TMDB ID
@@ -550,6 +552,7 @@ class TransferChain(ChainBase):
         :param transfer_type: 转移类型
         :param epformat: 剧集格式
         :param min_filesize: 最小文件大小(MB)
+        :param force: 是否强制转移
         """
         logger.info(f"手动转移：{in_path} ...")
 
@@ -569,9 +572,11 @@ class TransferChain(ChainBase):
                 path=in_path,
                 mediainfo=mediainfo,
                 target=target,
+                transfer_type=transfer_type,
                 season=season,
                 epformat=epformat,
-                min_filesize=min_filesize
+                min_filesize=min_filesize,
+                force=force
             )
             if not state:
                 return False, errmsg
@@ -586,7 +591,8 @@ class TransferChain(ChainBase):
                                              transfer_type=transfer_type,
                                              season=season,
                                              epformat=epformat,
-                                             min_filesize=min_filesize)
+                                             min_filesize=min_filesize,
+                                             force=force)
             return state, errmsg
 
     def send_transfer_message(self, meta: MetaBase, mediainfo: MediaInfo,
