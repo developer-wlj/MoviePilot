@@ -46,9 +46,9 @@ class NAStoolSync(_PluginBase):
     _transfer = False
 
     def init_plugin(self, config: dict = None):
-        self._transferhistory = TransferHistoryOper(self.db)
-        self._plugindata = PluginDataOper(self.db)
-        self._downloadhistory = DownloadHistoryOper(self.db)
+        self._transferhistory = TransferHistoryOper()
+        self._plugindata = PluginDataOper()
+        self._downloadhistory = DownloadHistoryOper()
 
         if config:
             self._clear = config.get("clear")
@@ -73,7 +73,7 @@ class NAStoolSync(_PluginBase):
                             "site": self._site,
                         }
                     )
-                    logger.error(f"无法打开数据库文件 {self._nt_db_path}，请检查路径是否正确：{e}")
+                    logger.error(f"无法打开数据库文件 {self._nt_db_path}，请检查路径是否正确：{str(e)}")
                     return
 
                 # 创建游标cursor来执行executeＳＱＬ语句

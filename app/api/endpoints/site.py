@@ -45,7 +45,7 @@ def add_site(
     domain = StringUtils.get_url_domain(site_in.url)
     site_info = SitesHelper().get_indexer(domain)
     if not site_info:
-        return schemas.Response(success=False, message="该站点不支持")
+        return schemas.Response(success=False, message="该站点不支持或用户未通过认证")
     if Site.get_by_domain(db, domain):
         return schemas.Response(success=False, message=f"{domain} 站点己存在")
     # 保存站点信息
@@ -139,9 +139,9 @@ def update_cookie(
             detail=f"站点 {site_id} 不存在！",
         )
     # 更新Cookie
-    state, message = SiteChain(db).update_cookie(site_info=site_info,
-                                                 username=username,
-                                                 password=password)
+    state, message = SiteChain().update_cookie(site_info=site_info,
+                                               username=username,
+                                               password=password)
     return schemas.Response(success=state, message=message)
 
 
@@ -158,7 +158,7 @@ def test_site(site_id: int,
             status_code=404,
             detail=f"站点 {site_id} 不存在",
         )
-    status, message = SiteChain(db).test(site.domain)
+    status, message = SiteChain().test(site.domain)
     return schemas.Response(success=status, message=message)
 
 

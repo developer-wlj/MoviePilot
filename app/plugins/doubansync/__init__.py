@@ -7,11 +7,11 @@ import pytz
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
+from app.chain.douban import DoubanChain
 from app.chain.download import DownloadChain
 from app.chain.search import SearchChain
 from app.chain.subscribe import SubscribeChain
 from app.core.config import settings
-from app.core.context import MediaInfo
 from app.core.event import Event
 from app.core.event import eventmanager
 from app.core.metainfo import MetaInfo
@@ -53,6 +53,7 @@ class DoubanSync(_PluginBase):
     downloadchain = None
     searchchain = None
     subscribechain = None
+    doubanchain = None
 
     # 配置属性
     _enabled: bool = False
@@ -66,9 +67,10 @@ class DoubanSync(_PluginBase):
 
     def init_plugin(self, config: dict = None):
         self.rsshelper = RssHelper()
-        self.downloadchain = DownloadChain(self.db)
-        self.searchchain = SearchChain(self.db)
-        self.subscribechain = SubscribeChain(self.db)
+        self.downloadchain = DownloadChain()
+        self.searchchain = SearchChain()
+        self.subscribechain = SubscribeChain()
+        self.doubanchain = DoubanChain()
 
         # 停止现有任务
         self.stop_service()
@@ -92,9 +94,9 @@ class DoubanSync(_PluginBase):
                                             trigger=CronTrigger.from_crontab(self._cron),
                                             name="豆瓣想看")
                 except Exception as err:
-                    logger.error(f"定时任务配置错误：{err}")
+                    logger.error(f"定时任务配置错误：{str(err)}")
                     # 推送实时消息
-                    self.systemmessage.put(f"执行周期配置错误：{err}")
+                    self.systemmessage.put(f"执行周期配置错误：{str(err)}")
             else:
                 self._scheduler.add_job(self.sync, "interval", minutes=30, name="豆瓣想看")
 
@@ -448,7 +450,7 @@ class DoubanSync(_PluginBase):
             url = self._interests_url % user_id
             results = self.rsshelper.parse(url)
             if not results:
-                logger.error(f"未获取到用户 {user_id} 豆瓣RSS数据：{url}")
+                logger.warn(f"未获取到用户 {user_id} 豆瓣RSS数据：{url}")
                 continue
             else:
                 logger.info(f"获取到用户 {user_id} 豆瓣RSS数据：{len(results)}")
@@ -474,18 +476,11 @@ class DoubanSync(_PluginBase):
                     if not douban_id or douban_id in [h.get("doubanid") for h in history]:
                         logger.info(f'标题：{title}，豆瓣ID：{douban_id} 已处理过')
                         continue
-                    # 根据豆瓣ID获取豆瓣数据
-                    doubaninfo: Optional[dict] = self.chain.douban_info(doubanid=douban_id)
-                    if not doubaninfo:
-                        logger.warn(f'未获取到豆瓣信息，标题：{title}，豆瓣ID：{douban_id}')
-                        continue
-                    logger.info(f'获取到豆瓣信息，标题：{title}，豆瓣ID：{douban_id}')
                     # 识别媒体信息
-                    meta = MetaInfo(doubaninfo.get("original_title") or doubaninfo.get("title"))
-                    if doubaninfo.get("year"):
-                        meta.year = doubaninfo.get("year")
-                    mediainfo: MediaInfo = self.chain.recognize_media(meta=meta)
-                    if not mediainfo:
+                    meta = MetaInfo(title=title)
+                    context = self.doubanchain.recognize_by_doubanid(douban_id)
+                    mediainfo = context.media_info
+                    if not mediainfo or not mediainfo.tmdb_id:
                         logger.warn(f'未识别到媒体信息，标题：{title}，豆瓣ID：{douban_id}')
                         continue
                     # 查询缺失的媒体信息
@@ -531,7 +526,7 @@ class DoubanSync(_PluginBase):
                     # 存储历史记录
                     history.append({
                         "action": action,
-                        "title": doubaninfo.get("title") or mediainfo.title,
+                        "title": title,
                         "type": mediainfo.type.value,
                         "year": mediainfo.year,
                         "poster": mediainfo.get_poster_image(),
@@ -541,7 +536,7 @@ class DoubanSync(_PluginBase):
                         "time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     })
                 except Exception as err:
-                    logger.error(f'同步用户 {user_id} 豆瓣想看数据出错：{err}')
+                    logger.error(f'同步用户 {user_id} 豆瓣想看数据出错：{str(err)}')
             logger.info(f"用户 {user_id} 豆瓣想看同步完成")
         # 保存历史记录
         self.save_data('history', history)

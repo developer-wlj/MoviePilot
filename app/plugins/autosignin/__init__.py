@@ -14,7 +14,7 @@ from ruamel.yaml import CommentedMap
 from app import schemas
 from app.core.config import settings
 from app.core.event import EventManager, eventmanager, Event
-from app.db.models.site import Site
+from app.db.site_oper import SiteOper
 from app.helper.browser import PlaywrightHelper
 from app.helper.cloudflare import under_challenge
 from app.helper.module import ModuleHelper
@@ -52,6 +52,7 @@ class AutoSignIn(_PluginBase):
 
     # 私有属性
     sites: SitesHelper = None
+    siteoper: SiteOper = None
     # 事件管理器
     event: EventManager = None
     # 定时器
@@ -71,9 +72,11 @@ class AutoSignIn(_PluginBase):
     _clean: bool = False
     _start_time: int = None
     _end_time: int = None
+    _auto_cf: int = 0
 
     def init_plugin(self, config: dict = None):
         self.sites = SitesHelper()
+        self.siteoper = SiteOper()
         self.event = EventManager()
 
         # 停止现有任务
@@ -89,6 +92,7 @@ class AutoSignIn(_PluginBase):
             self._sign_sites = config.get("sign_sites") or []
             self._login_sites = config.get("login_sites") or []
             self._retry_keyword = config.get("retry_keyword")
+            self._auto_cf = config.get("auto_cf")
             self._clean = config.get("clean")
 
             # 过滤掉已删除的站点
@@ -166,9 +170,9 @@ class AutoSignIn(_PluginBase):
                                 logger.info(
                                     f"站点自动签到服务启动，执行周期 {self._start_time}点-{self._end_time}点 每{self._cron}小时执行一次")
                     except Exception as err:
-                        logger.error(f"定时任务配置错误：{err}")
+                        logger.error(f"定时任务配置错误：{str(err)}")
                         # 推送实时消息
-                        self.systemmessage.put(f"执行周期配置错误：{err}")
+                        self.systemmessage.put(f"执行周期配置错误：{str(err)}")
                         self._cron = ""
                         self._enabled = False
                         self.__update_config()
@@ -177,8 +181,8 @@ class AutoSignIn(_PluginBase):
                     triggers = TimerUtils.random_scheduler(num_executions=2,
                                                            begin_hour=9,
                                                            end_hour=23,
-                                                           max_interval=12 * 60,
-                                                           min_interval=6 * 60)
+                                                           max_interval=6 * 60,
+                                                           min_interval=2 * 60)
                     for trigger in triggers:
                         self._scheduler.add_job(self.sign_in, "cron",
                                                 hour=trigger.hour, minute=trigger.minute,
@@ -204,6 +208,7 @@ class AutoSignIn(_PluginBase):
                 "sign_sites": self._sign_sites,
                 "login_sites": self._login_sites,
                 "retry_keyword": self._retry_keyword,
+                "auto_cf": self._auto_cf,
                 "clean": self._clean,
             }
         )
@@ -248,7 +253,7 @@ class AutoSignIn(_PluginBase):
         customSites = self.__custom_sites()
 
         site_options = ([{"title": site.name, "value": site.id}
-                         for site in Site.list_order_by_pri(self.db)]
+                         for site in self.siteoper.list_order_by_pri()]
                         + [{"title": site.get("name"), "value": site.get("id")}
                            for site in customSites])
         return [
@@ -331,7 +336,7 @@ class AutoSignIn(_PluginBase):
                                 'component': 'VCol',
                                 'props': {
                                     'cols': 12,
-                                    'md': 4
+                                    'md': 6
                                 },
                                 'content': [
                                     {
@@ -348,7 +353,7 @@ class AutoSignIn(_PluginBase):
                                 'component': 'VCol',
                                 'props': {
                                     'cols': 12,
-                                    'md': 4
+                                    'md': 6
                                 },
                                 'content': [
                                     {
@@ -364,7 +369,7 @@ class AutoSignIn(_PluginBase):
                                 'component': 'VCol',
                                 'props': {
                                     'cols': 12,
-                                    'md': 4
+                                    'md': 6
                                 },
                                 'content': [
                                     {
@@ -373,6 +378,23 @@ class AutoSignIn(_PluginBase):
                                             'model': 'retry_keyword',
                                             'label': '重试关键词',
                                             'placeholder': '支持正则表达式，命中才重签'
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12,
+                                    'md': 6
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VTextField',
+                                        'props': {
+                                            'model': 'auto_cf',
+                                            'label': '自动优选',
+                                            'placeholder': '命中重试关键词次数（0-关闭）'
                                         }
                                     }
                                 ]
@@ -441,6 +463,25 @@ class AutoSignIn(_PluginBase):
                                 ]
                             }
                         ]
+                    },
+                    {
+                        'component': 'VRow',
+                        'content': [
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12,
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VAlert',
+                                        'props': {
+                                            'text': '自动优选：0-关闭，命中重试关键词次数大于该数量时自动执行Cloudflare IP优选（需要开启且则正确配置Cloudflare IP优选插件和自定义Hosts插件）'
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
                     }
                 ]
             }
@@ -448,6 +489,7 @@ class AutoSignIn(_PluginBase):
             "enabled": False,
             "notify": True,
             "cron": "",
+            "auto_cf": 0,
             "onlyonce": False,
             "clean": False,
             "queue_cnt": 5,
@@ -456,7 +498,7 @@ class AutoSignIn(_PluginBase):
             "retry_keyword": "错误|失败"
         }
 
-    def __custom_sites(self) -> List[dict]:
+    def __custom_sites(self) -> List[Any]:
         custom_sites = []
         custom_sites_config = self.get_config("CustomSites")
         if custom_sites_config and custom_sites_config.get("enabled"):
@@ -687,6 +729,14 @@ class AutoSignIn(_PluginBase):
                 site_id = None
                 if site_name:
                     site_id = sites.get(site_name)
+
+                if 'Cookie已失效' in str(s) and site_id:
+                    # 触发自动登录插件登录
+                    logger.info(f"触发站点 {site_name} 自动登录更新Cookie和Ua")
+                    self.eventmanager.send_event(EventType.SiteLogin,
+                                                 {
+                                                     "site_id": site_id
+                                                 })
                 # 记录本次命中重试关键词的站点
                 if self._retry_keyword:
                     if site_id:
@@ -698,14 +748,14 @@ class AutoSignIn(_PluginBase):
                             retry_msg.append(s)
                             continue
 
-                if "登录成功" in s:
+                if "登录成功" in str(s):
                     login_success_msg.append(s)
-                elif "仿真签到成功" in s:
+                elif "仿真签到成功" in str(s):
                     fz_sign_msg.append(s)
                     continue
-                elif "签到成功" in s:
+                elif "签到成功" in str(s):
                     sign_success_msg.append(s)
-                elif '已签到' in s:
+                elif '已签到' in str(s):
                     already_sign_msg.append(s)
                 else:
                     failed_msg.append(s)
@@ -721,6 +771,10 @@ class AutoSignIn(_PluginBase):
                                "do": self._sign_sites if type == "签到" else self._login_sites,
                                "retry": retry_sites
                            })
+
+            # 自动Cloudflare IP优选
+            if self._auto_cf and int(self._auto_cf) > 0 and retry_msg and len(retry_msg) >= int(self._auto_cf):
+                self.eventmanager.send_event(EventType.CloudFlareSpeedTest, {})
 
             # 发送通知
             if self._notify:

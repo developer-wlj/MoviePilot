@@ -236,8 +236,8 @@ class BrushFlow(_PluginBase):
                 try:
                     self._scheduler.add_job(self.brush, 'interval', minutes=self._cron)
                 except Exception as e:
-                    logger.error(f"站点刷流服务启动失败：{e}")
-                    self.systemmessage.put(f"站点刷流服务启动失败：{e}")
+                    logger.error(f"站点刷流服务启动失败：{str(e)}")
+                    self.systemmessage.put(f"站点刷流服务启动失败：{str(e)}")
                     return
                 if self._onlyonce:
                     logger.info(f"站点刷流服务启动，立即运行一次")
@@ -1436,7 +1436,7 @@ class BrushFlow(_PluginBase):
                 return
             if not torrents:
                 logger.warn(f"刷流任务在下载器中不存在，清除记录")
-                self.save_data("hashs", {})
+                self.save_data("torrents", {})
                 return
             # 检查种子状态，判断是否要删种
             remove_torrents = []

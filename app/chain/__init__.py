@@ -7,7 +7,6 @@ from typing import Optional, Any, Tuple, List, Set, Union, Dict
 
 from qbittorrentapi import TorrentFilesList
 from ruamel.yaml import CommentedMap
-from sqlalchemy.orm import Session
 from transmission_rpc import File
 
 from app.core.config import settings
@@ -28,11 +27,10 @@ class ChainBase(metaclass=ABCMeta):
     处理链基类
     """
 
-    def __init__(self, db: Session = None):
+    def __init__(self):
         """
         公共初始化
         """
-        self._db = db
         self.modulemanager = ModuleManager()
         self.eventmanager = EventManager()
 
@@ -47,7 +45,7 @@ class ChainBase(metaclass=ABCMeta):
                 with open(cache_path, 'rb') as f:
                     return pickle.load(f)
             except Exception as err:
-                logger.error(f"加载缓存 {filename} 出错：{err}")
+                logger.error(f"加载缓存 {filename} 出错：{str(err)}")
         return None
 
     @staticmethod
@@ -59,7 +57,7 @@ class ChainBase(metaclass=ABCMeta):
             with open(settings.TEMP_PATH / filename, 'wb') as f:
                 pickle.dump(cache, f)
         except Exception as err:
-            logger.error(f"保存缓存 {filename} 出错：{err}")
+            logger.error(f"保存缓存 {filename} 出错：{str(err)}")
         finally:
             # 主动资源回收
             del cache
@@ -109,7 +107,7 @@ class ChainBase(metaclass=ABCMeta):
                     # 中止继续执行
                     break
             except Exception as err:
-                logger.error(f"运行模块 {method} 出错：{module.__class__.__name__} - {err}\n{traceback.print_exc()}")
+                logger.error(f"运行模块 {method} 出错：{module.__class__.__name__} - {str(err)}\n{traceback.print_exc()}")
         return result
 
     def recognize_media(self, meta: MetaBase = None,

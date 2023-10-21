@@ -7,7 +7,6 @@ from app.chain import ChainBase
 from app.core.config import settings
 from app.core.context import TorrentInfo, Context, MediaInfo
 from app.core.metainfo import MetaInfo
-from app.db import SessionFactory
 from app.db.site_oper import SiteOper
 from app.db.systemconfig_oper import SystemConfigOper
 from app.helper.rss import RssHelper
@@ -28,10 +27,9 @@ class TorrentsChain(ChainBase, metaclass=Singleton):
     _rss_file = "__rss_cache__"
 
     def __init__(self):
-        self._db = SessionFactory()
-        super().__init__(self._db)
+        super().__init__()
         self.siteshelper = SitesHelper()
-        self.siteoper = SiteOper(self._db)
+        self.siteoper = SiteOper()
         self.rsshelper = RssHelper()
         self.systemconfig = SystemConfigOper()
 
@@ -60,7 +58,7 @@ class TorrentsChain(ChainBase, metaclass=Singleton):
         else:
             return self.load_cache(self._rss_file) or {}
 
-    @cached(cache=TTLCache(maxsize=128 if settings.BIG_MEMORY_MODE else 1, ttl=600))
+    @cached(cache=TTLCache(maxsize=128, ttl=600))
     def browse(self, domain: str) -> List[TorrentInfo]:
         """
         浏览站点首页内容，返回种子清单，TTL缓存10分钟
@@ -73,7 +71,7 @@ class TorrentsChain(ChainBase, metaclass=Singleton):
             return []
         return self.refresh_torrents(site=site)
 
-    @cached(cache=TTLCache(maxsize=128 if settings.BIG_MEMORY_MODE else 1, ttl=300))
+    @cached(cache=TTLCache(maxsize=128, ttl=300))
     def rss(self, domain: str) -> List[TorrentInfo]:
         """
         获取站点RSS内容，返回种子清单，TTL缓存5分钟

@@ -1,11 +1,10 @@
 import base64
+import copy
 import json
 import re
 import time
 from pathlib import Path
 from typing import List, Optional, Tuple, Set, Dict, Union
-
-from sqlalchemy.orm import Session
 
 from app.chain import ChainBase
 from app.core.config import settings
@@ -27,11 +26,11 @@ class DownloadChain(ChainBase):
     下载处理链
     """
 
-    def __init__(self, db: Session = None):
-        super().__init__(db)
+    def __init__(self):
+        super().__init__()
         self.torrent = TorrentHelper()
-        self.downloadhis = DownloadHistoryOper(self._db)
-        self.mediaserver = MediaServerOper(self._db)
+        self.downloadhis = DownloadHistoryOper()
+        self.mediaserver = MediaServerOper()
 
     def post_download_message(self, meta: MetaBase, mediainfo: MediaInfo, torrent: TorrentInfo,
                               channel: MessageChannel = None,
@@ -203,33 +202,31 @@ class DownloadChain(ChainBase):
                 # 开启下载二级目录
                 if _media.type == MediaType.MOVIE:
                     # 电影
-                    download_dir = Path(settings.DOWNLOAD_MOVIE_PATH or settings.DOWNLOAD_PATH) / _media.category
+                    download_dir = settings.SAVE_MOVIE_PATH / _media.category
                 else:
-                    if settings.DOWNLOAD_ANIME_PATH \
-                            and _media.genre_ids \
+                    if _media.genre_ids \
                             and set(_media.genre_ids).intersection(set(settings.ANIME_GENREIDS)):
                         # 动漫
-                        download_dir = Path(settings.DOWNLOAD_ANIME_PATH)
+                        download_dir = settings.SAVE_ANIME_PATH
                     else:
                         # 电视剧
-                        download_dir = Path(settings.DOWNLOAD_TV_PATH or settings.DOWNLOAD_PATH) / _media.category
+                        download_dir = settings.SAVE_TV_PATH / _media.category
             elif _media:
                 # 未开启下载二级目录
                 if _media.type == MediaType.MOVIE:
                     # 电影
-                    download_dir = Path(settings.DOWNLOAD_MOVIE_PATH or settings.DOWNLOAD_PATH)
+                    download_dir = settings.SAVE_MOVIE_PATH
                 else:
-                    if settings.DOWNLOAD_ANIME_PATH \
-                            and _media.genre_ids \
+                    if _media.genre_ids \
                             and set(_media.genre_ids).intersection(set(settings.ANIME_GENREIDS)):
                         # 动漫
-                        download_dir = Path(settings.DOWNLOAD_ANIME_PATH)
+                        download_dir = settings.SAVE_ANIME_PATH
                     else:
                         # 电视剧
-                        download_dir = Path(settings.DOWNLOAD_TV_PATH or settings.DOWNLOAD_PATH)
+                        download_dir = settings.SAVE_TV_PATH
             else:
                 # 未识别
-                download_dir = Path(settings.DOWNLOAD_PATH)
+                download_dir = settings.SAVE_PATH
         else:
             # 自定义下载目录
             download_dir = Path(save_path)
@@ -347,7 +344,8 @@ class DownloadChain(ChainBase):
             # 剩余季数
             need = list(set(_need).difference(set(_current)))
             # 清除已下载的季信息
-            for _sea in list(no_exists.get(_tmdbid)):
+            seas = copy.deepcopy(no_exists.get(_tmdbid))
+            for _sea in list(seas):
                 if _sea not in need:
                     no_exists[_tmdbid].pop(_sea)
                 if not no_exists.get(_tmdbid) and no_exists.get(_tmdbid) is not None:
@@ -447,13 +445,13 @@ class DownloadChain(ChainBase):
                                 logger.info(f"{meta.org_string} 解析文件集数为 {torrent_episodes}")
                                 if not torrent_episodes:
                                     continue
-                                # 总集数
+                                # 更新集数范围
+                                begin_ep = min(torrent_episodes)
+                                end_ep = max(torrent_episodes)
+                                meta.set_episodes(begin=begin_ep, end=end_ep)
+                                # 需要总集数
                                 need_total = __get_season_episodes(need_tmdbid, torrent_season[0])
                                 if len(torrent_episodes) < need_total:
-                                    # 更新集数范围
-                                    begin_ep = min(torrent_episodes)
-                                    end_ep = max(torrent_episodes)
-                                    meta.set_episodes(begin=begin_ep, end=end_ep)
                                     logger.info(
                                         f"{meta.org_string} 解析文件集数发现不是完整合集")
                                     continue
@@ -610,11 +608,12 @@ class DownloadChain(ChainBase):
                             )
                             if not download_id:
                                 continue
-                            # 把识别的集更新到上下文
-                            context.meta_info.begin_episode = min(selected_episodes)
-                            context.meta_info.end_episode = max(selected_episodes)
                             # 下载成功
                             downloaded_list.append(context)
+                            # 更新种子集数范围
+                            begin_ep = min(torrent_episodes)
+                            end_ep = max(torrent_episodes)
+                            meta.set_episodes(begin=begin_ep, end=end_ep)
                             # 更新仍需集数
                             need_episodes = __update_episodes(_tmdbid=need_tmdbid,
                                                               _need=need_episodes,

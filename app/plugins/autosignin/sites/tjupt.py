@@ -75,8 +75,8 @@ class Tjupt(_ISiteSigninHandler):
             return False, '签到失败，请检查站点连通性'
 
         if "login.php" in html_text:
-            logger.error(f"{site} 签到失败，Cookie失效")
-            return False, '签到失败，Cookie失效'
+            logger.error(f"{site} 签到失败，Cookie已失效")
+            return False, '签到失败，Cookie已失效'
 
         sign_status = self.sign_in_result(html_res=html_text,
                                           regexs=self._sign_regex)
@@ -141,7 +141,7 @@ class Tjupt(_ISiteSigninHandler):
                                              proxy=proxy,
                                              site=site)
         except (FileNotFoundError, IOError, OSError) as e:
-            logger.debug(f"查询本地已知答案失败：{e}，继续请求豆瓣查询")
+            logger.debug(f"查询本地已知答案失败：{str(e)}，继续请求豆瓣查询")
 
         # 本地不存在正确答案则请求豆瓣查询匹配
         for value, answer in answers:
@@ -236,7 +236,7 @@ class Tjupt(_ISiteSigninHandler):
             with open(self._answer_file, 'w') as f:
                 f.write(formatted_data)
         except (FileNotFoundError, IOError, OSError) as e:
-            logger.debug(f"签到成功写入本地文件失败：{e}")
+            logger.debug(f"签到成功写入本地文件失败：{str(e)}")
 
     @staticmethod
     def _tohash(img, shape=(10, 10)):

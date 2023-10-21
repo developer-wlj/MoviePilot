@@ -96,9 +96,9 @@ class DirMonitor(_PluginBase):
     _event = threading.Event()
 
     def init_plugin(self, config: dict = None):
-        self.transferhis = TransferHistoryOper(self.db)
-        self.downloadhis = DownloadHistoryOper(self.db)
-        self.transferchian = TransferChain(self.db)
+        self.transferhis = TransferHistoryOper()
+        self.downloadhis = DownloadHistoryOper()
+        self.transferchian = TransferChain()
         self.tmdbchain = TmdbChain()
         # 清空配置
         self._dirconf = {}
@@ -315,12 +315,6 @@ class DirMonitor(_PluginBase):
                     logger.debug(f"{event_path} 不是媒体文件")
                     return
 
-                # 元数据
-                file_meta = MetaInfoPath(file_path)
-                if not file_meta.name:
-                    logger.error(f"{file_path.name} 无法识别有效信息")
-                    return
-
                 # 判断是不是蓝光目录
                 if re.search(r"BDMV[/\\]STREAM", event_path, re.IGNORECASE):
                     # 截取BDMV前面的路径
@@ -330,6 +324,12 @@ class DirMonitor(_PluginBase):
                 # 查询历史记录，已转移的不处理
                 if self.transferhis.get_by_src(event_path):
                     logger.info(f"{event_path} 已整理过")
+                    return
+
+                # 元数据
+                file_meta = MetaInfoPath(file_path)
+                if not file_meta.name:
+                    logger.error(f"{file_path.name} 无法识别有效信息")
                     return
 
                 # 查询转移目的目录
@@ -577,9 +577,9 @@ class DirMonitor(_PluginBase):
         """
         从表中获取download_hash，避免连接下载器
         """
-        downloadHis = self.downloadhis.get_file_by_fullpath(src)
-        if downloadHis:
-            return downloadHis.download_hash
+        download_file = self.downloadhis.get_file_by_fullpath(src)
+        if download_file:
+            return download_file.download_hash
         return None
 
     def get_state(self) -> bool:

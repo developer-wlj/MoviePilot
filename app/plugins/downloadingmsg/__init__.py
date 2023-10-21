@@ -57,7 +57,7 @@ class DownloadingMsg(_PluginBase):
 
             # 加载模块
         if self._enabled:
-            self._downloadhis = DownloadHistoryOper(self.db)
+            self._downloadhis = DownloadHistoryOper()
             # 定时服务
             self._scheduler = BackgroundScheduler(timezone=settings.TZ)
 
@@ -68,7 +68,7 @@ class DownloadingMsg(_PluginBase):
                                             seconds=int(self._seconds),
                                             name="下载进度推送")
                 except Exception as err:
-                    logger.error(f"定时任务配置错误：{err}")
+                    logger.error(f"定时任务配置错误：{str(err)}")
 
             # 启动任务
             if self._scheduler.get_jobs():
@@ -80,7 +80,7 @@ class DownloadingMsg(_PluginBase):
         定时推送正在下载进度
         """
         # 正在下载种子
-        torrents = DownloadChain(self.db).list_torrents(status=TorrentStatus.DOWNLOADING)
+        torrents = DownloadChain().list_torrents(status=TorrentStatus.DOWNLOADING)
         if not torrents:
             logger.info("当前没有正在下载的任务！")
             return

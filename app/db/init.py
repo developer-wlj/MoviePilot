@@ -22,16 +22,15 @@ def init_db():
     # 全量建表
     Base.metadata.create_all(bind=Engine)
     # 初始化超级管理员
-    db = SessionFactory()
-    user = User.get_by_name(db=db, name=settings.SUPERUSER)
-    if not user:
-        user = User(
-            name=settings.SUPERUSER,
-            hashed_password=get_password_hash(settings.SUPERUSER_PASSWORD),
-            is_superuser=True,
-        )
-        user.create(db)
-    db.close()
+    with SessionFactory() as db:
+        user = User.get_by_name(db=db, name=settings.SUPERUSER)
+        if not user:
+            user = User(
+                name=settings.SUPERUSER,
+                hashed_password=get_password_hash(settings.SUPERUSER_PASSWORD),
+                is_superuser=True,
+            )
+            user.create(db)
 
 
 def update_db():
@@ -46,4 +45,4 @@ def update_db():
         alembic_cfg.set_main_option('sqlalchemy.url', f"sqlite:///{db_location}")
         upgrade(alembic_cfg, 'head')
     except Exception as e:
-        logger.error(f'数据库更新失败：{e}')
+        logger.error(f'数据库更新失败：{str(e)}')

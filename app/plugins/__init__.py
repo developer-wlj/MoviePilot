@@ -5,8 +5,6 @@ from typing import Any, List, Dict, Tuple
 from app.chain import ChainBase
 from app.core.config import settings
 from app.core.event import EventManager
-from app.db import SessionFactory
-from app.db.models import Base
 from app.db.plugindata_oper import PluginDataOper
 from app.db.systemconfig_oper import SystemConfigOper
 from app.helper.message import MessageHelper
@@ -36,12 +34,10 @@ class _PluginBase(metaclass=ABCMeta):
     plugin_desc: str = ""
 
     def __init__(self):
-        # 数据库连接
-        self.db = SessionFactory()
         # 插件数据
-        self.plugindata = PluginDataOper(self.db)
+        self.plugindata = PluginDataOper()
         # 处理链
-        self.chain = PluginChian(self.db)
+        self.chain = PluginChian()
         # 系统配置
         self.systemconfig = SystemConfigOper()
         # 系统消息
@@ -144,7 +140,7 @@ class _PluginBase(metaclass=ABCMeta):
             data_path.mkdir(parents=True)
         return data_path
 
-    def save_data(self, key: str, value: Any, plugin_id: str = None) -> Base:
+    def save_data(self, key: str, value: Any, plugin_id: str = None):
         """
         保存插件数据
         :param key: 数据key
@@ -153,7 +149,7 @@ class _PluginBase(metaclass=ABCMeta):
         """
         if not plugin_id:
             plugin_id = self.__class__.__name__
-        return self.plugindata.save(plugin_id, key, value)
+        self.plugindata.save(plugin_id, key, value)
 
     def get_data(self, key: str, plugin_id: str = None) -> Any:
         """
@@ -186,8 +182,4 @@ class _PluginBase(metaclass=ABCMeta):
         ))
 
     def close(self):
-        """
-        关闭数据库连接
-        """
-        if self.db:
-            self.db.close()
+        pass
