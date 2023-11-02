@@ -14,6 +14,7 @@ from app.core.security import verify_token
 from app.db.systemconfig_oper import SystemConfigOper
 from app.helper.message import MessageHelper
 from app.helper.progress import ProgressHelper
+from app.helper.sites import SitesHelper
 from app.scheduler import Scheduler
 from app.schemas.types import SystemConfigKey
 from app.utils.http import RequestUtils
@@ -32,7 +33,9 @@ def get_env_setting(_: schemas.TokenPayload = Depends(verify_token)):
         exclude={"SECRET_KEY", "SUPERUSER_PASSWORD", "API_TOKEN"}
     )
     info.update({
-        "VERSION": APP_VERSION
+        "VERSION": APP_VERSION,
+        "AUTH_VERSION": SitesHelper().auth_version,
+        "INDEXER_VERSION": SitesHelper().indexer_version,
     })
     return schemas.Response(success=True,
                             data=info)
@@ -219,8 +222,5 @@ def execute_command(jobid: str,
     """
     if not jobid:
         return schemas.Response(success=False, message="命令不能为空！")
-    if jobid == "subscribe_search":
-        Scheduler().start(jobid, state='R')
-    else:
-        Scheduler().start(jobid)
+    Scheduler().start(jobid)
     return schemas.Response(success=True)

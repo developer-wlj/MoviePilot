@@ -13,6 +13,7 @@ from app.log import logger
 from app.modules import _ModuleBase
 from app.schemas import TransferInfo, ExistMediaInfo, TmdbEpisode
 from app.schemas.types import MediaType
+from app.utils.string import StringUtils
 from app.utils.system import SystemUtils
 
 lock = Lock()
@@ -53,6 +54,8 @@ class FileTransferModule(_ModuleBase):
             return TransferInfo(success=False,
                                 path=path,
                                 message="未找到媒体库目录")
+        else:
+            logger.info(f"获取转移目标路径：{target}")
         # 转移
         return self.transfer_media(in_path=path,
                                    in_meta=meta,
@@ -468,9 +471,25 @@ class FileTransferModule(_ModuleBase):
             # 判断是否要覆盖
             overflag = False
             if new_file.exists():
-                if new_file.stat().st_size < in_path.stat().st_size:
-                    logger.info(f"目标文件已存在，但文件大小更小，将覆盖：{new_file}")
-                    overflag = True
+                # 目标文件已存在
+                logger.info(f"目标文件已存在，转移覆盖模式：{settings.OVERWRITE_MODE}")
+                match settings.OVERWRITE_MODE:
+                    case 'always':
+                        overflag = True
+                    case 'size':
+                        if new_file.stat().st_size < in_path.stat().st_size:
+                            logger.info(f"目标文件文件大小更小，将被覆盖：{new_file}")
+                            overflag = True
+                    case 'never':
+                        pass
+                    case _:
+                        pass
+                if not overflag:
+                    return TransferInfo(success=False,
+                                        message=f"目标文件已存在，转移覆盖模式：{settings.OVERWRITE_MODE}",
+                                        path=in_path,
+                                        target_path=new_file,
+                                        fail_list=[str(in_path)])
             # 原文件大小
             file_size = in_path.stat().st_size
             # 转移文件
@@ -613,7 +632,8 @@ class FileTransferModule(_ModuleBase):
         if in_path:
             for path in dest_paths:
                 try:
-                    relative = in_path.relative_to(path).as_posix()
+                    # 计算in_path和path的公共字符串长度
+                    relative = StringUtils.find_common_prefix(str(in_path), str(path))
                     if len(relative) > max_length:
                         max_length = len(relative)
                         target_path = path

@@ -120,6 +120,11 @@ class ChainBase(metaclass=ABCMeta):
         :param tmdbid:   tmdbid
         :return: 识别的媒体信息，包括剧集信息
         """
+        if not tmdbid and hasattr(meta, "tmdbid"):
+            # 识别用名中含指定信息情形
+            tmdbid = meta.tmdbid
+            if not mtype and meta.type in [MediaType.TV, MediaType.MOVIE]:
+                mtype = meta.type
         return self.run_module("recognize_media", meta=meta, mtype=mtype, tmdbid=tmdbid)
 
     def match_doubaninfo(self, name: str, imdbid: str = None,
@@ -356,15 +361,6 @@ class ChainBase(metaclass=ABCMeta):
         :return: 如不存在返回None，存在时返回信息，包括每季已存在所有集{type: movie/tv, seasons: {season: [episodes]}}
         """
         return self.run_module("media_exists", mediainfo=mediainfo, itemid=itemid)
-
-    def refresh_mediaserver(self, mediainfo: MediaInfo, file_path: Path) -> None:
-        """
-        刷新媒体库
-        :param mediainfo:  识别的媒体信息
-        :param file_path:  文件路径
-        :return: 成功或失败
-        """
-        self.run_module("refresh_mediaserver", mediainfo=mediainfo, file_path=file_path)
 
     def post_message(self, message: Notification) -> None:
         """

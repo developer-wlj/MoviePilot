@@ -212,7 +212,7 @@ class Jellyfin(metaclass=Singleton):
             return None
         req_url = ("%sUsers/%s/Items?"
                    "api_key=%s&searchTerm=%s&IncludeItemTypes=Series&Limit=10&Recursive=true") % (
-            self._host, self.user, self._apikey, name)
+                      self._host, self.user, self._apikey, name)
         try:
             res = RequestUtils().get_res(req_url)
             if res:
@@ -242,7 +242,7 @@ class Jellyfin(metaclass=Singleton):
             return None
         req_url = ("%sUsers/%s/Items?"
                    "api_key=%s&searchTerm=%s&IncludeItemTypes=Movie&Limit=10&Recursive=true") % (
-            self._host, self.user, self._apikey, title)
+                      self._host, self.user, self._apikey, title)
         try:
             res = RequestUtils().get_res(req_url)
             if res:
@@ -466,7 +466,10 @@ class Jellyfin(metaclass=Singleton):
         eventItem.device_name = message.get('DeviceName')
         eventItem.user_name = message.get('NotificationUsername')
         eventItem.client = message.get('ClientName')
-        if message.get("ItemType") == "Episode":
+        eventItem.media_type = message.get('ItemType')
+        if message.get("ItemType") == "Episode" \
+                or message.get("ItemType") == "Series" \
+                or message.get("ItemType") == "Season":
             # 剧集
             eventItem.item_type = "TV"
             eventItem.season_id = message.get('SeasonNumber')

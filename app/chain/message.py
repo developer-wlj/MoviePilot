@@ -87,13 +87,15 @@ class MessageChain(ChainBase):
                 # 发送消息
                 self.post_message(Notification(channel=channel, title="输入有误！", userid=userid))
                 return
+            # 选择的序号
+            _choice = int(text) + _current_page * self._page_size - 1
             # 缓存类型
             cache_type: str = cache_data.get('type')
             # 缓存列表
-            cache_list: list = cache_data.get('items')
+            cache_list: list = copy.deepcopy(cache_data.get('items'))
             # 选择
             if cache_type == "Search":
-                mediainfo: MediaInfo = cache_list[int(text) + _current_page * self._page_size - 1]
+                mediainfo: MediaInfo = cache_list[_choice]
                 _current_media = mediainfo
                 # 查询缺失的媒体信息
                 exist_flag, no_exists = self.downloadchain.get_no_exists_info(meta=_current_meta,
@@ -158,7 +160,7 @@ class MessageChain(ChainBase):
 
             elif cache_type == "Subscribe":
                 # 订阅媒体
-                mediainfo: MediaInfo = cache_list[int(text) - 1]
+                mediainfo: MediaInfo = cache_list[_choice]
                 # 查询缺失的媒体信息
                 exist_flag, _ = self.downloadchain.get_no_exists_info(meta=_current_meta,
                                                                       mediainfo=mediainfo)
@@ -187,9 +189,9 @@ class MessageChain(ChainBase):
                                          username=username)
                 else:
                     # 下载种子
-                    context: Context = cache_list[int(text) - 1]
+                    context: Context = cache_list[_choice]
                     # 下载
-                    self.downloadchain.download_single(context, userid=userid, channel=channel)
+                    self.downloadchain.download_single(context, userid=userid, channel=channel, username=username)
 
         elif text.lower() == "p":
             # 上一页
@@ -217,11 +219,6 @@ class MessageChain(ChainBase):
                 start = _current_page * self._page_size
                 end = start + self._page_size
             if cache_type == "Torrent":
-                # 更新缓存
-                user_cache[userid] = {
-                    "type": "Torrent",
-                    "items": cache_list[start:end]
-                }
                 # 发送种子数据
                 self.__post_torrents_message(channel=channel,
                                              title=_current_media.title,
@@ -260,11 +257,6 @@ class MessageChain(ChainBase):
                 # 加一页
                 _current_page += 1
                 if cache_type == "Torrent":
-                    # 更新缓存
-                    user_cache[userid] = {
-                        "type": "Torrent",
-                        "items": cache_list
-                    }
                     # 发送种子数据
                     self.__post_torrents_message(channel=channel,
                                                  title=_current_media.title,
@@ -353,7 +345,8 @@ class MessageChain(ChainBase):
         downloads, lefts = self.downloadchain.batch_download(contexts=cache_list,
                                                              no_exists=no_exists,
                                                              channel=channel,
-                                                             userid=userid)
+                                                             userid=userid,
+                                                             username=username)
         if downloads and not lefts:
             # 全部下载完成
             logger.info(f'{_current_media.title_year} 下载完成')

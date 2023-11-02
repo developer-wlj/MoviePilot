@@ -39,14 +39,23 @@ MoviePilot需要配套下载器和媒体服务器配合使用。
   docker pull jxxghp/moviepilot:latest
   ```
 
+
 - Windows
 
   下载 [MoviePilot.exe](https://github.com/jxxghp/MoviePilot/releases)，双击运行后自动生成配置文件目录。
 
+
+- 本地运行
+
+  1) 将工程 [MoviePilot-Plugins](https://github.com/jxxghp/MoviePilot-Plugins) plugins目录下的所有文件复制到`app/plugins`目录
+  2) 将工程 [MoviePilot-Resources](https://github.com/jxxghp/MoviePilot-Resources) resources目录下的`user.sites.bin`文件复制到`config/sites`目录，将其余文件复制到`app/helper`目录
+  3) 执行命令：`pip install -r requirements.txt` 安装依赖
+  4) 执行命令：`python app/main.py` 启动服务
+
 ## 配置
 
 项目的所有配置均通过环境变量进行设置，支持两种配置方式：
-- 在Docker环境变量部分或Wdinows系统环境变量中进行参数配置，如未自动显示配置项则需要手动增加对应环境变量。
+- 在Docker环境变量部分或Windows系统环境变量中进行参数配置，如未自动显示配置项则需要手动增加对应环境变量。
 - 下载 [app.env](https://github.com/jxxghp/MoviePilot/raw/main/config/app.env) 配置文件，修改好配置后放置到配置文件映射路径根目录，配置项可根据说明自主增减。
 
 配置文件映射路径：`/config`，配置项生效优先级：环境变量 > env文件 > 默认值，**部分参数如路径映射、站点认证、权限端口、时区等必须通过环境变量进行配置**。
@@ -69,12 +78,14 @@ MoviePilot需要配套下载器和媒体服务器配合使用。
 - **❗API_TOKEN：** API密钥，默认`moviepilot`，在媒体服务器Webhook、微信回调等地址配置中需要加上`?token=`该值，建议修改为复杂字符串
 - **TMDB_API_DOMAIN：** TMDB API地址，默认`api.themoviedb.org`，也可配置为`api.tmdb.org`或其它中转代理服务地址，能连通即可
 - **TMDB_IMAGE_DOMAIN：** TMDB图片地址，默认`image.tmdb.org`，可配置为其它中转代理以加速TMDB图片显示，如：`static-mdb.v.geilijiasu.com`
+- **WALLPAPER：** 登录首页电影海报，`tmdb`/`bing`，默认`tmdb`
 ---
 - **SCRAP_METADATA：** 刮削入库的媒体文件，`true`/`false`，默认`true`
 - **SCRAP_SOURCE：** 刮削元数据及图片使用的数据源，`themoviedb`/`douban`，默认`themoviedb`
 - **SCRAP_FOLLOW_TMDB：** 新增已入库媒体是否跟随TMDB信息变化，`true`/`false`，默认`true`
 ---
 - **❗TRANSFER_TYPE：** 整理转移方式，支持`link`/`copy`/`move`/`softlink`/`rclone_copy`/`rclone_move`  **注意：在`link`和`softlink`转移方式下，转移后的文件会继承源文件的权限掩码，不受`UMASK`影响；rclone需要自行映射rclone配置目录到容器中或在容器内完成rclone配置，节点名称必须为：`MP`**
+- **❗OVERWRITE_MODE：** 转移覆盖模式，默认为`size`，支持`nerver`/`size`/`always`，分别表示`不覆盖`/`根据文件大小覆盖（大覆盖小）`/`总是覆盖`
 - **❗LIBRARY_PATH：** 媒体库目录，多个目录使用`,`分隔
 - **LIBRARY_MOVIE_NAME：** 电影媒体库目录名称（不是完整路径），默认`电影`
 - **LIBRARY_TV_NAME：** 电视剧媒体库目录称（不是完整路径），默认`电视剧`
@@ -86,14 +97,16 @@ MoviePilot需要配套下载器和媒体服务器配合使用。
 - **❗COOKIECLOUD_PASSWORD：** CookieCloud端对端加密密码
 - **❗COOKIECLOUD_INTERVAL：** CookieCloud同步间隔（分钟）
 - **❗USER_AGENT：** CookieCloud保存Cookie对应的浏览器UA，建议配置，设置后可增加连接站点的成功率，同步站点后可以在管理界面中修改
-- **OCR_HOST：** OCR识别服务器地址，格式：`http(s)://ip:port`，用于识别站点验证码实现自动登录获取Cookie等，不配置默认使用内建服务器`https://movie-pilot.org`，可使用 [这个镜像](https://hub.docker.com/r/jxxghp/moviepilot-ocr) 自行搭建。
 ---
 - **SUBSCRIBE_MODE：** 订阅模式，`rss`/`spider`，默认`spider`，`rss`模式通过定时刷新RSS来匹配订阅（RSS地址会自动获取，也可手动维护），对站点压力小，同时可设置订阅刷新周期，24小时运行，但订阅和下载通知不能过滤和显示免费，推荐使用rss模式。
 - **SUBSCRIBE_RSS_INTERVAL：** RSS订阅模式刷新时间间隔（分钟），默认`30`分钟，不能小于5分钟。
 - **SUBSCRIBE_SEARCH：** 订阅搜索，`true`/`false`，默认`false`，开启后会每隔24小时对所有订阅进行全量搜索，以补齐缺失剧集（一般情况下正常订阅即可，订阅搜索只做为兜底，会增加站点压力，不建议开启）。
 - **SEARCH_SOURCE：** 媒体信息搜索来源，`themoviedb`/`douban`，默认`themoviedb`
----
 - **AUTO_DOWNLOAD_USER：** 远程交互搜索时自动择优下载的用户ID，多个用户使用,分割，未设置需要选择资源或者回复`0`
+---
+- **OCR_HOST：** OCR识别服务器地址，格式：`http(s)://ip:port`，用于识别站点验证码实现自动登录获取Cookie等，不配置默认使用内建服务器`https://movie-pilot.org`，可使用 [这个镜像](https://hub.docker.com/r/jxxghp/moviepilot-ocr) 自行搭建。
+- **PLUGIN_MARKET：** 插件市场仓库地址，多个地址使用`,`分隔，保留最后的/，默认为官方插件仓库：`https://raw.githubusercontent.com/jxxghp/MoviePilot-Plugins/main/`。
+---
 - **❗MESSAGER：** 消息通知渠道，支持 `telegram`/`wechat`/`slack`/`synologychat`，开启多个渠道时使用`,`分隔。同时还需要配置对应渠道的环境变量，非对应渠道的变量可删除，推荐使用`telegram`
 
   - `wechat`设置项：
@@ -141,6 +154,8 @@ MoviePilot需要配套下载器和媒体服务器配合使用。
     - **QB_USER：** qbittorrent用户名
     - **QB_PASSWORD：** qbittorrent密码
     - **QB_CATEGORY：** qbittorrent分类自动管理，`true`/`false`，默认`false`，开启后会将下载二级分类传递到下载器，由下载器管理下载目录，需要同步开启`DOWNLOAD_CATEGORY`
+    - **QB_SEQUENTIAL：** qbittorrent按顺序下载，`true`/`false`，默认`true`
+    - **QB_FORCE_RESUME：** qbittorrent忽略队列限制，强制继续，`true`/`false`，默认 `false`
 
   - `transmission`设置项：
 
@@ -149,7 +164,6 @@ MoviePilot需要配套下载器和媒体服务器配合使用。
     - **TR_PASSWORD：** transmission密码
 
 ---
-- **REFRESH_MEDIASERVER：** 入库后是否刷新媒体服务器，`true`/`false`，默认`true`
 - **❗MEDIASERVER：** 媒体服务器，支持`emby`/`jellyfin`/`plex`，同时开启多个使用`,`分隔。还需要配置对应媒体服务器的环境变量，非对应媒体服务器的变量可删除，推荐使用`emby`
 
   - `emby`设置项：
@@ -175,7 +189,9 @@ MoviePilot需要配套下载器和媒体服务器配合使用。
 
 `MoviePilot`需要认证后才能使用，配置`AUTH_SITE`后，需要根据下表配置对应站点的认证参数（**仅能通过环境变量配置**）
 
-- **❗AUTH_SITE：** 认证站点，支持`iyuu`/`hhclub`/`audiences`/`hddolby`/`zmpt`/`freefarm`/`hdfans`/`wintersakura`/`leaves`/`1ptba`/`icc2022`/`ptlsp`/`xingtan`
+`AUTH_SITE`支持配置多个认证站点，使用`,`分隔，如：`iyuu,hhclub`，会依次执行认证操作，直到有一个站点认证成功。
+
+- **❗AUTH_SITE：** 认证站点，认证资源`v1.0.1`支持`iyuu`/`hhclub`/`audiences`/`hddolby`/`zmpt`/`freefarm`/`hdfans`/`wintersakura`/`leaves`/`1ptba`/`icc2022`/`ptlsp`/`xingtan`/`ptvicomo`
 
 |      站点      |                          参数                           |
 |:------------:|:-----------------------------------------------------:|
@@ -192,6 +208,7 @@ MoviePilot需要配套下载器和媒体服务器配合使用。
 |   icc2022    |      `ICC2022_UID`：用户ID<br/>`ICC2022_PASSKEY`：密钥      |
 |    ptlsp     |        `PTLSP_UID`：用户ID<br/>`PTLSP_PASSKEY`：密钥        |
 |   xingtan    |      `XINGTAN_UID`：用户ID<br/>`XINGTAN_PASSKEY`：密钥      |
+|   ptvicomo   |     `PTVICOMO_UID`：用户ID<br/>`PTVICOMO_PASSKEY`：密钥     |
 
 
 ### 2. **进阶配置**
@@ -219,6 +236,9 @@ MoviePilot需要配套下载器和媒体服务器配合使用。
 > `imdbid`： IMDBID  
 > `part`：段/节  
 > `fileExt`：文件扩展名
+> `tmdbid`：TMDB ID
+> `imdbid`：IMDB ID
+> `customization`：自定义占位符
 
 `MOVIE_RENAME_FORMAT`默认配置格式：
 

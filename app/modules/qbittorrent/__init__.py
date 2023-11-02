@@ -101,9 +101,15 @@ class QbittorrentModule(_ModuleBase):
                         # 选择文件
                         self.qbittorrent.set_files(torrent_hash=torrent_hash, file_ids=file_ids, priority=0)
                     # 开始任务
-                    self.qbittorrent.start_torrents(torrent_hash)
+                    if settings.QB_FORCE_RESUME:
+                        # 强制继续
+                        self.qbittorrent.torrents_set_force_start(torrent_hash)
+                    else:
+                        self.qbittorrent.start_torrents(torrent_hash)
                     return torrent_hash, f"添加下载成功，已选择集数：{sucess_epidised}"
                 else:
+                    if settings.QB_FORCE_RESUME:
+                        self.qbittorrent.torrents_set_force_start(torrent_hash)
                     return torrent_hash, "添加下载成功"
 
     def list_torrents(self, status: TorrentStatus = None,
@@ -165,6 +171,9 @@ class QbittorrentModule(_ModuleBase):
                     state="paused" if torrent.get('state') == "paused" else "downloading",
                     dlspeed=StringUtils.str_filesize(torrent.get('dlspeed')),
                     upspeed=StringUtils.str_filesize(torrent.get('upspeed')),
+                    left_time=StringUtils.str_secends(
+                        (torrent.get('total_size') - torrent.get('completed')) / torrent.get('dlspeed')) if torrent.get(
+                        'dlspeed') > 0 else ''
                 ))
         else:
             return None

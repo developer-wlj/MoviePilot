@@ -39,6 +39,8 @@ class Settings(BaseSettings):
     SUPERUSER_PASSWORD: str = "password"
     # API密钥，需要更换
     API_TOKEN: str = "moviepilot"
+    # 登录页面电影海报,tmdb/bing
+    WALLPAPER: str = "tmdb"
     # 网络代理 IP:PORT
     PROXY_HOST: str = None
     # 媒体信息搜索来源
@@ -127,6 +129,10 @@ class Settings(BaseSettings):
     QB_PASSWORD: str = None
     # Qbittorrent分类自动管理
     QB_CATEGORY: bool = False
+    # Qbittorrent按顺序下载
+    QB_SEQUENTIAL: bool = True
+    # Qbittorrent忽略队列限制，强制继续
+    QB_FORCE_RESUME: bool = False
     # Transmission地址，IP:PORT
     TR_HOST: str = None
     # Transmission用户名
@@ -149,8 +155,6 @@ class Settings(BaseSettings):
     DOWNLOAD_SUBTITLE: bool = True
     # 媒体服务器 emby/jellyfin/plex，多个媒体服务器,分割
     MEDIASERVER: str = "emby"
-    # 入库刷新媒体库
-    REFRESH_MEDIASERVER: bool = True
     # 媒体服务器同步间隔（小时）
     MEDIASERVER_SYNC_INTERVAL: int = 6
     # 媒体服务器同步黑名单，多个媒体库名称,分割
@@ -202,8 +206,12 @@ class Settings(BaseSettings):
                             "/Season {{season}}" \
                             "/{{title}} - {{season_episode}}{% if part %}-{{part}}{% endif %}{% if episode %} - 第 {{episode}} 集{% endif %}" \
                             "{{fileExt}}"
+    # 转移时覆盖模式
+    OVERWRITE_MODE: str = "size"
     # 大内存模式
     BIG_MEMORY_MODE: bool = False
+    # 插件市场仓库地址，多个地址使用,分隔，地址以/结尾
+    PLUGIN_MARKET: str = "https://raw.githubusercontent.com/jxxghp/MoviePilot-Plugins/main/"
 
     @property
     def INNER_CONFIG_PATH(self):
