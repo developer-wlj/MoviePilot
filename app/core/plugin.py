@@ -192,7 +192,7 @@ class PluginManager(metaclass=Singleton):
         """
         return list(self._plugins.keys())
 
-    def get_online_plugins(self) -> List[Dict[str, dict]]:
+    def get_online_plugins(self) -> List[dict]:
         """
         获取所有在线插件信息
         """
@@ -216,7 +216,7 @@ class PluginManager(metaclass=Singleton):
                 # ID
                 conf.update({"id": pid})
                 # 安装状态
-                if pid in installed_apps:
+                if pid in installed_apps and plugin_static:
                     conf.update({"installed": True})
                 else:
                     conf.update({"installed": False})
@@ -229,7 +229,12 @@ class PluginManager(metaclass=Singleton):
                         conf.update({"has_update": True})
                 # 运行状态
                 if plugin_obj and hasattr(plugin_obj, "get_state"):
-                    conf.update({"state": plugin_obj.get_state()})
+                    try:
+                        state = plugin_obj.get_state()
+                    except Exception as e:
+                        logger.error(f"获取插件 {pid} 状态出错：{str(e)}")
+                        state = False
+                    conf.update({"state": state})
                 else:
                     conf.update({"state": False})
                 # 是否有详情页面
@@ -266,9 +271,12 @@ class PluginManager(metaclass=Singleton):
                 conf.update({"is_local": False})
                 # 汇总
                 all_confs.append(conf)
+        # 按插件ID去重
+        if all_confs:
+            all_confs = list({v["id"]: v for v in all_confs}.values())
         return all_confs
 
-    def get_local_plugins(self) -> List[Dict[str, dict]]:
+    def get_local_plugins(self) -> List[dict]:
         """
         获取所有本地已下载的插件信息
         """
@@ -290,7 +298,12 @@ class PluginManager(metaclass=Singleton):
                 conf.update({"installed": False})
             # 运行状态
             if plugin_obj and hasattr(plugin_obj, "get_state"):
-                conf.update({"state": plugin_obj.get_state()})
+                try:
+                    state = plugin_obj.get_state()
+                except Exception as e:
+                    logger.error(f"获取插件 {pid} 状态出错：{str(e)}")
+                    state = False
+                conf.update({"state": state})
             else:
                 conf.update({"state": False})
             # 是否有详情页面

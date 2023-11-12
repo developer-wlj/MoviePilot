@@ -4,11 +4,11 @@ import logging
 import os
 import time
 from datetime import datetime
+from functools import lru_cache
 
 import requests
 import requests.exceptions
 
-from app.utils.common import lru_cache_without_none
 from app.utils.http import RequestUtils
 from .exceptions import TMDbException
 
@@ -137,7 +137,7 @@ class TMDb(object):
     def cache(self, cache):
         os.environ[self.TMDB_CACHE_ENABLED] = str(cache)
 
-    @lru_cache_without_none(maxsize=REQUEST_CACHE_MAXSIZE)
+    @lru_cache(maxsize=REQUEST_CACHE_MAXSIZE)
     def cached_request(self, method, url, data, json,
                        _ts=datetime.strftime(datetime.now(), '%Y%m%d')):
         """
@@ -147,9 +147,12 @@ class TMDb(object):
 
     def request(self, method, url, data, json):
         if method == "GET":
-            return self._req.get_res(url, params=data, json=json)
+            req = self._req.get_res(url, params=data, json=json)
         else:
-            return self._req.post_res(url, data=data, json=json)
+            req = self._req.post_res(url, data=data, json=json)
+        if req is None:
+            raise TMDbException("无法连接TheMovieDb，请检查网络连接！")
+        return req
 
     def cache_clear(self):
         return self.cached_request.cache_clear()
@@ -157,7 +160,7 @@ class TMDb(object):
     def _request_obj(self, action, params="", call_cached=True,
                      method="GET", data=None, json=None, key=None):
         if self.api_key is None or self.api_key == "":
-            raise TMDbException("No API key found.")
+            raise TMDbException("TheMovieDb API Key 未设置！")
 
         url = "https://%s/3%s?api_key=%s&%s&language=%s" % (
             self.domain,
@@ -173,7 +176,7 @@ class TMDb(object):
             req = self.request(method, url, data, json)
 
         if req is None:
-            raise TMDbException("Failed to establish a new connection: no response from the server.")
+            return None
 
         headers = req.headers
 
@@ -188,11 +191,11 @@ class TMDb(object):
             sleep_time = self._reset - current_time
 
             if self.wait_on_rate_limit:
-                logger.warning("Rate limit reached. Sleeping for: %d" % sleep_time)
+                logger.warning("达到请求频率限制，休眠：%d 秒..." % sleep_time)
                 time.sleep(abs(sleep_time))
                 return self._request_obj(action, params, call_cached, method, data, json, key)
             else:
-                raise TMDbException("Rate limit reached. Try again in %d seconds." % sleep_time)
+                raise TMDbException("达到请求频率限制，将在 %d 秒后重试..." % sleep_time)
 
         json = req.json()
 

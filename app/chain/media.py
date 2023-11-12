@@ -14,7 +14,6 @@ from app.schemas.types import EventType, MediaType
 from app.utils.singleton import Singleton
 from app.utils.string import StringUtils
 
-
 recognize_lock = Lock()
 
 
@@ -27,13 +26,11 @@ class MediaChain(ChainBase, metaclass=Singleton):
     # 临时识别结果 {title, name, year, season, episode}
     recognize_temp: Optional[dict] = None
 
-    def recognize_by_title(self, title: str, subtitle: str = None) -> Optional[Context]:
+    def recognize_by_meta(self, metainfo: MetaBase) -> Optional[MediaInfo]:
         """
         根据主副标题识别媒体信息
         """
-        logger.info(f'开始识别媒体信息，标题：{title}，副标题：{subtitle} ...')
-        # 识别元数据
-        metainfo = MetaInfo(title, subtitle)
+        title = metainfo.title
         # 识别媒体信息
         mediainfo: MediaInfo = self.recognize_media(meta=metainfo)
         if not mediainfo:
@@ -43,13 +40,13 @@ class MediaChain(ChainBase, metaclass=Singleton):
                 mediainfo = self.recognize_help(title=title, org_meta=metainfo)
             if not mediainfo:
                 logger.warn(f'{title} 未识别到媒体信息')
-                return Context(meta_info=metainfo)
+                return None
         # 识别成功
         logger.info(f'{title} 识别到媒体信息：{mediainfo.type.value} {mediainfo.title_year}')
         # 更新媒体图片
         self.obtain_images(mediainfo=mediainfo)
         # 返回上下文
-        return Context(meta_info=metainfo, media_info=mediainfo)
+        return mediainfo
 
     def recognize_help(self, title: str, org_meta: MetaBase) -> Optional[MediaInfo]:
         """
@@ -69,7 +66,7 @@ class MediaChain(ChainBase, metaclass=Singleton):
             }
         )
         # 每0.5秒循环一次，等待结果，直到10秒后超时
-        for i in range(10):
+        for i in range(20):
             if self.recognize_temp is not None:
                 break
             time.sleep(0.5)
@@ -170,8 +167,7 @@ class MediaChain(ChainBase, metaclass=Singleton):
         # 识别
         meta = MetaInfo(content)
         if not meta.name:
-            logger.warn(f'{title} 未识别到元数据！')
-            return meta, []
+            meta.cn_name = content
         # 合并信息
         if mtype:
             meta.type = mtype
@@ -190,3 +186,78 @@ class MediaChain(ChainBase, metaclass=Singleton):
         logger.info(f"{content} 搜索到 {len(medias)} 条相关媒体信息")
         # 识别的元数据，媒体信息列表
         return meta, medias
+
+    def get_tmdbinfo_by_doubanid(self, doubanid: str, mtype: MediaType = None) -> Optional[dict]:
+        """
+        根据豆瓣ID获取TMDB信息
+        """
+        tmdbinfo = None
+        doubaninfo = self.douban_info(doubanid=doubanid, mtype=mtype)
+        if doubaninfo:
+            # 优先使用原标题匹配
+            season_meta = None
+            if doubaninfo.get("original_title"):
+                meta = MetaInfo(title=doubaninfo.get("original_title"))
+                season_meta = MetaInfo(title=doubaninfo.get("title"))
+                # 合并季
+                meta.begin_season = season_meta.begin_season
+            else:
+                meta = MetaInfo(title=doubaninfo.get("title"))
+            # 年份
+            if doubaninfo.get("year"):
+                meta.year = doubaninfo.get("year")
+            # 处理类型
+            if isinstance(doubaninfo.get('media_type'), MediaType):
+                meta.type = doubaninfo.get('media_type')
+            else:
+                meta.type = MediaType.MOVIE if doubaninfo.get("type") == "movie" else MediaType.TV
+            # 使用原标题识别TMDB媒体信息
+            tmdbinfo = self.match_tmdbinfo(
+                name=meta.name,
+                year=meta.year,
+                mtype=mtype or meta.type,
+                season=meta.begin_season
+            )
+            if not tmdbinfo:
+                if season_meta and season_meta.name != meta.name:
+                    # 使用主标题识别媒体信息
+                    tmdbinfo = self.match_tmdbinfo(
+                        name=season_meta.name,
+                        year=meta.year,
+                        mtype=mtype or meta.type,
+                        season=meta.begin_season
+                    )
+        return tmdbinfo
+
+    def get_doubaninfo_by_tmdbid(self, tmdbid: int,
+                                 mtype: MediaType = None, season: int = None) -> Optional[dict]:
+        """
+        根据TMDBID获取豆瓣信息
+        """
+        tmdbinfo = self.tmdb_info(tmdbid=tmdbid, mtype=mtype)
+        if tmdbinfo:
+            # 名称
+            name = tmdbinfo.get("title") or tmdbinfo.get("name")
+            # 年份
+            year = None
+            if tmdbinfo.get('release_date'):
+                year = tmdbinfo['release_date'][:4]
+            elif tmdbinfo.get('seasons') and season:
+                for seainfo in tmdbinfo['seasons']:
+                    # 季
+                    season_number = seainfo.get("season_number")
+                    if not season_number:
+                        continue
+                    air_date = seainfo.get("air_date")
+                    if air_date and season_number == season:
+                        year = air_date[:4]
+                        break
+            # IMDBID
+            imdbid = tmdbinfo.get("external_ids", {}).get("imdb_id")
+            return self.match_doubaninfo(
+                name=name,
+                year=year,
+                mtype=mtype,
+                imdbid=imdbid
+            )
+        return None

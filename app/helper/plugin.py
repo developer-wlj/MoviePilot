@@ -16,7 +16,7 @@ class PluginHelper(metaclass=Singleton):
     插件市场管理，下载安装插件到本地
     """
 
-    @cached(cache=TTLCache(maxsize=1, ttl=1800))
+    @cached(cache=TTLCache(maxsize=10, ttl=1800))
     def get_plugins(self, repo_url: str) -> Dict[str, dict]:
         """
         获取Github所有最新插件列表
@@ -120,4 +120,8 @@ class PluginHelper(metaclass=Singleton):
             shutil.rmtree(plugin_dir, ignore_errors=True)
         # 下载所有文件
         __download_files(pid.lower(), file_list)
+        # 插件目录下如有requirements.txt则安装依赖
+        requirements_file = plugin_dir / "requirements.txt"
+        if requirements_file.exists():
+            SystemUtils.execute(f"pip install -r {requirements_file}")
         return True, ""

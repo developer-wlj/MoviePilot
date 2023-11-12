@@ -52,6 +52,44 @@ def verify_token(token: str = Depends(reusable_oauth2)) -> schemas.TokenPayload:
         )
 
 
+def get_token(token: str = None) -> str:
+    """
+    从请求URL中获取token
+    """
+    return token
+
+
+def get_apikey(apikey: str = None) -> str:
+    """
+    从请求URL中获取apikey
+    """
+    return apikey
+
+
+def verify_uri_token(token: str = Depends(get_token)) -> str:
+    """
+    通过依赖项使用token进行身份认证
+    """
+    if token != settings.API_TOKEN:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="token校验不通过"
+        )
+    return token
+
+
+def verify_uri_apikey(apikey: str = Depends(get_apikey)) -> str:
+    """
+    通过依赖项使用apikey进行身份认证
+    """
+    if apikey != settings.API_TOKEN:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="apikey校验不通过"
+        )
+    return apikey
+
+
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     return pwd_context.verify(plain_password, hashed_password)
 
