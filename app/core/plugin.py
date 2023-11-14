@@ -12,6 +12,7 @@ from app.schemas.types import SystemConfigKey
 from app.utils.object import ObjectUtils
 from app.utils.singleton import Singleton
 from app.utils.string import StringUtils
+from app.utils.system import SystemUtils
 
 
 class PluginManager(metaclass=Singleton):
@@ -30,11 +31,11 @@ class PluginManager(metaclass=Singleton):
     def __init__(self):
         self.siteshelper = SitesHelper()
         self.pluginhelper = PluginHelper()
+        self.systemconfig = SystemConfigOper()
+        self.install_online_plugin()
         self.init_config()
 
     def init_config(self):
-        # 配置管理
-        self.systemconfig = SystemConfigOper()
         # 停止已有插件
         self.stop()
         # 启动插件
@@ -44,7 +45,6 @@ class PluginManager(metaclass=Singleton):
         """
         启动加载插件
         """
-
         # 扫描插件目录
         plugins = ModuleHelper.load(
             "app.plugins",
@@ -101,6 +101,35 @@ class PluginManager(metaclass=Singleton):
         # 清空对像
         self._plugins = {}
         self._running_plugins = {}
+
+    def install_online_plugin(self):
+        """
+        安装本地不存在的在线插件
+        """
+        if SystemUtils.is_frozen():
+            return
+        logger.info("开始安装在线插件...")
+        # 已安装插件
+        install_plugins = self.systemconfig.get(SystemConfigKey.UserInstalledPlugins) or []
+        # 在线插件
+        online_plugins = self.get_online_plugins()
+        if not online_plugins:
+            logger.error("未获取到在线插件")
+            return
+        # 支持更新的插件自动更新
+        for plugin in online_plugins:
+            # 只处理已安装的插件
+            if plugin.get("id") in install_plugins and not self.is_plugin_exists(plugin.get("id")):
+                # 下载安装
+                state, msg = self.pluginhelper.install(pid=plugin.get("id"),
+                                                       repo_url=plugin.get("repo_url"))
+                # 安装失败
+                if not state:
+                    logger.error(
+                        f"插件 {plugin.get('plugin_name')} v{plugin.get('plugin_version')} 安装失败：{msg}")
+                    continue
+                logger.info(f"插件 {plugin.get('plugin_name')} 安装成功，版本：{plugin.get('plugin_version')}")
+        logger.info("在线插件安装完成")
 
     def get_plugin_config(self, pid: str) -> dict:
         """
@@ -345,3 +374,13 @@ class PluginManager(metaclass=Singleton):
             # 汇总
             all_confs.append(conf)
         return all_confs
+
+    @staticmethod
+    def is_plugin_exists(pid: str) -> bool:
+        """
+        判断插件是否存在
+        """
+        if not pid:
+            return False
+        plugin_dir = settings.ROOT_PATH / "app" / "plugins" / pid.lower()
+        return plugin_dir.exists()
