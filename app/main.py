@@ -2,7 +2,10 @@ import multiprocessing
 import os
 import sys
 import threading
-
+# 获取当前工作目录的路径
+current_path = os.getcwd()
+print(current_path)
+sys.path.append(current_path)
 import uvicorn as uvicorn
 from PIL import Image
 from fastapi import FastAPI
@@ -64,24 +67,17 @@ def start_frontend():
     """
     if not SystemUtils.is_frozen():
         return
-    # 临时Nginx目录
     nginx_path = settings.ROOT_PATH / 'nginx'
     if not nginx_path.exists():
         return
-    # 配置目录下的Nginx目录
-    run_nginx_dir = settings.CONFIG_PATH.with_name('nginx')
-    if not run_nginx_dir.exists():
-        # 移动到配置目录
-        SystemUtils.move(nginx_path, run_nginx_dir)
-    # 启动Nginx
     import subprocess
     if SystemUtils.is_windows():
         subprocess.Popen("start nginx.exe",
-                         cwd=run_nginx_dir,
+                         cwd=nginx_path,
                          shell=True)
     else:
         subprocess.Popen("nohup ./nginx &",
-                         cwd=run_nginx_dir,
+                         cwd=nginx_path,
                          shell=True)
 
 
@@ -158,8 +154,6 @@ def shutdown_server():
     Scheduler().stop()
     # 停止线程池
     ThreadHelper().shutdown()
-    # 停止前端服务
-    stop_frontend()
 
 
 @App.on_event("startup")
@@ -167,6 +161,52 @@ def start_module():
     """
     启动模块
     """
+    auth_site = settings.AUTH_SITE
+    if not auth_site:
+        pass
+    elif auth_site == 'iyuu':
+        os.environ['IYUU_SIGN'] = settings.IYUU_SIGN
+    elif auth_site == 'hhclub':
+        os.environ['HHCLUB_USERNAME'] = settings.HHCLUB_USERNAME
+        os.environ['HHCLUB_PASSKEY'] = settings.HHCLUB_PASSKEY
+    elif auth_site == 'audiences':
+        os.environ['AUDIENCES_UID'] = settings.AUDIENCES_UID
+        os.environ['AUDIENCES_PASSKEY'] = settings.AUDIENCES_PASSKEY
+    elif auth_site == 'hddolby':
+        os.environ['HDDOLBY_ID'] = settings.HDDOLBY_ID
+        os.environ['HDDOLBY_PASSKEY'] = settings.HDDOLBY_PASSKEY
+    elif auth_site == 'zmpt':
+        os.environ['ZMPT_UID'] = settings.ZMPT_UID
+        os.environ['ZMPT_PASSKEY'] = settings.ZMPT_PASSKEY
+    elif auth_site == 'freefarm':
+        os.environ['FREEFARM_UID'] = settings.FREEFARM_UID
+        os.environ['FREEFARM_PASSKEY'] = settings.FREEFARM_PASSKEY
+    elif auth_site == 'hdfans':
+        os.environ['HDFANS_UID'] = settings.HDFANS_UID
+        os.environ['HDFANS_PASSKEY'] = settings.HDFANS_PASSKEY
+    elif auth_site == 'wintersakura':
+        os.environ['WINTERSAKURA_UID'] = settings.WINTERSAKURA_UID
+        os.environ['WINTERSAKURA_PASSKEY'] = settings.WINTERSAKURA_PASSKEY
+    elif auth_site == 'leaves':
+        os.environ['LEAVES_UID'] = settings.LEAVES_UID
+        os.environ['LEAVES_PASSKEY'] = settings.LEAVES_PASSKEY
+    elif auth_site == '1ptba':
+        os.environ['1PTBA_UID'] = settings.ONEPTBA_UID
+        os.environ['1PTBA_PASSKEY'] = settings.ONEPTBA_PASSKEY
+    elif auth_site == 'icc2022':
+        os.environ['ICC2022_UID'] = settings.ICC2022_UID
+        os.environ['ICC2022_PASSKEY'] = settings.ICC2022_PASSKEY
+    elif auth_site == 'ptlsp':
+        os.environ['PTLSP_UID'] = settings.PTLSP_UID
+        os.environ['PTLSP_PASSKEY'] = settings.PTLSP_PASSKEY
+    elif auth_site == 'xingtan':
+        os.environ['XINGTAN_UID'] = settings.XINGTAN_UID
+        os.environ['XINGTAN_PASSKEY'] = settings.XINGTAN_PASSKEY
+    elif auth_site == 'agsvpt':
+        os.environ['AGSVPT_UID'] = settings.AGSVPT_UID
+        os.environ['AGSVPT_PASSKEY'] = settings.AGSVPT_PASSKEY
+    else:
+        pass
     # 虚拟显示
     DisplayHelper()
     # 站点管理
@@ -183,13 +223,9 @@ def start_module():
     Command()
     # 初始化路由
     init_routers()
-    # 启动前端服务
-    start_frontend()
 
 
 if __name__ == '__main__':
-    # 启动托盘
-    start_tray()
     # 初始化数据库
     init_db()
     # 更新数据库

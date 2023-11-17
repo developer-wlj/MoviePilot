@@ -414,14 +414,22 @@ class SystemUtils:
         """
         获取CPU使用率
         """
-        return psutil.cpu_percent()
+        return psutil.Process().cpu_percent(interval=1)
 
     @staticmethod
     def memory_usage() -> List[int]:
         """
         获取内存使用量和使用率
         """
-        return [psutil.virtual_memory().used, int(psutil.virtual_memory().percent)]
+        # 获取当前进程
+        process = psutil.Process()
+
+        # 获取进程占用的最大内存
+        memory = process.memory_info().rss
+
+        # 计算内存使用率
+        memory_percent = memory / psutil.virtual_memory().used * 100
+        return [memory, int(memory_percent)]
 
     @staticmethod
     def can_restart() -> bool:

@@ -1,3 +1,4 @@
+import os
 import secrets
 import sys
 from pathlib import Path
@@ -9,6 +10,8 @@ from app.utils.system import SystemUtils
 
 
 class Settings(BaseSettings):
+    # 启用远程插件仓库 用于在线更新插件 相应的启动MP的时间增加5-10秒左右
+    IS_ENABLED_REMOTE_REPO: bool = False
     # 项目名称
     PROJECT_NAME = "MoviePilot"
     # API路径
@@ -79,8 +82,49 @@ class Settings(BaseSettings):
     SUBSCRIBE_RSS_INTERVAL: int = 30
     # 订阅搜索开关
     SUBSCRIBE_SEARCH: bool = False
-    # 用户认证站点
+    # 用户认证站点 hhclub/audiences/hddolby/zmpt/freefarm/hdfans/wintersakura/leaves/1ptba/icc2022/iyuu/ptlsp/xingtan
     AUTH_SITE: str = ""
+    # iyuu
+    IYUU_SIGN: str = ""
+    # hhclub
+    HHCLUB_USERNAME: str = ""
+    HHCLUB_PASSKEY: str = ""
+    # audiences
+    AUDIENCES_UID: str = ""
+    AUDIENCES_PASSKEY: str = ""
+    # hddolby
+    HDDOLBY_ID: str = ""
+    HDDOLBY_PASSKEY: str = ""
+    # zmpt
+    ZMPT_UID: str = ""
+    ZMPT_PASSKEY: str = ""
+    # freefarm
+    FREEFARM_UID: str = ""
+    FREEFARM_PASSKEY: str = ""
+    # hdfans
+    HDFANS_UID: str = ""
+    HDFANS_PASSKEY: str = ""
+    # wintersakura
+    WINTERSAKURA_UID: str = ""
+    WINTERSAKURA_PASSKEY: str = ""
+    # leaves
+    LEAVES_UID: str = ""
+    LEAVES_PASSKEY: str = ""
+    # 1ptba
+    ONEPTBA_UID: str = ""
+    ONEPTBA_PASSKEY: str = ""
+    # icc2022
+    ICC2022_UID: str = ""
+    ICC2022_PASSKEY: str = ""
+    # ptlsp
+    PTLSP_UID: str = ""
+    PTLSP_PASSKEY: str = ""
+    # xingtan
+    XINGTAN_UID: str = ""
+    XINGTAN_PASSKEY: str = ""
+    # agsvpt
+    AGSVPT_UID: str = ""
+    AGSVPT_PASSKEY: str = ""
     # 交互搜索自动下载用户ID，使用,分割
     AUTO_DOWNLOAD_USER: str = None
     # 消息通知渠道 telegram/wechat/slack，多个通知渠道用,分隔
@@ -141,9 +185,9 @@ class Settings(BaseSettings):
     TR_PASSWORD: str = None
     # 种子标签
     TORRENT_TAG: str = "MOVIEPILOT"
-    # 下载保存目录，容器内映射路径需要一致
-    DOWNLOAD_PATH: str = None
-    # 电影下载保存目录，容器内映射路径需要一致
+    # 下载保存目录，容器内映射路径需要一致 windows下 填写形式应为 r"C:\dir"
+    DOWNLOAD_PATH: str = r"C:\Users\Default\Downloads"
+    # 电影下载保存目录，容器内映射路径需要一致 windows下 填写形式应为 r"C:\dir"
     DOWNLOAD_MOVIE_PATH: str = None
     # 电视剧下载保存目录，容器内映射路径需要一致
     DOWNLOAD_TV_PATH: str = None
@@ -185,8 +229,8 @@ class Settings(BaseSettings):
     OCR_HOST: str = "https://movie-pilot.org"
     # CookieCloud对应的浏览器UA
     USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/113.0.0.0 Safari/537.36 Edg/113.0.1774.57"
-    # 媒体库目录，多个目录使用,分隔
-    LIBRARY_PATH: str = None
+    # 媒体库目录，多个目录使用,分隔 windows下 填写形式应为 r"C:\dir" 或 r"C:\dir,C:\dir01"
+    LIBRARY_PATH: str = r"C:/Users/Default/Downloads"
     # 电影媒体库目录名，默认"电影"
     LIBRARY_MOVIE_NAME: str = None
     # 电视剧媒体库目录名，默认"电视剧"
@@ -214,8 +258,8 @@ class Settings(BaseSettings):
     PLUGIN_MARKET: str = "https://raw.githubusercontent.com/jxxghp/MoviePilot-Plugins/main/"
     # Github token，提高请求api限流阈值 ghp_****
     GITHUB_TOKEN: str = None
-    # 自动检查和更新站点资源包（站点索引、认证等）
-    AUTO_UPDATE_RESOURCE: bool = True
+    # 自动检查和更新站点资源包（站点索引、认证等） 开启后相应的启动MP的时间增加30-120秒左右
+    AUTO_UPDATE_RESOURCE: bool = False
 
     @property
     def INNER_CONFIG_PATH(self):
@@ -355,7 +399,14 @@ class Settings(BaseSettings):
         case_sensitive = True
 
 
+def env_file():
+    if SystemUtils.is_windows():
+        return Path(__file__).parents[2] / "config" / "appWindows.env"
+    else:
+        return Path(os.environ.get("CONFIG_DIR", "/config")) / "app.env"
+
+
 settings = Settings(
-    _env_file=Settings().CONFIG_PATH / "app.env",
+    _env_file=env_file(),
     _env_file_encoding="utf-8"
 )

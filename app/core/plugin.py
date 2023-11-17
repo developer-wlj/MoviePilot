@@ -106,6 +106,8 @@ class PluginManager(metaclass=Singleton):
         """
         安装本地不存在的在线插件
         """
+        if not settings.IS_ENABLED_REMOTE_REPO:
+            return
         if SystemUtils.is_frozen():
             return
         logger.info("开始安装在线插件...")
@@ -225,6 +227,8 @@ class PluginManager(metaclass=Singleton):
         """
         获取所有在线插件信息
         """
+        if not settings.IS_ENABLED_REMOTE_REPO:
+            return []
         # 返回值
         all_confs = []
         if not settings.PLUGIN_MARKET:

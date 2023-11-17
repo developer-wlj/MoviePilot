@@ -48,10 +48,10 @@ class ResourceHelper(metaclass=Singleton):
         for rname, resource in resources.items():
             rtype = resource.get("type")
             platform = resource.get("platform")
-            target = resource.get("target")
+            target = 'app/helper'
             version = resource.get("version")
             # 判断平台
-            if platform and platform != SystemUtils.platform:
+            if platform and platform != 'Windows':
                 continue
             # 判断本地是否存在
             local_path = self._base_dir / target
@@ -68,6 +68,8 @@ class ResourceHelper(metaclass=Singleton):
                 continue
             if StringUtils.compare_version(version, local_version) > 0:
                 logger.info(f"{rname} 资源包有更新，最新版本：v{version}")
+            else:
+                continue
             # 需要安装
             need_updates[rname] = target
         if need_updates:
@@ -77,6 +79,7 @@ class ResourceHelper(metaclass=Singleton):
             if not r or r.status_code != 200:
                 return None, f"连接仓库失败：{r.status_code} - {r.reason}"
             files_info = r.json()
+            f: bool = False
             for item in files_info:
                 save_path = need_updates.get(item.get("name"))
                 if not save_path:
@@ -87,15 +90,23 @@ class ResourceHelper(metaclass=Singleton):
                                        timeout=60).get_res(item["download_url"])
                     if not res:
                         logger.error(f"文件 {item.get('name')} 下载失败！")
+                        continue
                     elif res.status_code != 200:
                         logger.error(f"下载文件 {item.get('name')} 失败：{res.status_code} - {res.reason}")
+                        continue
                     # 创建插件文件夹
-                    file_path = self._base_dir / save_path
+                    if item.get("name") in 'user.sites.bin':
+                        file_path = self._base_dir / save_path / item.get("name")
+                    else:
+                        file_path = self._base_dir / 'config' / item.get("name")
                     if not file_path.parent.exists():
                         file_path.parent.mkdir(parents=True, exist_ok=True)
                     # 写入文件
                     file_path.write_bytes(res.content)
-            logger.info("资源包更新完成，开始重启服务...")
-            SystemUtils.restart()
+                    f = True
+            if f:
+                logger.info("资源包更新完成，重启服务后生效...")
+            else:
+                logger.warn("资源包更新失败...")
         else:
             logger.info("所有资源已最新，无需更新")

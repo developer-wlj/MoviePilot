@@ -1,5 +1,7 @@
 import json
+import os
 import shutil
+import stat
 from pathlib import Path
 from typing import Dict, Tuple, Optional, List
 
@@ -119,11 +121,17 @@ class PluginHelper(metaclass=Singleton):
         # 本地存在时先删除
         plugin_dir = Path(settings.ROOT_PATH) / "app" / "plugins" / pid.lower()
         if plugin_dir.exists():
+            # 获取当前属性值
+            current_attr = os.stat(plugin_dir).st_mode
+            # 取消只读属性，并赋予新值
+            new_attr = current_attr & ~stat.S_IWRITE
+            os.chmod(plugin_dir, new_attr)
+            # 现在可以删除这个目录了
             shutil.rmtree(plugin_dir, ignore_errors=True)
         # 下载所有文件
         __download_files(pid.lower(), file_list)
         # 插件目录下如有requirements.txt则安装依赖
         requirements_file = plugin_dir / "requirements.txt"
-        if requirements_file.exists():
-            SystemUtils.execute(f"pip install -r {requirements_file}")
+        # if requirements_file.exists():
+        #     SystemUtils.execute(f"pip install -r {requirements_file}")
         return True, ""
