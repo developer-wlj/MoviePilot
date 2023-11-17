@@ -144,12 +144,11 @@ jobs:
           unzip nginx-1.25.2.zip
           mv nginx-1.25.2 nginx
           rm nginx-1.25.2.zip
-          rm -rf nginx-1.25.2
           
           FRONTEND_VERSION=$(curl -s "https://api.github.com/repos/jxxghp/MoviePilot-Frontend/releases/latest" | jq -r .tag_name)
           wget "https://github.com/jxxghp/MoviePilot-Frontend/releases/download/$FRONTEND_VERSION/dist.zip"
           unzip dist.zip
-          mv dist/dist/* nginx/html
+          mv dist/* nginx/html
           rm dist.zip
           rm -rf dist
           mv nginx/html/nginx.conf nginx/conf/nginx.conf
@@ -159,15 +158,15 @@ jobs:
           touch nginx/logs/__keep__.txt
           
           wget https://github.com/jxxghp/MoviePilot-Plugins/archive/refs/heads/main.zip
-          unzip MoviePilot-Plugins-main.zip
-          mv MoviePilot-Plugins-main/MoviePilot-Plugins-main/plugins/* app/plugins/
-          rm MoviePilot-Plugins-main.zip
+          unzip main.zip
+          mv MoviePilot-Plugins-main/plugins/* app/plugins/
+          rm main.zip
           rm -rf MoviePilot-Plugins-main
           
           wget https://github.com/jxxghp/MoviePilot-Resources/archive/refs/heads/main.zip
-          unzip MoviePilot-Resources-main.zip
-          mv MoviePilot-Resources-main/MoviePilot-Resources-main/resources/* app/helper/
-          rm MoviePilot-Resources-main.zip
+          unzip main.zip
+          mv MoviePilot-Resources-main/resources/* app/helper/
+          rm main.zip
           rm -rf MoviePilot-Resources-main
 
       - name: Pyinstaller
@@ -177,7 +176,7 @@ jobs:
       - name: Upload Ubuntu File
         uses: actions/upload-artifact@v3
         with:
-          name: ubuntu
+          name: linux
           path: dist/MoviePilot
 
   Create-release:
@@ -201,7 +200,7 @@ jobs:
         run: |
           mkdir releases
           mv ./windows/MoviePilot.exe ./releases/MoviePilot_v${{ env.app_version }}.exe
-          mv ./ubuntu/dist/MoviePilot ./releases/MoviePilot_amd64_v${{ env.app_version }}
+          mv ./linux/dist/MoviePilot ./releases/MoviePilot_linux_v${{ env.app_version }}
 
       - name: Create Release
         id: create_release

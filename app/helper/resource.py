@@ -48,7 +48,7 @@ class ResourceHelper(metaclass=Singleton):
         for rname, resource in resources.items():
             rtype = resource.get("type")
             platform = resource.get("platform")
-            target = 'app/helper'
+            target = resource.get("target")
             version = resource.get("version")
             # 判断平台
             if platform and platform != 'Windows':
