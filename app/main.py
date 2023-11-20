@@ -65,33 +65,35 @@ def start_frontend():
     """
     启动前端服务
     """
-    if not SystemUtils.is_frozen():
+    # 仅Windows可执行文件支持内嵌nginx
+    if not SystemUtils.is_frozen() \
+            or not SystemUtils.is_windows():
         return
+    # 临时Nginx目录
     nginx_path = settings.ROOT_PATH / 'nginx'
     if not nginx_path.exists():
         return
+    # 配置目录下的Nginx目录
+    run_nginx_dir = settings.CONFIG_PATH.with_name('nginx')
+    if not run_nginx_dir.exists():
+        # 移动到配置目录
+        SystemUtils.move(nginx_path, run_nginx_dir)
+    # 启动Nginx
     import subprocess
-    if SystemUtils.is_windows():
-        subprocess.Popen("start nginx.exe",
-                         cwd=nginx_path,
-                         shell=True)
-    else:
-        subprocess.Popen("nohup ./nginx &",
-                         cwd=nginx_path,
-                         shell=True)
+    subprocess.Popen("start nginx.exe",
+                     cwd=run_nginx_dir,
+                     shell=True)
 
 
 def stop_frontend():
     """
     停止前端服务
     """
-    if not SystemUtils.is_frozen():
+    if not SystemUtils.is_frozen() \
+            or not SystemUtils.is_windows():
         return
     import subprocess
-    if SystemUtils.is_windows():
-        subprocess.Popen(f"taskkill /f /im nginx.exe", shell=True)
-    else:
-        subprocess.Popen(f"killall nginx", shell=True)
+    subprocess.Popen(f"taskkill /f /im nginx.exe", shell=True)
 
 
 def start_tray():

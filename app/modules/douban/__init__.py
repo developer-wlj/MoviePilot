@@ -561,7 +561,7 @@ class DoubanModule(_ModuleBase):
                 continue
             if mtype and mtype.value != type_name:
                 continue
-            if mtype == MediaType.TV and not season:
+            if mtype and mtype == MediaType.TV and not season:
                 season = 1
             item = item_obj.get("target")
             title = item.get("title")
@@ -618,10 +618,17 @@ class DoubanModule(_ModuleBase):
             else:
                 doubaninfo = self.douban_info(doubanid=mediainfo.douban_id,
                                               mtype=mediainfo.type)
+            if not doubaninfo:
+                logger(f"未获取到 {mediainfo.douban_id} 的豆瓣媒体信息，无法刮削！")
+                return
+            # 豆瓣媒体信息
+            mediainfo = MediaInfo(douban_info=doubaninfo)
+            # 补充图片
+            self.obtain_images(mediainfo)
             # 刮削路径
             scrape_path = path / path.name
             self.scraper.gen_scraper_files(meta=meta,
-                                           mediainfo=MediaInfo(douban_info=doubaninfo),
+                                           mediainfo=mediainfo,
                                            file_path=scrape_path,
                                            transfer_type=transfer_type)
         else:
@@ -649,18 +656,102 @@ class DoubanModule(_ModuleBase):
                     else:
                         doubaninfo = self.douban_info(doubanid=mediainfo.douban_id,
                                                       mtype=mediainfo.type)
+                    if not doubaninfo:
+                        logger(f"未获取到 {mediainfo.douban_id} 的豆瓣媒体信息，无法刮削！")
+                        continue
+                    # 豆瓣媒体信息
+                    mediainfo = MediaInfo(douban_info=doubaninfo)
+                    # 补充图片
+                    self.obtain_images(mediainfo)
                     # 刮削
                     self.scraper.gen_scraper_files(meta=meta,
-                                                   mediainfo=MediaInfo(douban_info=doubaninfo),
+                                                   mediainfo=mediainfo,
                                                    file_path=file,
                                                    transfer_type=transfer_type)
                 except Exception as e:
                     logger.error(f"刮削文件 {file} 失败，原因：{str(e)}")
         logger.info(f"{path} 刮削完成")
 
+    def obtain_images(self, mediainfo: MediaInfo) -> Optional[MediaInfo]:
+        """
+        补充抓取媒体信息图片
+        :param mediainfo:  识别的媒体信息
+        :return: 更新后的媒体信息
+        """
+        if settings.RECOGNIZE_SOURCE != "douban":
+            return None
+        if not mediainfo.douban_id:
+            return None
+        if mediainfo.backdrop_path:
+            # 没有图片缺失
+            return mediainfo
+        # 调用图片接口
+        if not mediainfo.backdrop_path:
+            if mediainfo.type == MediaType.MOVIE:
+                info = self.doubanapi.movie_photos(mediainfo.douban_id)
+            else:
+                info = self.doubanapi.tv_photos(mediainfo.douban_id)
+            if not info:
+                return mediainfo
+            images = info.get("photos")
+            # 背景图
+            if images:
+                backdrop = images[0].get("image", {}).get("large") or {}
+                if backdrop:
+                    mediainfo.backdrop_path = backdrop.get("url")
+        return mediainfo
+
     def clear_cache(self):
         """
         清除缓存
         """
+        logger.info("开始清除豆瓣缓存 ...")
         self.doubanapi.clear_cache()
         self.cache.clear()
+        logger.info("豆瓣缓存清除完成")
+
+    def douban_movie_credits(self, doubanid: str, page: int = 1, count: int = 20) -> List[dict]:
+        """
+        根据TMDBID查询电影演职员表
+        :param doubanid:  豆瓣ID
+        :param page:  页码
+        :param count:  数量
+        """
+        result = self.doubanapi.movie_celebrities(subject_id=doubanid)
+        if not result:
+            return []
+        ret_list = result.get("actors") or []
+        if ret_list:
+            return ret_list[(page - 1) * count: page * count]
+        else:
+            return []
+
+    def douban_tv_credits(self, doubanid: str, page: int = 1, count: int = 20) -> List[dict]:
+        """
+        根据TMDBID查询电视剧演职员表
+        :param doubanid:  豆瓣ID
+        :param page:  页码
+        :param count:  数量
+        """
+        result = self.doubanapi.tv_celebrities(subject_id=doubanid)
+        if not result:
+            return []
+        ret_list = result.get("actors") or []
+        if ret_list:
+            return ret_list[(page - 1) * count: page * count]
+        else:
+            return []
+
+    def douban_movie_recommend(self, doubanid: str) -> List[dict]:
+        """
+        根据豆瓣ID查询推荐电影
+        :param doubanid:  豆瓣ID
+        """
+        return self.doubanapi.movie_recommendations(subject_id=doubanid) or []
+
+    def douban_tv_recommend(self, doubanid: str) -> List[dict]:
+        """
+        根据豆瓣ID查询推荐电视剧
+        :param doubanid:  豆瓣ID
+        """
+        return self.doubanapi.tv_recommendations(subject_id=doubanid) or []
