@@ -8,17 +8,22 @@ def collect_pkg_data(package: str, include_py_files: bool = False, subdir: str =
     from PyInstaller.utils.hooks import get_package_paths, PY_IGNORE_EXTENSIONS
     from PyInstaller.building.datastruct import TOC
 
+    data_toc = TOC()
+
     # Accept only strings as packages.
     if type(package) is not str:
         raise ValueError
-
-    pkg_base, pkg_dir = get_package_paths(package)
+    try:
+        pkg_base, pkg_dir = get_package_paths(package)
+    except ValueError:
+        return data_toc
     if subdir:
         pkg_path = Path(pkg_dir) / subdir
     else:
         pkg_path = Path(pkg_dir)
     # Walk through all file in the given package, looking for data files.
-    data_toc = TOC()
+    if not pkg_path.exists():
+        return data_toc
     for file in pkg_path.rglob('*'):
         if file.is_file():
             extension = file.suffix
@@ -37,6 +42,8 @@ def collect_local_submodules(package: str):
     package_dir = Path(package.replace('.', os.sep))
     submodules = [package]
     # Walk through all file in the given package, looking for data files.
+    if not package_dir.exists():
+        return []
     for file in package_dir.rglob('*.py'):
         if file.name == '__init__.py':
             module = f"{file.parent}".replace(os.sep, '.')
