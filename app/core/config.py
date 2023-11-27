@@ -82,7 +82,7 @@ class Settings(BaseSettings):
     SUBSCRIBE_RSS_INTERVAL: int = 30
     # 订阅搜索开关
     SUBSCRIBE_SEARCH: bool = False
-    # 用户认证站点 hhclub/audiences/hddolby/zmpt/freefarm/hdfans/wintersakura/leaves/1ptba/icc2022/iyuu/ptlsp/xingtan
+    # 用户认证站点 hhclub/audiences/hddolby/zmpt/freefarm/hdfans/wintersakura/leaves/1ptba/icc2022/iyuu/ptlsp/xingtan/ptvicomo/agsvpt
     AUTH_SITE: str = ""
     # iyuu
     IYUU_SIGN: str = ""
@@ -125,6 +125,9 @@ class Settings(BaseSettings):
     # agsvpt
     AGSVPT_UID: str = ""
     AGSVPT_PASSKEY: str = ""
+    # ptvicomo
+    PTVICOMO_UID: str = ""
+    PTVICOMO_PASSKEY: str = ""
     # 交互搜索自动下载用户ID，使用,分割
     AUTO_DOWNLOAD_USER: str = None
     # 消息通知渠道 telegram/wechat/slack，多个通知渠道用,分隔

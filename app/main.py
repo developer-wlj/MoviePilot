@@ -210,6 +210,9 @@ def start_module():
     elif auth_site == 'agsvpt':
         os.environ['AGSVPT_UID'] = settings.AGSVPT_UID
         os.environ['AGSVPT_PASSKEY'] = settings.AGSVPT_PASSKEY
+    elif auth_site == 'ptvicomo':
+        os.environ['PTVICOMO_UID'] = settings.PTVICOMO_UID
+        os.environ['PTVICOMO_PASSKEY'] = settings.PTVICOMO_PASSKEY
     else:
         pass
     # 虚拟显示
