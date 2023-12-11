@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import importlib
 import pkgutil
+from pathlib import Path
 
 
 class ModuleHelper:
@@ -35,3 +36,17 @@ class ModuleHelper:
                 print(f'加载模块 {package_name} 失败：{err}')
 
         return submodules
+
+    @staticmethod
+    def dynamic_import_all_modules(base_path: Path, package_name: str):
+        """
+        动态导入目录下所有模块
+        """
+        modules = []
+        # 遍历文件夹，找到所有模块文件
+        for file in base_path.glob("*.py"):
+            file_name = file.stem
+            if file_name != "__init__":
+                modules.append(file_name)
+                full_module_name = f"{package_name}.{file_name}"
+                importlib.import_module(full_module_name)

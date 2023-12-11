@@ -1,15 +1,15 @@
 from datetime import datetime
+from typing import Optional
 
 from sqlalchemy import Column, Integer, String, Sequence
 from sqlalchemy.orm import Session
 
-from app.db import db_query
-from app.db.models import Base, db_update
+from app.db import db_query, db_update, Base
 
 
 class MediaServerItem(Base):
     """
-    站点表
+    媒体服务器媒体条目表
     """
     id = Column(Integer, Sequence('id'), primary_key=True, index=True)
     # 服务器类型
@@ -48,8 +48,11 @@ class MediaServerItem(Base):
 
     @staticmethod
     @db_update
-    def empty(db: Session, server: str):
-        db.query(MediaServerItem).filter(MediaServerItem.server == server).delete()
+    def empty(db: Session, server: Optional[str] = None):
+        if server is None:
+            db.query(MediaServerItem).delete()
+        else:
+            db.query(MediaServerItem).filter(MediaServerItem.server == server).delete()
 
     @staticmethod
     @db_query

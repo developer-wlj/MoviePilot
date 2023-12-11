@@ -7,7 +7,7 @@
 发布频道：https://t.me/moviepilot_channel
 
 ## 主要特性
-- 前后端分离，基于FastApi + Vue3，前端项目地址：[MoviePilot-Frontend](https://github.com/jxxghp/MoviePilot-Frontend)
+- 前后端分离，基于FastApi + Vue3，前端项目地址：[MoviePilot-Frontend](https://github.com/jxxghp/MoviePilot-Frontend)，API：http://localhost:3001/docs
 - 聚焦核心需求，简化功能和设置，部分设置项可直接使用默认值。
 - 重新设计了用户界面，更加美观易用。
 
@@ -53,7 +53,7 @@ MoviePilot需要配套下载器和媒体服务器配合使用。
   2) 将工程 [MoviePilot-Resources](https://github.com/jxxghp/MoviePilot-Resources) resources目录下的所有文件复制到`app/helper`目录
   3) 执行命令：`pip install -r requirements.txt` 安装依赖
   4) 执行命令：`python app/main.py` 启动服务
-  5) 自行完成前端项目部署
+  5) 根据前端项目 [MoviePilot-Frontend](https://github.com/jxxghp/MoviePilot-Frontend) 说明，启动前端服务
 
 ## 配置
 
@@ -213,10 +213,11 @@ MoviePilot需要配套下载器和媒体服务器配合使用。
 
   `MOVIE_RENAME_FORMAT`支持的配置项：
 
-  > `title`： 标题  
-  > `original_name`： 原文件名  
-  > `original_title`： 原语种标题  
-  > `name`： 识别名称  
+  > `title`： TMDB/豆瓣中的标题  
+  > `original_title`： TMDB/豆瓣中的原语种标题  
+  > `name`： 从文件名中识别的名称（同时存在中英文时，优先使用中文）
+  > `en_name`：从文件名中识别的英文名称（可能为空）
+  > `original_name`： 原文件名（包括文件外缀）  
   > `year`： 年份  
   > `resourceType`：资源类型  
   > `effect`：特效  
@@ -226,12 +227,11 @@ MoviePilot需要配套下载器和媒体服务器配合使用。
   > `customization`： 自定义占位符  
   > `videoCodec`： 视频编码  
   > `audioCodec`： 音频编码  
-  > `tmdbid`： TMDBID  
-  > `imdbid`： IMDBID  
+  > `tmdbid`： TMDB ID（非TMDB识别源时为空）  
+  > `imdbid`： IMDB ID（可能为空）  
+  > `doubanid`：豆瓣ID（非豆瓣识别源时为空）  
   > `part`：段/节  
   > `fileExt`：文件扩展名
-  > `tmdbid`：TMDB ID
-  > `imdbid`：IMDB ID
   > `customization`：自定义占位符
   
   `MOVIE_RENAME_FORMAT`默认配置格式：

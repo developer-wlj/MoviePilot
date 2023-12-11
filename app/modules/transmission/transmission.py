@@ -14,7 +14,7 @@ class Transmission(metaclass=Singleton):
     _host: str = None
     _port: int = None
     _username: str = None
-    _passowrd: str = None
+    _password: str = None
 
     trc: Optional[Client] = None
 
@@ -24,10 +24,16 @@ class Transmission(metaclass=Singleton):
               "peersGettingFromUs", "peersSendingToUs", "uploadRatio", "uploadedEver", "downloadedEver", "downloadDir",
               "error", "errorString", "doneDate", "queuePosition", "activityDate", "trackers"]
 
-    def __init__(self):
-        self._host, self._port = StringUtils.get_domain_address(address=settings.TR_HOST, prefix=False)
-        self._username = settings.TR_USER
-        self._password = settings.TR_PASSWORD
+    def __init__(self, host: str = None, port: int = None, username: str = None, password: str = None):
+        """
+        若不设置参数，则创建配置文件设置的下载器
+        """
+        if host and port:
+            self._host, self._port = host, port
+        else:
+            self._host, self._port = StringUtils.get_domain_address(address=settings.TR_HOST, prefix=False)
+        self._username = username if username else settings.TR_USER
+        self._password = password if password else settings.TR_PASSWORD
         if self._host and self._port:
             self.trc = self.__login_transmission()
 
@@ -271,28 +277,17 @@ class Transmission(metaclass=Singleton):
             logger.error(f"设置速度限制出错：{str(err)}")
             return False
 
-    def recheck_torrents(self, ids: Union[str, list]):
+    def recheck_torrents(self, ids: Union[str, list]) -> bool:
         """
         重新校验种子
         """
         if not self.trc:
             return False
         try:
-            return self.trc.verify_torrent(ids=ids)
+            self.trc.verify_torrent(ids=ids)
+            return True
         except Exception as err:
             logger.error(f"重新校验种子出错：{str(err)}")
-            return False
-
-    def add_trackers(self, ids: Union[str, list], trackers: list):
-        """
-        添加Tracker
-        """
-        if not self.trc:
-            return False
-        try:
-            return self.trc.change_torrent(ids=ids, tracker_list=[trackers])
-        except Exception as err:
-            logger.error(f"添加Tracker出错：{str(err)}")
             return False
 
     def change_torrent(self,
@@ -300,7 +295,7 @@ class Transmission(metaclass=Singleton):
                        upload_limit=None,
                        download_limit=None,
                        ratio_limit=None,
-                       seeding_time_limit=None):
+                       seeding_time_limit=None) -> bool:
         """
         设置种子
         :param hash_string: ID
@@ -346,6 +341,22 @@ class Transmission(metaclass=Singleton):
                                     seedRatioLimit=seedRatioLimit,
                                     seedIdleMode=seedIdleMode,
                                     seedIdleLimit=seedIdleLimit)
+            return True
         except Exception as err:
             logger.error(f"设置种子出错：{str(err)}")
+            return False
+
+    def update_tracker(self, hash_string: str, tracker_list: list = None) -> bool:
+        """
+        tr4.0及以上弃用直接设置tracker 共用change方法
+        https://github.com/trim21/transmission-rpc/blob/8eb82629492a0eeb0bb565f82c872bf9ccdcb313/transmission_rpc/client.py#L654
+        """
+        if not self.trc:
+            return False
+        try:
+            self.trc.change_torrent(ids=hash_string,
+                                    tracker_list=tracker_list)
+            return True
+        except Exception as err:
+            logger.error(f"修改tracker出错：{str(err)}")
             return False

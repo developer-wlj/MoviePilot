@@ -16,14 +16,20 @@ class Qbittorrent(metaclass=Singleton):
     _host: str = None
     _port: int = None
     _username: str = None
-    _passowrd: str = None
+    _password: str = None
 
     qbc: Client = None
 
-    def __init__(self):
-        self._host, self._port = StringUtils.get_domain_address(address=settings.QB_HOST, prefix=True)
-        self._username = settings.QB_USER
-        self._password = settings.QB_PASSWORD
+    def __init__(self, host: str = None, port: int = None, username: str = None, password: str = None):
+        """
+        若不设置参数，则创建配置文件设置的下载器
+        """
+        if host and port:
+            self._host, self._port = host, port
+        else:
+            self._host, self._port = StringUtils.get_domain_address(address=settings.QB_HOST, prefix=True)
+        self._username = username if username else settings.QB_USER
+        self._password = password if password else settings.QB_PASSWORD
         if self._host and self._port:
             self.qbc = self.__login_qbittorrent()
 
@@ -352,26 +358,28 @@ class Qbittorrent(metaclass=Singleton):
             logger.error(f"设置速度限制出错：{str(err)}")
             return False
 
-    def recheck_torrents(self, ids: Union[str, list]):
+    def recheck_torrents(self, ids: Union[str, list]) -> bool:
         """
         重新校验种子
         """
         if not self.qbc:
             return False
         try:
-            return self.qbc.torrents_recheck(torrent_hashes=ids)
+            self.qbc.torrents_recheck(torrent_hashes=ids)
+            return True
         except Exception as err:
             logger.error(f"重新校验种子出错：{str(err)}")
             return False
 
-    def add_trackers(self, ids: Union[str, list], trackers: list):
+    def update_tracker(self, hash_string: str, tracker_list: list) -> bool:
         """
         添加tracker
         """
         if not self.qbc:
             return False
         try:
-            return self.qbc.torrents_add_trackers(torrent_hashes=ids, urls=trackers)
+            self.qbc.torrents_add_trackers(torrent_hash=hash_string, urls=tracker_list)
+            return True
         except Exception as err:
-            logger.error(f"添加tracker出错：{str(err)}")
+            logger.error(f"修改tracker出错：{str(err)}")
             return False
