@@ -113,6 +113,8 @@ class Settings(BaseSettings):
     # 1ptba
     ONEPTBA_UID: str = ""
     ONEPTBA_PASSKEY: str = ""
+    PTBA_UID: str = ""
+    PTBA_PASSKEY: str = ""
     # icc2022
     ICC2022_UID: str = ""
     ICC2022_PASSKEY: str = ""

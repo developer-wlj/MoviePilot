@@ -196,8 +196,12 @@ def start_module():
         os.environ['LEAVES_UID'] = settings.LEAVES_UID
         os.environ['LEAVES_PASSKEY'] = settings.LEAVES_PASSKEY
     elif auth_site == '1ptba':
-        os.environ['1PTBA_UID'] = settings.ONEPTBA_UID
-        os.environ['1PTBA_PASSKEY'] = settings.ONEPTBA_PASSKEY
+        settings.AUTH_SITE = 'ptba'
+        os.environ['PTBA_UID'] = settings.ONEPTBA_UID
+        os.environ['PTBA_PASSKEY'] = settings.ONEPTBA_PASSKEY
+    elif auth_site == 'ptba':
+        os.environ['PTBA_UID'] = settings.PTBA_UID
+        os.environ['PTBA_PASSKEY'] = settings.PTBA_PASSKEY
     elif auth_site == 'icc2022':
         os.environ['ICC2022_UID'] = settings.ICC2022_UID
         os.environ['ICC2022_PASSKEY'] = settings.ICC2022_PASSKEY
