@@ -236,7 +236,7 @@ class SubscribeChain(ChainBase):
             # 已存在
             if exist_flag:
                 logger.info(f'{mediainfo.title_year} 媒体库中已存在')
-                self.finish_subscribe_or_not(subscribe=subscribe, meta=meta, mediainfo=mediainfo)
+                self.finish_subscribe_or_not(subscribe=subscribe, meta=meta, mediainfo=mediainfo, force=True)
                 continue
 
             # 电视剧订阅处理缺失集
@@ -362,13 +362,20 @@ class SubscribeChain(ChainBase):
 
     def finish_subscribe_or_not(self, subscribe: Subscribe, meta: MetaInfo, mediainfo: MediaInfo,
                                 downloads: List[Context] = None,
-                                lefts: Dict[Union[int | str], Dict[int, NotExistMediaInfo]] = None):
+                                lefts: Dict[Union[int | str], Dict[int, NotExistMediaInfo]] = None,
+                                force: bool = False):
         """
         判断是否应完成订阅
         """
+        mediakey = subscribe.tmdbid or subscribe.doubanid
+        # 是否有剩余集
+        no_lefts = not lefts or not lefts.get(mediakey)
+        # 是否完成订阅
         if not subscribe.best_version:
             # 非洗板
-            if (not lefts and meta.type == MediaType.TV) or (downloads and meta.type == MediaType.MOVIE):
+            if ((no_lefts and meta.type == MediaType.TV)
+                    or (downloads and meta.type == MediaType.MOVIE)
+                    or force):
                 # 全部下载完成
                 logger.info(f'{mediainfo.title_year} 完成订阅')
                 self.subscribeoper.delete(subscribe.id)
@@ -554,7 +561,7 @@ class SubscribeChain(ChainBase):
             # 已存在
             if exist_flag:
                 logger.info(f'{mediainfo.title_year} 媒体库中已存在')
-                self.finish_subscribe_or_not(subscribe=subscribe, meta=meta, mediainfo=mediainfo)
+                self.finish_subscribe_or_not(subscribe=subscribe, meta=meta, mediainfo=mediainfo, force=True)
                 continue
 
             # 电视剧订阅
