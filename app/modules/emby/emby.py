@@ -22,6 +22,12 @@ class Emby(metaclass=Singleton):
                 self._host += "/"
             if not self._host.startswith("http"):
                 self._host = "http://" + self._host
+        self._playhost = settings.EMBY_PLAY_HOST
+        if self._playhost:
+            if not self._playhost.endswith("/"):
+                self._playhost += "/"
+            if not self._playhost.startswith("http"):
+                self._playhost = "http://" + self._playhost
         self._apikey = settings.EMBY_API_KEY
         self.user = self.get_user(settings.SUPERUSER)
         self.folders = self.get_emby_folders()
@@ -93,13 +99,17 @@ class Emby(metaclass=Singleton):
                     library_type = MediaType.TV.value
                 case _:
                     continue
+            image = self.__get_local_image_by_id(library.get("Id"))
             libraries.append(
                 schemas.MediaServerLibrary(
                     server="emby",
                     id=library.get("Id"),
                     name=library.get("Name"),
                     path=library.get("Path"),
-                    type=library_type
+                    type=library_type,
+                    image=image,
+                    link=f'{self._playhost or self._host}web/index.html'
+                         f'#!/videos?serverId={self.serverid}&parentId={library.get("Id")}'
                 )
             )
         return libraries
@@ -909,12 +919,13 @@ class Emby(metaclass=Singleton):
             logger.error(f"连接Emby出错：" + str(e))
             return None
 
-    def __get_play_url(self, item_id: str) -> str:
+    def get_play_url(self, item_id: str) -> str:
         """
         拼装媒体播放链接
         :param item_id: 媒体的的ID
         """
-        return f"{self._host}web/index.html#!/item?id={item_id}&context=home&serverId={self.serverid}"
+        return f"{self._playhost or self._host}web/index.html#!" \
+               f"/item?id={item_id}&context=home&serverId={self.serverid}"
 
     def __get_backdrop_url(self, item_id: str, image_tag: str) -> str:
         """
@@ -958,14 +969,17 @@ class Emby(metaclass=Singleton):
                     if item.get("Type") not in ["Movie", "Episode"]:
                         continue
                     item_type = MediaType.MOVIE.value if item.get("Type") == "Movie" else MediaType.TV.value
-                    link = self.__get_play_url(item.get("Id"))
+                    link = self.get_play_url(item.get("Id"))
                     if item_type == MediaType.MOVIE.value:
                         title = item.get("Name")
+                        subtitle = item.get("Year")
                     else:
                         if item.get("ParentIndexNumber") == 1:
-                            title = f'{item.get("SeriesName")} 第{item.get("IndexNumber")}集'
+                            title = f'{item.get("SeriesName")}'
+                            subtitle = f'第{item.get("IndexNumber")}集'
                         else:
-                            title = f'{item.get("SeriesName")} 第{item.get("ParentIndexNumber")}季第{item.get("IndexNumber")}集'
+                            title = f'{item.get("SeriesName")}'
+                            subtitle = f'第{item.get("ParentIndexNumber")}季 第{item.get("IndexNumber")}集'
                     if item_type == MediaType.MOVIE.value:
                         if item.get("BackdropImageTags"):
                             image = self.__get_backdrop_url(item_id=item.get("Id"),
@@ -979,7 +993,8 @@ class Emby(metaclass=Singleton):
                             image = self.__get_local_image_by_id(item.get("SeriesId"))
                     ret_resume.append(schemas.MediaServerPlayItem(
                         id=item.get("Id"),
-                        name=title,
+                        title=title,
+                        subtitle=subtitle,
                         type=item_type,
                         image=image,
                         link=link,
@@ -1008,11 +1023,11 @@ class Emby(metaclass=Singleton):
                     if item.get("Type") not in ["Movie", "Series"]:
                         continue
                     item_type = MediaType.MOVIE.value if item.get("Type") == "Movie" else MediaType.TV.value
-                    link = self.__get_play_url(item.get("Id"))
+                    link = self.get_play_url(item.get("Id"))
                     image = self.__get_local_image_by_id(item_id=item.get("Id"))
                     ret_latest.append(schemas.MediaServerPlayItem(
                         id=item.get("Id"),
-                        name=item.get("Name"),
+                        title=item.get("Name"),
                         type=item_type,
                         image=image,
                         link=link

@@ -20,6 +20,12 @@ class Jellyfin(metaclass=Singleton):
                 self._host += "/"
             if not self._host.startswith("http"):
                 self._host = "http://" + self._host
+        self._playhost = settings.JELLYFIN_PLAY_HOST
+        if self._playhost:
+            if not self._playhost.endswith("/"):
+                self._playhost += "/"
+            if not self._playhost.startswith("http"):
+                self._playhost = "http://" + self._playhost
         self._apikey = settings.JELLYFIN_API_KEY
         self.user = self.get_user(settings.SUPERUSER)
         self.serverid = self.get_server_id()
@@ -72,13 +78,21 @@ class Jellyfin(metaclass=Singleton):
                     library_type = MediaType.TV.value
                 case _:
                     continue
+            image = self.__get_local_image_by_id(library.get("Id"))
+            link = f"{self._playhost or self._host}web/index.html#!" \
+                   f"/movies.html?topParentId={library.get('Id')}" \
+                if library_type == MediaType.MOVIE.value \
+                else f"{self._playhost or self._host}web/index.html#!" \
+                     f"/tv.html?topParentId={library.get('Id')}"
             libraries.append(
                 schemas.MediaServerLibrary(
                     server="jellyfin",
                     id=library.get("Id"),
                     name=library.get("Name"),
                     path=library.get("Path"),
-                    type=library_type
+                    type=library_type,
+                    image=image,
+                    link=link
                 ))
         return libraries
 
@@ -588,39 +602,13 @@ class Jellyfin(metaclass=Singleton):
             logger.error(f"连接Jellyfin出错：" + str(e))
             return None
 
-    def refresh_pers_img(self) -> bool:
-        """
-        刷新演员头像任务
-        """
-        task_id = ""
-        # 获取所有任务
-        resp: Response = self.get_data("[HOST]ScheduledTasks?&api_key=[APIKEY]")
-        if resp and resp.status_code == 200:
-            for res in resp.json():
-                if res.get("Name") != "刷新人员":
-                    continue
-                task_id = res.get("Id")
-                break
-        if not task_id:
-            logger.warn("jellyfin获取任务失败")
-            return False
-
-        # 执行刷新人员任务
-        resp = self.post_data(url=f"[HOST]ScheduledTasks/Running/{task_id}?&api_key=[APIKEY]")
-        if resp and resp.status_code == 204:
-            logger.info("jellyfin执行刷新人员任务成功")
-            return True
-        else:
-            logger.warn("jellyfin执行刷新人员任务失败")
-            return False
-
-
-    def __get_play_url(self, item_id: str) -> str:
+    def get_play_url(self, item_id: str) -> str:
         """
         拼装媒体播放链接
         :param item_id: 媒体的的ID
         """
-        return f"{self._host}web/index.html#!/details?id={item_id}&serverId={self.serverid}"
+        return f"{self._playhost or self._host}web/index.html#!" \
+               f"/details?id={item_id}&serverId={self.serverid}"
 
     def __get_local_image_by_id(self, item_id: str) -> str:
         """
@@ -664,7 +652,7 @@ class Jellyfin(metaclass=Singleton):
                     if item.get("Type") not in ["Movie", "Episode"]:
                         continue
                     item_type = MediaType.MOVIE.value if item.get("Type") == "Movie" else MediaType.TV.value
-                    link = self.__get_play_url(item.get("Id"))
+                    link = self.get_play_url(item.get("Id"))
                     if item.get("BackdropImageTags"):
                         image = self.__get_backdrop_url(item_id=item.get("Id"),
                                                         image_tag=item.get("BackdropImageTags")[0])
@@ -672,14 +660,18 @@ class Jellyfin(metaclass=Singleton):
                         image = self.__get_local_image_by_id(item.get("Id"))
                     if item_type == MediaType.MOVIE.value:
                         title = item.get("Name")
+                        subtitle = item.get("Year")
                     else:
                         if item.get("ParentIndexNumber") == 1:
-                            title = f'{item.get("SeriesName")} 第{item.get("IndexNumber")}集'
+                            title = f'{item.get("SeriesName")}'
+                            subtitle = f'第{item.get("IndexNumber")}集'
                         else:
-                            title = f'{item.get("SeriesName")} 第{item.get("ParentIndexNumber")}季第{item.get("IndexNumber")}集'
+                            title = f'{item.get("SeriesName")}'
+                            subtitle = f'第{item.get("ParentIndexNumber")}季 第{item.get("IndexNumber")}集'
                     ret_resume.append(schemas.MediaServerPlayItem(
                         id=item.get("Id"),
-                        name=title,
+                        title=title,
+                        subtitle=subtitle,
                         type=item_type,
                         image=image,
                         link=link,
@@ -708,11 +700,11 @@ class Jellyfin(metaclass=Singleton):
                     if item.get("Type") not in ["Movie", "Series"]:
                         continue
                     item_type = MediaType.MOVIE.value if item.get("Type") == "Movie" else MediaType.TV.value
-                    link = self.__get_play_url(item.get("Id"))
+                    link = self.get_play_url(item.get("Id"))
                     image = self.__get_local_image_by_id(item_id=item.get("Id"))
                     ret_latest.append(schemas.MediaServerPlayItem(
                         id=item.get("Id"),
-                        name=item.get("Name"),
+                        title=item.get("Name"),
                         type=item_type,
                         image=image,
                         link=link
@@ -723,3 +715,29 @@ class Jellyfin(metaclass=Singleton):
         except Exception as e:
             logger.error(f"连接Users/Items/Latest出错：" + str(e))
         return []
+
+    def refresh_pers_img(self) -> bool:
+        """
+        刷新演员头像任务
+        """
+        task_id = ""
+        # 获取所有任务
+        resp: Response = self.get_data("[HOST]ScheduledTasks?&api_key=[APIKEY]")
+        if resp and resp.status_code == 200:
+            for res in resp.json():
+                if res.get("Name") != "刷新人员":
+                    continue
+                task_id = res.get("Id")
+                break
+        if not task_id:
+            logger.warn("jellyfin获取任务失败")
+            return False
+
+        # 执行刷新人员任务
+        resp = self.post_data(url=f"[HOST]ScheduledTasks/Running/{task_id}?&api_key=[APIKEY]")
+        if resp and resp.status_code == 204:
+            logger.info("jellyfin执行刷新人员任务成功")
+            return True
+        else:
+            logger.warn("jellyfin执行刷新人员任务失败")
+            return False
