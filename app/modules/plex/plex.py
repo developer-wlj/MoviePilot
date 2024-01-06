@@ -60,7 +60,7 @@ class Plex(metaclass=Singleton):
             logger.error(f"Plex服务器连接失败：{str(e)}")
 
     @lru_cache(maxsize=10)
-    def __get_library_images(self, library_key: str) -> Optional[List[str]]:
+    def __get_library_images(self, library_key: str, mtype: int) -> Optional[List[str]]:
         """
         获取媒体服务器最近添加的媒体的图片列表
         param: library_key
@@ -76,7 +76,7 @@ class Plex(metaclass=Singleton):
         total_size = 4
         # 如果总数不足,接续获取下一页
         while len(poster_urls) < total_size:
-            items = self._plex.fetchItems(f"/hubs/home/recentlyAdded?type={type}&sectionID={library_key}",
+            items = self._plex.fetchItems(f"/hubs/home/recentlyAdded?type={mtype}&sectionID={library_key}",
                                           container_size=total_size,
                                           container_start=container_start)
             for item in items:
@@ -108,15 +108,19 @@ class Plex(metaclass=Singleton):
             logger.error(f"获取媒体服务器所有媒体库列表出错：{str(err)}")
             return []
         libraries = []
+        black_list = (settings.MEDIASERVER_SYNC_BLACKLIST or '').split(",")
         for library in self._libraries:
+            if library.title in black_list:
+                continue
             match library.type:
                 case "movie":
                     library_type = MediaType.MOVIE.value
+                    image_list = self.__get_library_images(library.key, 1)
                 case "show":
                     library_type = MediaType.TV.value
+                    image_list = self.__get_library_images(library.key, 2)
                 case _:
                     continue
-            image_list = self.__get_library_images(library.key)
             libraries.append(
                 schemas.MediaServerLibrary(
                     id=library.key,
@@ -124,7 +128,7 @@ class Plex(metaclass=Singleton):
                     path=library.locations,
                     type=library_type,
                     image_list=image_list,
-                    link=f"{self._playhost or self._host}#!/media/{self._plex.machineIdentifier}"
+                    link=f"{self._playhost or self._host}web/index.html#!/media/{self._plex.machineIdentifier}"
                          f"/com.plexapp.plugins.library?source={library.key}"
                 )
             )
@@ -599,7 +603,7 @@ class Plex(metaclass=Singleton):
         拼装媒体播放链接
         :param item_id: 媒体的的ID
         """
-        return f'{self._playhost or self._host}#!/server/{self._plex.machineIdentifier}/details?key={item_id}'
+        return f'{self._playhost or self._host}web/index.html#!/server/{self._plex.machineIdentifier}/details?key={item_id}'
 
     def get_resume(self, num: int = 12) -> Optional[List[schemas.MediaServerPlayItem]]:
         """
@@ -628,7 +632,7 @@ class Plex(metaclass=Singleton):
                 link=link,
                 percent=item.viewOffset / item.duration * 100 if item.viewOffset and item.duration else 0
             ))
-        return ret_resume
+        return ret_resume[:num]
 
     def get_latest(self, num: int = 20) -> Optional[List[schemas.MediaServerPlayItem]]:
         """
@@ -652,4 +656,4 @@ class Plex(metaclass=Singleton):
                 image=image,
                 link=link
             ))
-        return ret_resume
+        return ret_resume[:num]

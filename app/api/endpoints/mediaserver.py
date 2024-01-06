@@ -58,7 +58,12 @@ def exists(title: str = None,
     exist: MediaServerItem = MediaServerOper(db).exists(
         title=meta.name, year=year, mtype=mtype, tmdbid=tmdbid, season=season
     )
-    if not exist:
+    if exist:
+        ret_info = {
+            "id": exist.item_id
+        }
+    """
+    else:
         # 服务器是否存在
         mediainfo = MediaInfo()
         mediainfo.from_dict({
@@ -75,10 +80,7 @@ def exists(title: str = None,
             ret_info = {
                 "id": exist.itemid
             }
-    else:
-        ret_info = {
-            "id": exist.item_id
-        }
+    """
     return schemas.Response(success=True if exist else False, data={
         "item": ret_info
     })
@@ -125,10 +127,7 @@ def latest(count: int = 18,
     """
     获取媒体服务器最新入库条目
     """
-    if not settings.MEDIASERVER:
-        return []
-    mediaserver = settings.MEDIASERVER.split(",")[0]
-    return MediaServerChain().latest(server=mediaserver, count=count)
+    return MediaServerChain().latest(count=count) or []
 
 
 @router.get("/playing", summary="正在播放条目", response_model=List[schemas.MediaServerPlayItem])
@@ -137,10 +136,7 @@ def playing(count: int = 12,
     """
     获取媒体服务器正在播放条目
     """
-    if not settings.MEDIASERVER:
-        return []
-    mediaserver = settings.MEDIASERVER.split(",")[0]
-    return MediaServerChain().playing(server=mediaserver, count=count)
+    return MediaServerChain().playing(count=count) or []
 
 
 @router.get("/library", summary="媒体库列表", response_model=List[schemas.MediaServerLibrary])
@@ -148,7 +144,4 @@ def library(_: schemas.TokenPayload = Depends(verify_token)) -> Any:
     """
     获取媒体服务器媒体库列表
     """
-    if not settings.MEDIASERVER:
-        return []
-    mediaserver = settings.MEDIASERVER.split(",")[0]
-    return MediaServerChain().librarys(server=mediaserver)
+    return MediaServerChain().librarys() or []
