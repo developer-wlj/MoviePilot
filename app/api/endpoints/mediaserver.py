@@ -2,14 +2,12 @@ from typing import Any, List
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from starlette.responses import RedirectResponse
 
 from app import schemas
 from app.chain.download import DownloadChain
 from app.chain.media import MediaChain
 from app.chain.mediaserver import MediaServerChain
 from app.core.config import settings
-from app.core.context import MediaInfo
 from app.core.metainfo import MetaInfo
 from app.core.security import verify_token
 from app.db import get_db
@@ -59,7 +57,12 @@ def exists(title: str = None,
     exist: MediaServerItem = MediaServerOper(db).exists(
         title=meta.name, year=year, mtype=mtype, tmdbid=tmdbid, season=season
     )
-    if not exist:
+    if exist:
+        ret_info = {
+            "id": exist.item_id
+        }
+    """
+    else:
         # 服务器是否存在
         mediainfo = MediaInfo()
         mediainfo.from_dict({
@@ -76,10 +79,7 @@ def exists(title: str = None,
             ret_info = {
                 "id": exist.itemid
             }
-    else:
-        ret_info = {
-            "id": exist.item_id
-        }
+    """
     return schemas.Response(success=True if exist else False, data={
         "item": ret_info
     })
@@ -118,3 +118,29 @@ def not_exists(media_in: schemas.MediaInfo,
         # 电视剧返回缺失的剧集
         return list(no_exists.get(mediakey).values())
     return []
+
+
+@router.get("/latest", summary="最新入库条目", response_model=List[schemas.MediaServerPlayItem])
+def latest(count: int = 18,
+           userinfo: schemas.TokenPayload = Depends(verify_token)) -> Any:
+    """
+    获取媒体服务器最新入库条目
+    """
+    return MediaServerChain().latest(count=count, username=userinfo.username) or []
+
+
+@router.get("/playing", summary="正在播放条目", response_model=List[schemas.MediaServerPlayItem])
+def playing(count: int = 12,
+            userinfo: schemas.TokenPayload = Depends(verify_token)) -> Any:
+    """
+    获取媒体服务器正在播放条目
+    """
+    return MediaServerChain().playing(count=count, username=userinfo.username) or []
+
+
+@router.get("/library", summary="媒体库列表", response_model=List[schemas.MediaServerLibrary])
+def library(userinfo: schemas.TokenPayload = Depends(verify_token)) -> Any:
+    """
+    获取媒体服务器媒体库列表
+    """
+    return MediaServerChain().librarys(username=userinfo.username) or []

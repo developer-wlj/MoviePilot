@@ -45,13 +45,17 @@ class Jellyfin(metaclass=Singleton):
         self.user = self.get_user()
         self.serverid = self.get_server_id()
 
-    def __get_jellyfin_librarys(self) -> List[dict]:
+    def __get_jellyfin_librarys(self, username: str = None) -> List[dict]:
         """
         获取Jellyfin媒体库的信息
         """
         if not self._host or not self._apikey:
             return []
-        req_url = f"{self._host}Users/{self.user}/Views?api_key={self._apikey}"
+        if username:
+            user = self.get_user(username)
+        else:
+            user = self.user
+        req_url = f"{self._host}Users/{user}/Views?api_key={self._apikey}"
         try:
             res = RequestUtils().get_res(req_url)
             if res:
@@ -63,14 +67,17 @@ class Jellyfin(metaclass=Singleton):
             logger.error(f"连接Users/Views 出错：" + str(e))
             return []
 
-    def get_librarys(self):
+    def get_librarys(self, username: str = None) -> List[schemas.MediaServerLibrary]:
         """
         获取媒体服务器所有媒体库列表
         """
         if not self._host or not self._apikey:
             return []
         libraries = []
-        for library in self.__get_jellyfin_librarys() or []:
+        black_list = (settings.MEDIASERVER_SYNC_BLACKLIST or '').split(",")
+        for library in self.__get_jellyfin_librarys(username) or []:
+            if library.get("Name") in black_list:
+                continue
             match library.get("CollectionType"):
                 case "movies":
                     library_type = MediaType.MOVIE.value
@@ -636,13 +643,18 @@ class Jellyfin(metaclass=Singleton):
         return f"{self._host}Items/{item_id}/" \
                f"Images/Backdrop?tag={image_tag}&fillWidth=666&api_key={self._apikey}"
 
-    def get_resume(self, num: int = 12) -> Optional[List[schemas.MediaServerPlayItem]]:
+    def get_resume(self, num: int = 12, username: str = None) -> Optional[List[schemas.MediaServerPlayItem]]:
         """
         获得继续观看
         """
         if not self._host or not self._apikey:
             return None
-        req_url = f"{self._host}Users/{self.user}/Items/Resume?Limit={num}&MediaTypes=Video&api_key={self._apikey}"
+        if username:
+            user = self.get_user(username)
+        else:
+            user = self.user
+        req_url = (f"{self._host}Users/{user}/Items/Resume?"
+                   f"Limit={num}&MediaTypes=Video&api_key={self._apikey}&Fields=ProductionYear")
         try:
             res = RequestUtils().get_res(req_url)
             if res:
@@ -660,14 +672,10 @@ class Jellyfin(metaclass=Singleton):
                         image = self.__get_local_image_by_id(item.get("Id"))
                     if item_type == MediaType.MOVIE.value:
                         title = item.get("Name")
-                        subtitle = item.get("Year")
+                        subtitle = item.get("ProductionYear")
                     else:
-                        if item.get("ParentIndexNumber") == 1:
-                            title = f'{item.get("SeriesName")}'
-                            subtitle = f'第{item.get("IndexNumber")}集'
-                        else:
-                            title = f'{item.get("SeriesName")}'
-                            subtitle = f'第{item.get("ParentIndexNumber")}季 第{item.get("IndexNumber")}集'
+                        title = f'{item.get("SeriesName")}'
+                        subtitle = f'S{item.get("ParentIndexNumber")}:{item.get("IndexNumber")} - {item.get("Name")}'
                     ret_resume.append(schemas.MediaServerPlayItem(
                         id=item.get("Id"),
                         title=title,
@@ -684,13 +692,18 @@ class Jellyfin(metaclass=Singleton):
             logger.error(f"连接Users/Items/Resume出错：" + str(e))
         return []
 
-    def get_latest(self, num=20) -> Optional[List[schemas.MediaServerPlayItem]]:
+    def get_latest(self, num=20, username: str = None) -> Optional[List[schemas.MediaServerPlayItem]]:
         """
         获得最近更新
         """
         if not self._host or not self._apikey:
             return None
-        req_url = f"{self._host}Users/{self.user}/Items/Latest?Limit={num}&MediaTypes=Video&api_key={self._apikey}"
+        if username:
+            user = self.get_user(username)
+        else:
+            user = self.user
+        req_url = (f"{self._host}Users/{user}/Items/Latest?"
+                   f"Limit={num}&MediaTypes=Video&api_key={self._apikey}&Fields=ProductionYear")
         try:
             res = RequestUtils().get_res(req_url)
             if res:
@@ -705,6 +718,7 @@ class Jellyfin(metaclass=Singleton):
                     ret_latest.append(schemas.MediaServerPlayItem(
                         id=item.get("Id"),
                         title=item.get("Name"),
+                        subtitle=item.get("ProductionYear"),
                         type=item_type,
                         image=image,
                         link=link

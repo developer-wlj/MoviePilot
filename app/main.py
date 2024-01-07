@@ -27,8 +27,10 @@ from app.helper.thread import ThreadHelper
 from app.helper.display import DisplayHelper
 from app.helper.resource import ResourceHelper
 from app.helper.sites import SitesHelper
+from app.helper.message import MessageHelper
 from app.scheduler import Scheduler
-from app.command import Command
+from app.command import Command, CommandChian
+from app.schemas import Notification
 
 
 # App
@@ -142,6 +144,21 @@ def start_tray():
     threading.Thread(target=TrayIcon.run, daemon=True).start()
 
 
+def check_auth():
+    """
+    检查认证状态
+    """
+    if SitesHelper().auth_level < 2:
+        err_msg = "用户认证失败，站点相关功能将无法使用！"
+        MessageHelper().put(f"注意：{err_msg}")
+        CommandChian().post_message(
+            Notification(
+                title="MoviePilot用户认证",
+                text=err_msg
+            )
+        )
+
+
 @App.on_event("shutdown")
 def shutdown_server():
     """
@@ -235,6 +252,8 @@ def start_module():
     Command()
     # 初始化路由
     init_routers()
+    # 检查认证状态
+    check_auth()
 
 
 if __name__ == '__main__':
