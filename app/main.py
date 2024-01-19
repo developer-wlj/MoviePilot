@@ -22,7 +22,7 @@ if SystemUtils.is_frozen():
 from app.core.config import settings
 from app.core.module import ModuleManager
 from app.core.plugin import PluginManager
-from app.db.init import init_db, update_db
+from app.db.init import init_db, update_db, init_super_user
 from app.helper.thread import ThreadHelper
 from app.helper.display import DisplayHelper
 from app.helper.resource import ResourceHelper
@@ -176,6 +176,8 @@ def shutdown_server():
     Scheduler().stop()
     # 停止线程池
     ThreadHelper().shutdown()
+    # 停止前端服务
+    stop_frontend()
 
 
 @App.on_event("startup")
@@ -236,6 +238,8 @@ def start_module():
         os.environ['PTVICOMO_PASSKEY'] = settings.PTVICOMO_PASSKEY
     else:
         pass
+    # 初始化超级管理员
+    init_super_user()
     # 虚拟显示
     DisplayHelper()
     # 站点管理
