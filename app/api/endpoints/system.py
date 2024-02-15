@@ -48,7 +48,7 @@ def get_env_setting(_: schemas.TokenPayload = Depends(verify_token)):
     查询系统环境变量，包括当前版本号
     """
     info = settings.dict(
-        exclude={"SECRET_KEY", "SUPERUSER_PASSWORD", "API_TOKEN"}
+        exclude={"SECRET_KEY", "SUPERUSER_PASSWORD"}
     )
     info.update({
         "VERSION": APP_VERSION,
@@ -57,6 +57,23 @@ def get_env_setting(_: schemas.TokenPayload = Depends(verify_token)):
     })
     return schemas.Response(success=True,
                             data=info)
+
+
+@router.post("/env", summary="更新系统环境变量", response_model=schemas.Response)
+def set_env_setting(env: dict,
+                    _: schemas.TokenPayload = Depends(verify_token)):
+    """
+    更新系统环境变量
+    """
+    for k, v in env.items():
+        if hasattr(settings, k):
+            setattr(settings, k, v)
+            if v is None or str(v) == "None":
+                v = ''
+            else:
+                v = str(v)
+            set_key(settings.CONFIG_PATH / "app.env", k, v)
+    return schemas.Response(success=True)
 
 
 @router.get("/progress/{process_type}", summary="实时进度")
@@ -104,7 +121,11 @@ def set_setting(key: str, value: Union[list, dict, bool, int, str] = None,
     """
     if hasattr(settings, key):
         setattr(settings, key, value)
-        set_key(settings.CONFIG_PATH / "app.env", key, str(value))
+        if value is None or str(value) == "None":
+            value = ''
+        else:
+            value = str(value)
+        set_key(settings.CONFIG_PATH / "app.env", key, value)
     else:
         SystemConfigOper().set(key, value)
     return schemas.Response(success=True)
