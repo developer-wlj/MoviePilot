@@ -11,10 +11,9 @@ from app.core.config import settings
 from app.log import logger
 from app.schemas.types import MediaType
 from app.utils.http import RequestUtils
-from app.utils.singleton import Singleton
 
 
-class Emby(metaclass=Singleton):
+class Emby:
 
     def __init__(self):
         self._host = settings.EMBY_HOST
