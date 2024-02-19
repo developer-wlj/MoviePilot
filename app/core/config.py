@@ -41,7 +41,7 @@ class Settings(BaseSettings):
     # API密钥，需要更换
     API_TOKEN: str = "moviepilot"
     # 登录页面电影海报,tmdb/bing
-    WALLPAPER: str = "tmdb"
+    WALLPAPER: str = "bing"
     # 网络代理 IP:PORT
     PROXY_HOST: Optional[str] = None
     # 媒体识别来源 themoviedb/douban
@@ -55,7 +55,7 @@ class Settings(BaseSettings):
     # TMDB图片地址
     TMDB_IMAGE_DOMAIN: str = "image.tmdb.org"
     # TMDB API地址
-    TMDB_API_DOMAIN: str = "api.themoviedb.org"
+    TMDB_API_DOMAIN: str = "api.tmdb.org"
     # TMDB API Key
     TMDB_API_KEY: str = "db55323b8d3e4154498498a75642b381"
     # TVDB API Key
@@ -82,7 +82,7 @@ class Settings(BaseSettings):
     SUBSCRIBE_RSS_INTERVAL: int = 30
     # 订阅搜索开关
     SUBSCRIBE_SEARCH: bool = False
-    # 用户认证站点 hhclub/audiences/hddolby/zmpt/freefarm/hdfans/wintersakura/leaves/1ptba/icc2022/iyuu/ptlsp/xingtan/ptvicomo/agsvpt
+    # 用户认证站点 hhclub/audiences/hddolby/zmpt/freefarm/hdfans/wintersakura/leaves/1ptba/icc2022/iyuu/ptlsp/xingtan/ptvicomo/agsvpt/hdkyl
     AUTH_SITE: str = ""
     # iyuu
     IYUU_SIGN: str = ""
@@ -130,6 +130,9 @@ class Settings(BaseSettings):
     # ptvicomo
     PTVICOMO_UID: str = ""
     PTVICOMO_PASSKEY: str = ""
+    # hdkyl
+    HDKYL_UID: str = ""
+    HDKYL_PASSKEY: str = ""
     # 交互搜索自动下载用户ID，使用,分割
     AUTO_DOWNLOAD_USER: Optional[str] = None
     # 消息通知渠道 telegram/wechat/slack，多个通知渠道用,分隔

@@ -236,6 +236,9 @@ def start_module():
     elif auth_site == 'ptvicomo':
         os.environ['PTVICOMO_UID'] = settings.PTVICOMO_UID
         os.environ['PTVICOMO_PASSKEY'] = settings.PTVICOMO_PASSKEY
+    elif auth_site == 'hdkyl':
+        os.environ['HDKYL_UID'] = settings.HDKYL_UID
+        os.environ['HDKYL_PASSKEY'] = settings.HDKYL_PASSKEY
     else:
         pass
     # 初始化超级管理员
