@@ -160,7 +160,7 @@ def get_message(token: str):
 
 
 @router.get("/logging", summary="实时日志")
-def get_logging(token: str, length: int = 50):
+def get_logging(token: str, length: int = 50, logfile: str = "moviepilot.log"):
     """
     实时获取系统日志
     length = -1 时, 返回text/plain
@@ -172,7 +172,7 @@ def get_logging(token: str, length: int = 50):
             detail="认证失败！",
         )
 
-    log_path = settings.LOG_PATH / 'moviepilot.log'
+    log_path = settings.LOG_PATH / logfile
 
     def log_generator():
         # 读取文件末尾50行，不使用tailer模块
@@ -187,6 +187,8 @@ def get_logging(token: str, length: int = 50):
     # 根据length参数返回不同的响应
     if length == -1:
         # 返回全部日志作为文本响应
+        if not log_path.exists():
+            return Response(content="日志文件不存在！", media_type="text/plain")
         with open(log_path, 'r', encoding='utf-8') as file:
             text = file.read()
         return Response(content=text, media_type="text/plain")
