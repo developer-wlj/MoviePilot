@@ -452,15 +452,15 @@ class SubscribeChain(ChainBase):
         获取订阅过滤规则，同时组合默认规则
         """
         # 默认过滤规则
-        default_rule = self.systemconfig.get(SystemConfigKey.DefaultFilterRules)
+        default_rule = self.systemconfig.get(SystemConfigKey.DefaultFilterRules) or {}
         return {
             "include": subscribe.include or default_rule.get("include"),
             "exclude": subscribe.exclude or default_rule.get("exclude"),
             "quality": subscribe.quality or default_rule.get("quality"),
             "resolution": subscribe.resolution or default_rule.get("resolution"),
             "effect": subscribe.effect or default_rule.get("effect"),
-            "tv_size": subscribe.tv_size or default_rule.get("tv_size"),
-            "movie_size": subscribe.movie_size or default_rule.get("movie_size"),
+            "tv_size": default_rule.get("tv_size"),
+            "movie_size": default_rule.get("movie_size"),
         }
 
     def match(self, torrents: Dict[str, List[Context]]):
