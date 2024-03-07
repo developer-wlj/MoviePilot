@@ -186,61 +186,57 @@ def start_module():
     启动模块
     """
     auth_site = settings.AUTH_SITE
-    if not auth_site:
-        pass
-    elif auth_site == 'iyuu':
+    if 'iyuu' in auth_site:
         os.environ['IYUU_SIGN'] = settings.IYUU_SIGN
-    elif auth_site == 'hhclub':
+    if 'hhclub' in auth_site:
         os.environ['HHCLUB_USERNAME'] = settings.HHCLUB_USERNAME
         os.environ['HHCLUB_PASSKEY'] = settings.HHCLUB_PASSKEY
-    elif auth_site == 'audiences':
+    if 'audiences' in auth_site:
         os.environ['AUDIENCES_UID'] = settings.AUDIENCES_UID
         os.environ['AUDIENCES_PASSKEY'] = settings.AUDIENCES_PASSKEY
-    elif auth_site == 'hddolby':
+    if 'hddolby' in auth_site:
         os.environ['HDDOLBY_ID'] = settings.HDDOLBY_ID
         os.environ['HDDOLBY_PASSKEY'] = settings.HDDOLBY_PASSKEY
-    elif auth_site == 'zmpt':
+    if 'zmpt' in auth_site:
         os.environ['ZMPT_UID'] = settings.ZMPT_UID
         os.environ['ZMPT_PASSKEY'] = settings.ZMPT_PASSKEY
-    elif auth_site == 'freefarm':
+    if 'freefarm' in auth_site:
         os.environ['FREEFARM_UID'] = settings.FREEFARM_UID
         os.environ['FREEFARM_PASSKEY'] = settings.FREEFARM_PASSKEY
-    elif auth_site == 'hdfans':
+    if 'hdfans' in auth_site:
         os.environ['HDFANS_UID'] = settings.HDFANS_UID
         os.environ['HDFANS_PASSKEY'] = settings.HDFANS_PASSKEY
-    elif auth_site == 'wintersakura':
+    if 'wintersakura' in auth_site:
         os.environ['WINTERSAKURA_UID'] = settings.WINTERSAKURA_UID
         os.environ['WINTERSAKURA_PASSKEY'] = settings.WINTERSAKURA_PASSKEY
-    elif auth_site == 'leaves':
+    if 'leaves' in auth_site:
         os.environ['LEAVES_UID'] = settings.LEAVES_UID
         os.environ['LEAVES_PASSKEY'] = settings.LEAVES_PASSKEY
-    elif auth_site == '1ptba':
+    if '1ptba' in auth_site:
         settings.AUTH_SITE = 'ptba'
         os.environ['PTBA_UID'] = settings.ONEPTBA_UID
         os.environ['PTBA_PASSKEY'] = settings.ONEPTBA_PASSKEY
-    elif auth_site == 'ptba':
+    if 'ptba' in auth_site:
         os.environ['PTBA_UID'] = settings.PTBA_UID
         os.environ['PTBA_PASSKEY'] = settings.PTBA_PASSKEY
-    elif auth_site == 'icc2022':
+    if 'icc2022' in auth_site:
         os.environ['ICC2022_UID'] = settings.ICC2022_UID
         os.environ['ICC2022_PASSKEY'] = settings.ICC2022_PASSKEY
-    elif auth_site == 'ptlsp':
+    if 'ptlsp' in auth_site:
         os.environ['PTLSP_UID'] = settings.PTLSP_UID
         os.environ['PTLSP_PASSKEY'] = settings.PTLSP_PASSKEY
-    elif auth_site == 'xingtan':
+    if 'xingtan' in auth_site:
         os.environ['XINGTAN_UID'] = settings.XINGTAN_UID
         os.environ['XINGTAN_PASSKEY'] = settings.XINGTAN_PASSKEY
-    elif auth_site == 'agsvpt':
+    if 'agsvpt' in auth_site:
         os.environ['AGSVPT_UID'] = settings.AGSVPT_UID
         os.environ['AGSVPT_PASSKEY'] = settings.AGSVPT_PASSKEY
-    elif auth_site == 'ptvicomo':
+    if 'ptvicomo' in auth_site:
         os.environ['PTVICOMO_UID'] = settings.PTVICOMO_UID
         os.environ['PTVICOMO_PASSKEY'] = settings.PTVICOMO_PASSKEY
-    elif auth_site == 'hdkyl':
+    if 'hdkyl' in auth_site:
         os.environ['HDKYL_UID'] = settings.HDKYL_UID
         os.environ['HDKYL_PASSKEY'] = settings.HDKYL_PASSKEY
-    else:
-        pass
     # 初始化超级管理员
     init_super_user()
     # 虚拟显示
