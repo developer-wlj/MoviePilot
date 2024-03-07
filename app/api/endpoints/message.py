@@ -36,21 +36,11 @@ async def user_message(background_tasks: BackgroundTasks, request: Request):
     return schemas.Response(success=True)
 
 
-@router.get("/", summary="VoceChat验证")
-def vocechat_verify() -> Any:
-    """
-    VoceChat验证响应
-    """
-    return {"status": "OK"}
-
-
-@router.get("/", summary="微信验证")
 def wechat_verify(echostr: str, msg_signature: str,
                   timestamp: Union[str, int], nonce: str) -> Any:
     """
     微信验证响应
     """
-    logger.info(f"收到微信验证请求: {echostr}")
     try:
         wxcpt = WXBizMsgCrypt(sToken=settings.WECHAT_TOKEN,
                               sEncodingAESKey=settings.WECHAT_ENCODING_AESKEY,
@@ -66,6 +56,28 @@ def wechat_verify(echostr: str, msg_signature: str,
         logger.error("微信请求验证失败 VerifyURL ret: %s" % str(ret))
     # 验证URL成功，将sEchoStr返回给企业号
     return PlainTextResponse(sEchoStr)
+
+
+def vocechat_verify(token: str) -> Any:
+    """
+    VoceChat验证响应
+    """
+    if token == settings.API_TOKEN:
+        return {"status": "OK"}
+    return {"status": "ERROR"}
+
+
+@router.get("/", summary="回调请求验证")
+def incoming_verify(token: str = None, echostr: str = None, msg_signature: str = None,
+                    timestamp: Union[str, int] = None, nonce: str = None) -> Any:
+    """
+    微信/VoceChat等验证响应
+    """
+    logger.info(f"收到验证请求: token={token}, echostr={echostr}, "
+                f"msg_signature={msg_signature}, timestamp={timestamp}, nonce={nonce}")
+    if echostr and msg_signature and timestamp and nonce:
+        return wechat_verify(echostr, msg_signature, timestamp, nonce)
+    return vocechat_verify(token)
 
 
 @router.get("/switchs", summary="查询通知消息渠道开关", response_model=List[NotificationSwitch])
