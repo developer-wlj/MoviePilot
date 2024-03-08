@@ -143,9 +143,8 @@ class SubscribeChain(ChainBase):
                 text = f"评分：{mediainfo.vote_average}，来自用户：{username or userid}"
             else:
                 text = f"评分：{mediainfo.vote_average}"
-            # 广而告之
-            self.post_message(Notification(channel=channel,
-                                           mtype=NotificationType.Subscribe,
+            # 群发
+            self.post_message(Notification(mtype=NotificationType.Subscribe,
                                            title=f"{mediainfo.title_year} {metainfo.season} 已添加订阅",
                                            text=text,
                                            image=mediainfo.get_message_image()))
@@ -323,6 +322,7 @@ class SubscribeChain(ChainBase):
             downloads, lefts = self.downloadchain.batch_download(
                 contexts=matched_contexts,
                 no_exists=no_exists,
+                userid=subscribe.username,
                 username=subscribe.username,
                 save_path=subscribe.save_path
             )
@@ -708,6 +708,7 @@ class SubscribeChain(ChainBase):
             logger.info(f'{mediainfo.title_year} 匹配完成，共匹配到{len(_match_context)}个资源')
             downloads, lefts = self.downloadchain.batch_download(contexts=_match_context,
                                                                  no_exists=no_exists,
+                                                                 userid=subscribe.username,
                                                                  username=subscribe.username,
                                                                  save_path=subscribe.save_path)
             # 判断是否要完成订阅
