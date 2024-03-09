@@ -278,7 +278,7 @@ class Scheduler(metaclass=Singleton):
                 kwargs = job.get("kwargs") or {}
             job["func"](*args, **kwargs)
         except Exception as e:
-            logger.error(f"定时任务 {job_id} 执行失败：{str(e)}")
+            logger.error(f"定时任务 {job_id} 执行失败：{str(e)} - {traceback.format_exc()}")
         # 运行结束
         with self._lock:
             try:
@@ -290,6 +290,8 @@ class Scheduler(metaclass=Singleton):
         """
         更新插件定时服务
         """
+        if not self._scheduler:
+            return
         # 移除该插件的全部服务
         self.remove_plugin_job(pid)
         # 获取插件服务列表
@@ -332,6 +334,8 @@ class Scheduler(metaclass=Singleton):
         """
         移除插件定时服务
         """
+        if not self._scheduler:
+            return
         with self._lock:
             # 获取插件名称
             plugin_name = PluginManager().get_plugin_attr(pid, "plugin_name")
@@ -351,6 +355,8 @@ class Scheduler(metaclass=Singleton):
         """
         当前所有任务
         """
+        if not self._scheduler:
+            return []
         with self._lock:
             # 返回计时任务
             schedulers = []

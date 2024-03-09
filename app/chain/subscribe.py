@@ -859,20 +859,12 @@ class SubscribeChain(ChainBase):
         messages = []
         for subscribe in subscribes:
             if subscribe.type == MediaType.MOVIE.value:
-                if subscribe.tmdbid:
-                    link = f"https://www.themoviedb.org/movie/{subscribe.tmdbid}"
-                else:
-                    link = f"https://movie.douban.com/subject/{subscribe.doubanid}"
-                messages.append(f"{subscribe.id}. [{subscribe.name}（{subscribe.year}）]({link})")
+                messages.append(f"{subscribe.id}. {subscribe.name}（{subscribe.year}）")
             else:
-                if subscribe.tmdbid:
-                    link = f"https://www.themoviedb.org/tv/{subscribe.tmdbid}"
-                else:
-                    link = f"https://movie.douban.com/subject/{subscribe.doubanid}"
-                messages.append(f"{subscribe.id}. [{subscribe.name}（{subscribe.year}）]({link}) "
+                messages.append(f"{subscribe.id}. {subscribe.name}（{subscribe.year}）"
                                 f"第{subscribe.season}季 "
-                                f"_{subscribe.total_episode - (subscribe.lack_episode or subscribe.total_episode)}"
-                                f"/{subscribe.total_episode}_")
+                                f"[{subscribe.total_episode - (subscribe.lack_episode or subscribe.total_episode)}"
+                                f"/{subscribe.total_episode}]")
         # 发送列表
         self.post_message(Notification(channel=channel,
                                        title=title, text='\n'.join(messages), userid=userid))
