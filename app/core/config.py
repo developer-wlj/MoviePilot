@@ -282,10 +282,13 @@ class Settings(BaseSettings):
     GITHUB_TOKEN: Optional[str] = None
     # 自动检查和更新站点资源包（站点索引、认证等） 开启后相应的启动MP的时间增加30-120秒左右
     AUTO_UPDATE_RESOURCE: bool = False
+    # 元数据识别缓存过期时间（小时）
+    META_CACHE_EXPIRE: int = 0
 
     @validator("SUBSCRIBE_RSS_INTERVAL",
                "COOKIECLOUD_INTERVAL",
                "MEDIASERVER_SYNC_INTERVAL",
+               "META_CACHE_EXPIRE",
                pre=True, always=True)
     def convert_int(cls, value):
         if not value:
@@ -334,7 +337,7 @@ class Settings(BaseSettings):
                 "torrents": 100,
                 "douban": 512,
                 "fanart": 512,
-                "meta": 15 * 24 * 3600
+                "meta": (self.META_CACHE_EXPIRE or 168) * 3600
             }
         return {
             "tmdb": 256,
@@ -342,7 +345,7 @@ class Settings(BaseSettings):
             "torrents": 50,
             "douban": 256,
             "fanart": 128,
-            "meta": 7 * 24 * 3600
+            "meta": (self.META_CACHE_EXPIRE or 72) * 3600
         }
 
     @property
