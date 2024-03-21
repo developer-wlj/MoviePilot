@@ -84,7 +84,7 @@ class Settings(BaseSettings):
     SUBSCRIBE_RSS_INTERVAL: int = 30
     # 订阅搜索开关
     SUBSCRIBE_SEARCH: bool = False
-    # 用户认证站点 hhclub/audiences/hddolby/zmpt/freefarm/hdfans/wintersakura/leaves/1ptba/icc2022/iyuu/ptlsp/xingtan/ptvicomo/agsvpt/hdkyl
+    # 用户认证站点 hhclub/audiences/hddolby/zmpt/freefarm/hdfans/wintersakura/leaves/1ptba/icc2022/iyuu/ptlsp/xingtan/ptvicomo/agsvpt/hdkyl/qingwa
     AUTH_SITE: str = ""
     # iyuu
     IYUU_SIGN: str = ""
@@ -135,6 +135,9 @@ class Settings(BaseSettings):
     # hdkyl
     HDKYL_UID: str = ""
     HDKYL_PASSKEY: str = ""
+    # qingwa
+    QINGWA_UID: str = ""
+    QINGWA_PASSKEY: str = ""
     # 交互搜索自动下载用户ID，使用,分割
     AUTO_DOWNLOAD_USER: Optional[str] = None
     # 消息通知渠道 telegram/wechat/slack/synologychat/vocechat，多个通知渠道用,分隔
@@ -331,7 +334,7 @@ class Settings(BaseSettings):
     @property
     def LOG_PATH(self):
         return self.CONFIG_PATH / "logs"
-    
+
     @property
     def COOKIE_PATH(self):
         return self.CONFIG_PATH / "cookies"
