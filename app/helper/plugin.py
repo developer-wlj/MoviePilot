@@ -22,6 +22,10 @@ class PluginHelper(metaclass=Singleton):
 
     _base_url = "https://raw.githubusercontent.com/%s/%s/main/"
 
+    _install_reg = "https://movie-pilot.org/plugin/install/%s"
+
+    _install_statistic = "https://movie-pilot.org/plugin/statistic"
+
     @cached(cache=TTLCache(maxsize=100, ttl=1800))
     def get_plugins(self, repo_url: str) -> Dict[str, dict]:
         """
@@ -62,6 +66,27 @@ class PluginHelper(metaclass=Singleton):
             logger.error(f"解析Github仓库地址失败：{str(e)} - {traceback.format_exc()}")
             return None, None
         return user, repo
+
+    @cached(cache=TTLCache(maxsize=1, ttl=1800))
+    def get_statistic(self) -> Dict:
+        """
+        获取插件安装统计
+        """
+        res = RequestUtils(timeout=10).get_res(self._install_statistic)
+        if res and res.status_code == 200:
+            return res.json()
+        return {}
+
+    def install_reg(self, pid: str) -> bool:
+        """
+        安装插件统计
+        """
+        if not pid:
+            return False
+        res = RequestUtils(timeout=5).get_res(self._install_reg % pid)
+        if res and res.status_code == 200:
+            return True
+        return False
 
     def install(self, pid: str, repo_url: str) -> Tuple[bool, str]:
         """
@@ -162,4 +187,7 @@ class PluginHelper(metaclass=Singleton):
         requirements_file = plugin_dir / "requirements.txt"
         # if requirements_file.exists():
         #     SystemUtils.execute(f"pip install -r {requirements_file} > /dev/null 2>&1")
+        # 安装成功后统计
+        self.install_reg(pid)
+
         return True, ""
