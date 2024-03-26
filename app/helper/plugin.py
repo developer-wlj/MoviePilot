@@ -2,6 +2,7 @@ import json
 import os
 import shutil
 import stat
+import subprocess
 import traceback
 from pathlib import Path
 from typing import Dict, Tuple, Optional, List
@@ -185,8 +186,18 @@ class PluginHelper(metaclass=Singleton):
         __download_files(pid.lower(), file_list)
         # 插件目录下如有requirements.txt则安装依赖
         requirements_file = plugin_dir / "requirements.txt"
-        # if requirements_file.exists():
-        #     SystemUtils.execute(f"pip install -r {requirements_file} > /dev/null 2>&1")
+        if requirements_file.exists():
+            # 未验证
+            # SystemUtils.execute(f"\"{Path(settings.ROOT_PATH).parent.parent.joinpath('Python3.11').joinpath('python')}\" -m pip install -r \"{requirements_file}\" > NUL 2>&1")
+            # 已验证 没问题
+            process = subprocess.Popen(
+                f"\"{Path(settings.ROOT_PATH).parent.parent.joinpath('Python3.11').joinpath('python')}\" -m pip install -r \"{requirements_file}\"",
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            # 也可以分别获取输出
+            stdout = process.stdout.read().decode()
+            stderr = process.stderr.read().decode()
+            logger.info(f"标准输出：{stdout}")
+            logger.error(f"错误输出：{stderr}")
         # 安装成功后统计
         self.install_reg(pid)
 
