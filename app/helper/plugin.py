@@ -190,14 +190,18 @@ class PluginHelper(metaclass=Singleton):
             # 未验证
             # SystemUtils.execute(f"\"{Path(settings.ROOT_PATH).parent.parent.joinpath('Python3.11').joinpath('python')}\" -m pip install -r \"{requirements_file}\" > NUL 2>&1")
             # 已验证 没问题
+            logger.info(f"执行命令：\"{Path(settings.ROOT_PATH).parent.parent.joinpath('Python3.11').joinpath('python')}\" -m pip install -r \"{requirements_file}\"")
             process = subprocess.Popen(
                 f"\"{Path(settings.ROOT_PATH).parent.parent.joinpath('Python3.11').joinpath('python')}\" -m pip install -r \"{requirements_file}\"",
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            # 也可以分别获取输出
-            stdout = process.stdout.read().decode()
-            stderr = process.stderr.read().decode()
-            logger.info(f"标准输出：{stdout}")
-            logger.error(f"错误输出：{stderr}")
+            # 获取命令的输出
+            stdout, stderr = process.communicate()
+            # 检查命令是否成功执行
+            if process.returncode == 0:
+                logger.info(f"标准输出：{stdout.decode()}")
+            else:
+                logger.error(f"pip安装插件失败：{stderr}")
+                return False, f"pip安装插件失败：{stderr}"
         # 安装成功后统计
         self.install_reg(pid)
 
