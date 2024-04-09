@@ -151,13 +151,15 @@ class SearchChain(ChainBase):
         _count = 0
         if mediainfo:
             # 英文标题应该在别名/原标题中，不需要再匹配
-            logger.info(f"标题：{mediainfo.title}，原标题：{mediainfo.original_title}，别名：{mediainfo.names}")
+            logger.info(f"开始匹配结果 标题：{mediainfo.title}，原标题：{mediainfo.original_title}，别名：{mediainfo.names}")
             self.progress.update(value=0, text=f'开始匹配，总 {_total} 个资源 ...', key=ProgressKey.Search)
             for torrent in torrents:
                 _count += 1
                 self.progress.update(value=(_count / _total) * 96,
                                      text=f'正在匹配 {torrent.site_name}，已完成 {_count} / {_total} ...',
                                      key=ProgressKey.Search)
+                if not torrent.title:
+                    continue
                 # 比对IMDBID
                 if torrent.imdbid \
                         and mediainfo.imdb_id \
@@ -194,44 +196,46 @@ class SearchChain(ChainBase):
                             continue
                 # 识别的中英文名
                 meta_names = {
-                        StringUtils.clear_upper(torrent_meta.cn_name),
-                        StringUtils.clear_upper(torrent_meta.en_name)
-                    } - {""}
+                                 StringUtils.clear_upper(torrent_meta.cn_name),
+                                 StringUtils.clear_upper(torrent_meta.en_name)
+                             } - {""}
+                # 媒体标题、原标题
+                media_titles = {
+                                   StringUtils.clear_upper(mediainfo.title),
+                                   StringUtils.clear_upper(mediainfo.original_title)
+                               } - {""}
                 # 比对标题和原语种标题
-                if meta_names.intersection(
-                        {
-                            StringUtils.clear_upper(mediainfo.title),
-                            StringUtils.clear_upper(mediainfo.original_title)
-                        }
-                ):
+                if meta_names.intersection(media_titles):
                     logger.info(f'{mediainfo.title} 通过标题匹配到资源：{torrent.site_name} - {torrent.title}')
                     _match_torrents.append(torrent)
                     continue
-                # 在标题中判断是否存在标题与原语种标题
-                if torrent.title:
-                    titles = re.split(r'[\s/【】.\[\]\-]+', torrent.title)
-                    if str(mediainfo.title) in titles \
-                            or str(mediainfo.original_title) in titles:
-                        logger.info(f'{mediainfo.title} 通过标题匹配到资源：{torrent.site_name} - {torrent.title}，'
-                                    f'标题：{torrent.title}')
+                # 比对别名和译名
+                media_names = {StringUtils.clear_upper(name) for name in mediainfo.names if name}
+                if media_names:
+                    if meta_names.intersection(media_names):
+                        logger.info(f'{mediainfo.title} 通过别名或译名匹配到资源：{torrent.site_name} - {torrent.title}')
                         _match_torrents.append(torrent)
                         continue
-                # 在副标题中判断是否存在标题与原语种标题
+                # 标题拆分
+                titles = [StringUtils.clear_upper(t) for t in re.split(r'[\s/【】.\[\]\-]+',
+                                                                       torrent.title) if t]
+                # 在标题中判断是否存在标题、原语种标题、别名、译名
+                if meta_names.intersection(titles) or media_names.intersection(titles):
+                    logger.info(f'{mediainfo.title} 通过标题匹配到资源：{torrent.site_name} - {torrent.title}，'
+                                f'标题：{torrent.title}')
+                    _match_torrents.append(torrent)
+                    continue
+                # 在副标题中判断是否存在标题、原语种标题、别名、译名
                 if torrent.description:
-                    subtitles = re.split(r'[\s/|]+', torrent.description)
-                    if str(mediainfo.title) in subtitles \
-                            or str(mediainfo.original_title) in subtitles:
+                    subtitles = {StringUtils.clear_upper(t) for t in re.split(r'[\s/|]+',
+                                                                              torrent.description) if t}
+                    if meta_names.intersection(subtitles) or media_names.intersection(subtitles):
                         logger.info(f'{mediainfo.title} 通过副标题匹配到资源：{torrent.site_name} - {torrent.title}，'
                                     f'副标题：{torrent.description}')
                         _match_torrents.append(torrent)
                         continue
-                # 比对别名和译名
-                if meta_names.intersection(set(mediainfo.names)):
-                    logger.info(f'{mediainfo.title} 通过别名或译名匹配到资源：{torrent.site_name} - {torrent.title}')
-                    _match_torrents.append(torrent)
-                    continue
                 # 未匹配
-                logger.warn(f'{torrent.site_name} - {torrent.title} 标题不匹配')
+                logger.warn(f'{torrent.site_name} - {torrent.title} 标题不匹配，识别名称：{media_names}')
             # 匹配完成
             logger.info(f"匹配完成，共匹配到 {len(_match_torrents)} 个资源")
             self.progress.update(value=97,
@@ -258,14 +262,14 @@ class SearchChain(ChainBase):
                 logger.warn(f'{keyword or mediainfo.title} 没有符合优先级规则的资源')
                 return []
         # 使用过滤规则再次过滤
-        if filter_rule:
+        if _match_torrents:
             logger.info(f'开始过滤规则过滤，当前规则：{filter_rule} ...')
             _match_torrents = self.filter_torrents_by_rule(torrents=_match_torrents,
                                                            mediainfo=mediainfo,
                                                            filter_rule=filter_rule)
-            if not _match_torrents:
-                logger.warn(f'{keyword or mediainfo.title} 没有符合过滤规则的资源')
-                return []
+        if not _match_torrents:
+            logger.warn(f'{keyword or mediainfo.title} 没有符合过滤规则的资源')
+            return []
         # 去掉mediainfo中多余的数据
         mediainfo.clear()
         # 组装上下文
