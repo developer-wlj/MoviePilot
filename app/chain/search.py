@@ -34,19 +34,27 @@ class SearchChain(ChainBase):
         self.torrenthelper = TorrentHelper()
 
     def search_by_id(self, tmdbid: int = None, doubanid: str = None,
-                     mtype: MediaType = None, area: str = "title") -> List[Context]:
+                     mtype: MediaType = None, area: str = "title", season: int = None) -> List[Context]:
         """
         根据TMDBID/豆瓣ID搜索资源，精确匹配，但不不过滤本地存在的资源
         :param tmdbid: TMDB ID
         :param doubanid: 豆瓣 ID
         :param mtype: 媒体，电影 or 电视剧
         :param area: 搜索范围，title or imdbid
+        :param season: 季数
         """
         mediainfo = self.recognize_media(tmdbid=tmdbid, doubanid=doubanid, mtype=mtype)
         if not mediainfo:
             logger.error(f'{tmdbid} 媒体信息识别失败！')
             return []
-        results = self.process(mediainfo=mediainfo, area=area)
+        no_exists = None
+        if season:
+            no_exists = {
+                tmdbid or doubanid: {
+                    season: NotExistMediaInfo(episodes=[])
+                }
+            }
+        results = self.process(mediainfo=mediainfo, area=area, no_exists=no_exists)
         # 保存眲结果
         bytes_results = pickle.dumps(results)
         self.systemconfig.set(SystemConfigKey.SearchResults, bytes_results)
@@ -169,15 +177,17 @@ class SearchChain(ChainBase):
                     continue
                 # 识别
                 torrent_meta = MetaInfo(title=torrent.title, subtitle=torrent.description)
+                if torrent.title != torrent_meta.org_string:
+                    logger.info(f"种子名称应用识别词后发生改变：{torrent.title} => {torrent_meta.org_string}")
                 # 比对种子识别类型
                 if torrent_meta.type == MediaType.TV and mediainfo.type != MediaType.TV:
                     logger.warn(f'{torrent.site_name} - {torrent.title} 种子标题类型为 {torrent_meta.type.value}，'
-                                f'需要是 {mediainfo.type.value}，不匹配')
+                                f'不匹配 {mediainfo.type.value}')
                     continue
                 # 比对种子在站点中的类型
                 if torrent.category == MediaType.TV.value and mediainfo.type != MediaType.TV:
                     logger.warn(f'{torrent.site_name} - {torrent.title} 种子在站点中归类为 {torrent.category}，'
-                                f'需要是 {mediainfo.type.value}，不匹配')
+                                f'不匹配 {mediainfo.type.value}')
                     continue
                 # 比对年份
                 if mediainfo.year:
@@ -185,14 +195,14 @@ class SearchChain(ChainBase):
                         # 剧集年份，每季的年份可能不同
                         if torrent_meta.year and torrent_meta.year not in [year for year in
                                                                            mediainfo.season_years.values()]:
-                            logger.warn(f'{torrent.site_name} - {torrent.title} 年份不匹配')
+                            logger.warn(f'{torrent.site_name} - {torrent.title} 年份不匹配 {mediainfo.season_years}')
                             continue
                     else:
                         # 电影年份，上下浮动1年
                         if torrent_meta.year not in [str(int(mediainfo.year) - 1),
                                                      mediainfo.year,
                                                      str(int(mediainfo.year) + 1)]:
-                            logger.warn(f'{torrent.site_name} - {torrent.title} 年份不匹配')
+                            logger.warn(f'{torrent.site_name} - {torrent.title} 年份不匹配 {mediainfo.year}')
                             continue
                 # 识别的中英文名
                 meta_names = {
@@ -218,7 +228,7 @@ class SearchChain(ChainBase):
                         continue
                 # 标题拆分
                 titles = [StringUtils.clear_upper(t) for t in re.split(r'[\s/【】.\[\]\-]+',
-                                                                       torrent.title) if t]
+                                                                       torrent_meta.org_string) if t]
                 # 在标题中判断是否存在标题、原语种标题、别名、译名
                 if meta_names.intersection(titles) or media_names.intersection(titles):
                     logger.info(f'{mediainfo.title} 通过标题匹配到资源：{torrent.site_name} - {torrent.title}，'
