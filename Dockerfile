@@ -83,7 +83,8 @@ RUN cp -f /app/nginx.conf /etc/nginx/nginx.template.conf \
     && mv -f /tmp/MoviePilot-Plugins-main/plugins/* /app/app/plugins/ \
     && curl -sL "https://github.com/jxxghp/MoviePilot-Resources/archive/refs/heads/main.zip" | busybox unzip -d /tmp - \
     && mv -f /tmp/MoviePilot-Resources-main/resources/* /app/app/helper/ \
-    && rm -rf /tmp/*
+    && rm -rf /tmp/* \
+    && find /app/app/plugins -name requirements.txt -type f -exec pip install -r {} \;
 EXPOSE 3000
 VOLUME [ "/config" ]
 ENTRYPOINT [ "/entrypoint" ]
