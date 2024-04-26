@@ -38,6 +38,7 @@ class DoubanApi(metaclass=Singleton):
         "tv_search": "/search/movie",
         "book_search": "/search/book",
         "group_search": "/search/group",
+        "person_search": "/search/celebrity",
 
         # 各类主题合集
         # start: int = 0&count: int = 20
@@ -190,13 +191,13 @@ class DoubanApi(metaclass=Singleton):
             '_ts': ts,
             '_sig': self.__sign(url=req_url, ts=ts)
         })
-        resp = RequestUtils(
+        with RequestUtils(
             ua=choice(self._user_agents),
             session=self._session
-        ).get_res(url=req_url, params=params)
-        if resp.status_code == 400 and "rate_limit" in resp.text:
-            return resp.json()
-        return resp.json() if resp else {}
+        ).get_res(url=req_url, params=params) as resp:
+            if resp is not None and resp.status_code == 400 and "rate_limit" in resp.text:
+                return resp.json()
+            return resp.json() if resp else {}
 
     @lru_cache(maxsize=settings.CACHE_CONF.get('douban'))
     def __post(self, url: str, **kwargs) -> dict:
@@ -227,6 +228,13 @@ class DoubanApi(metaclass=Singleton):
             return resp.json()
         return resp.json() if resp else {}
 
+    def imdbid(self, imdbid: str,
+               ts=datetime.strftime(datetime.now(), '%Y%m%d')):
+        """
+        IMDBID搜索
+        """
+        return self.__post(self._urls["imdbid"] % imdbid, _ts=ts)
+
     def search(self, keyword: str, start: int = 0, count: int = 20,
                ts=datetime.strftime(datetime.now(), '%Y%m%d')) -> dict:
         """
@@ -234,13 +242,6 @@ class DoubanApi(metaclass=Singleton):
         """
         return self.__invoke(self._urls["search"], q=keyword,
                              start=start, count=count, _ts=ts)
-
-    def imdbid(self, imdbid: str,
-               ts=datetime.strftime(datetime.now(), '%Y%m%d')):
-        """
-        IMDBID搜索
-        """
-        return self.__post(self._urls["imdbid"] % imdbid, _ts=ts)
 
     def movie_search(self, keyword: str, start: int = 0, count: int = 20,
                      ts=datetime.strftime(datetime.now(), '%Y%m%d')):
@@ -272,6 +273,14 @@ class DoubanApi(metaclass=Singleton):
         小组搜索
         """
         return self.__invoke(self._urls["group_search"], q=keyword,
+                             start=start, count=count, _ts=ts)
+
+    def person_search(self, keyword: str, start: int = 0, count: int = 20,
+                      ts=datetime.strftime(datetime.now(), '%Y%m%d')):
+        """
+        人物搜索
+        """
+        return self.__invoke(self._urls["person_search"], q=keyword,
                              start=start, count=count, _ts=ts)
 
     def movie_showing(self, start: int = 0, count: int = 20,

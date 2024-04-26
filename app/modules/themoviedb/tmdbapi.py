@@ -95,6 +95,14 @@ class TmdbApi:
                 ret_infos.append(tv)
         return ret_infos
 
+    def search_persons(self, name: str) -> List[dict]:
+        """
+        查询模糊匹配的所有人物TMDB信息
+        """
+        if not name:
+            return []
+        return self.search.people(term=name) or []
+
     @staticmethod
     def __compare_names(file_name: str, tmdb_names: list) -> bool:
         """
