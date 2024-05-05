@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     # API路径
     API_V1_STR: str = "/api/v1"
     # 前端资源路径
-    FRONTEND_PATH: str = "/public"
+    FRONTEND_PATH: str = "../../Nginx1.15.11/html/MoviePilot-Frontend"
     # 密钥
     SECRET_KEY: str = secrets.token_urlsafe(32)
     # 允许的域名
