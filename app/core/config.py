@@ -142,6 +142,9 @@ class Settings(BaseSettings):
     # qingwa
     QINGWA_UID: str = ""
     QINGWA_PASSKEY: str = ""
+    # discfan
+    DISCFAN_UID: str = ""
+    DISCFAN_PASSKEY: str = ""
     # 交互搜索自动下载用户ID，使用,分割
     AUTO_DOWNLOAD_USER: Optional[str] = None
     # 消息通知渠道 telegram/wechat/slack/synologychat/vocechat，多个通知渠道用,分隔

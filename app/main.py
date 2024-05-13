@@ -244,6 +244,9 @@ def start_module():
     if 'qingwa' in auth_site:
         os.environ['QINGWA_UID'] = settings.QINGWA_UID
         os.environ['QINGWA_PASSKEY'] = settings.QINGWA_PASSKEY
+    if 'discfan' in auth_site:
+        os.environ['DISCFAN_UID'] = settings.DISCFAN_UID
+        os.environ['DISCFAN_PASSKEY'] = settings.DISCFAN_PASSKEY
     # 初始化超级管理员
     init_super_user()
     # 虚拟显示
