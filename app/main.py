@@ -199,8 +199,6 @@ def shutdown_server():
     Scheduler().stop()
     # 停止线程池
     ThreadHelper().shutdown()
-    # 停止前端服务
-    stop_frontend()
 
 
 @App.on_event("startup")
