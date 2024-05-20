@@ -1,6 +1,7 @@
 import os
 import secrets
 import sys
+import threading
 from pathlib import Path
 from typing import List, Optional
 
@@ -90,7 +91,7 @@ class Settings(BaseSettings):
     SUBSCRIBE_RSS_INTERVAL: int = 30
     # 订阅搜索开关
     SUBSCRIBE_SEARCH: bool = False
-    # 用户认证站点 hhclub/audiences/hddolby/zmpt/freefarm/hdfans/wintersakura/leaves/1ptba/icc2022/iyuu/ptlsp/xingtan/ptvicomo/agsvpt/hdkyl/qingwa
+    # 用户认证站点
     AUTH_SITE: str = ""
     # iyuu
     IYUU_SIGN: str = ""
@@ -213,9 +214,9 @@ class Settings(BaseSettings):
     TR_PASSWORD: Optional[str] = None
     # 种子标签
     TORRENT_TAG: str = "MOVIEPILOT"
-    # 下载保存目录，容器内映射路径需要一致 windows下 填写形式应为 r"C:\dir"
-    DOWNLOAD_PATH: Optional[str] = r"C:\Users\Default\Downloads"
-    # 电影下载保存目录，容器内映射路径需要一致 windows下 填写形式应为 r"C:\dir"
+    # 下载保存目录，容器内映射路径需要一致
+    DOWNLOAD_PATH: Optional[str] = None
+    # 电影下载保存目录，容器内映射路径需要一致
     DOWNLOAD_MOVIE_PATH: Optional[str] = None
     # 电视剧下载保存目录，容器内映射路径需要一致
     DOWNLOAD_TV_PATH: Optional[str] = None
@@ -266,7 +267,7 @@ class Settings(BaseSettings):
     # CookieCloud对应的浏览器UA
     USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/113.0.0.0 Safari/537.36 Edg/113.0.1774.57"
     # 媒体库目录，多个目录使用,分隔
-    LIBRARY_PATH: Optional[str] = r"C:/Users/Default/Downloads"
+    LIBRARY_PATH: Optional[str] = None
     # 电影媒体库目录名
     LIBRARY_MOVIE_NAME: str = "电影"
     # 电视剧媒体库目录名
@@ -294,7 +295,7 @@ class Settings(BaseSettings):
     PLUGIN_MARKET: str = "https://github.com/jxxghp/MoviePilot-Plugins,https://github.com/thsrite/MoviePilot-Plugins,https://github.com/honue/MoviePilot-Plugins,https://github.com/InfinityPacer/MoviePilot-Plugins"
     # Github token，提高请求api限流阈值 ghp_****
     GITHUB_TOKEN: Optional[str] = None
-    # 自动检查和更新站点资源包（站点索引、认证等） 开启后相应的启动MP的时间增加30-120秒左右
+    # 自动检查和更新站点资源包（站点索引、认证等）
     AUTO_UPDATE_RESOURCE: bool = False
     # 元数据识别缓存过期时间（小时）
     META_CACHE_EXPIRE: int = 0
@@ -483,6 +484,27 @@ class Settings(BaseSettings):
         case_sensitive = True
 
 
+class GlobalVar(object):
+    """
+    全局标识
+    """
+    # 系统停止事件
+    STOP_EVENT: threading.Event = threading.Event()
+
+    def stop_system(self):
+        """
+        停止系统
+        """
+        self.STOP_EVENT.set()
+
+    def is_system_stopped(self):
+        """
+        是否停止
+        """
+        return self.STOP_EVENT.is_set()
+
+
+# 实例化配置
 def env_file():
     if SystemUtils.is_windows():
         return Path(__file__).parents[2] / "config" / "appWindows.env"
@@ -494,3 +516,6 @@ settings = Settings(
     _env_file=env_file(),
     _env_file_encoding="utf-8"
 )
+
+# 全局标识
+global_vars = GlobalVar()
