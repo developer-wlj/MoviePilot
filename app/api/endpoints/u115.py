@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Any, List
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from starlette.responses import Response
 
 from app import schemas
@@ -9,8 +9,10 @@ from app.chain.transfer import TransferChain
 from app.core.config import settings
 from app.core.metainfo import MetaInfoPath
 from app.core.security import verify_token, verify_uri_token
+from app.helper.progress import ProgressHelper
 from app.helper.u115 import U115Helper
-from app.utils.string import StringUtils
+from app.schemas.types import ProgressKey
+from app.utils.http import RequestUtils
 
 router = APIRouter()
 
@@ -20,179 +22,205 @@ def qrcode(_: schemas.TokenPayload = Depends(verify_token)) -> Any:
     """
     生成二维码
     """
-    qrcode_data, errmsg = U115Helper().generate_qrcode()
+    qrcode_data = U115Helper().generate_qrcode()
     if qrcode_data:
-        return schemas.Response(success=True, data=qrcode_data)
-    return schemas.Response(success=False, message=errmsg)
+        return schemas.Response(success=True, data={
+            'codeContent': qrcode_data
+        })
+    return schemas.Response(success=False)
 
 
 @router.get("/check", summary="二维码登录确认", response_model=schemas.Response)
-def check(ck: str, t: str, _: schemas.TokenPayload = Depends(verify_token)) -> Any:
+def check(_: schemas.TokenPayload = Depends(verify_token)) -> Any:
     """
     二维码登录确认
     """
-    if not ck or not t:
-        return schemas.Response(success=False, message="参数错误")
-    data, errmsg = U115Helper().check_login(ck, t)
+    data, errmsg = U115Helper().check_login()
     if data:
         return schemas.Response(success=True, data=data)
     return schemas.Response(success=False, message=errmsg)
 
 
-@router.get("/userinfo", summary="查询用户信息", response_model=schemas.Response)
-def userinfo(_: schemas.TokenPayload = Depends(verify_token)) -> Any:
+@router.get("/storage", summary="查询存储空间信息", response_model=schemas.Response)
+def storage(_: schemas.TokenPayload = Depends(verify_token)) -> Any:
     """
-    查询用户信息
+    查询存储空间信息
     """
-    pass
+    storage_info = U115Helper().get_storage()
+    if storage_info:
+        return schemas.Response(success=True, data={
+            "total": storage_info[0],
+            "used": storage_info[1]
+        })
+    return schemas.Response(success=False)
 
 
-@router.get("/list", summary="所有目录和文件（115网盘）", response_model=List[schemas.FileItem])
-def list_115(path: str,
-             fileid: str,
-             filetype: str = "dir",
+@router.post("/list", summary="所有目录和文件（115网盘）", response_model=List[schemas.FileItem])
+def list_115(fileitem: schemas.FileItem,
              sort: str = 'updated_at',
              _: schemas.TokenPayload = Depends(verify_token)) -> Any:
     """
     查询当前目录下所有目录和文件
-    :param path: 当前路径
-    :param fileid: 文件ID
-    :param filetype: 文件类型
+    :param fileitem: 文件项
     :param sort: 排序方式，name:按名称排序，time:按修改时间排序
     :param _: token
     :return: 所有目录和文件
     """
-    if not fileid:
+    if not fileitem.fileid:
         return []
-    if not path:
+    if not fileitem.path:
         path = "/"
-    if sort == "time":
-        sort = "updated_at"
-    if filetype == "file":
-        fileinfo = U115Helper().get_file_detail(fileid)
-        if fileinfo:
-            return [schemas.FileItem(
-                fileid=fileinfo.get("file_id"),
-                parent_fileid=fileinfo.get("parent_file_id"),
-                type="file",
-                path=f"{path}{fileinfo.get('name')}",
-                name=fileinfo.get("name"),
-                size=fileinfo.get("size"),
-                extension=fileinfo.get("file_extension"),
-                modify_time=StringUtils.str_to_timestamp(fileinfo.get("updated_at")),
-                thumbnail=fileinfo.get("thumbnail")
-            )]
-        return []
+    else:
+        path = fileitem.path
+    if fileitem.fileid == "root":
+        fileid = "0"
+    else:
+        fileid = fileitem.fileid
+    if fileitem.type == "file":
+        name = Path(path).name
+        suffix = Path(name).suffix[1:]
+        return [schemas.FileItem(
+            fileid=fileid,
+            type="file",
+            path=path.rstrip('/'),
+            name=name,
+            extension=suffix,
+            pickcode=fileitem.pickcode
+        )]
     items = U115Helper().list_files(parent_file_id=fileid)
     if not items:
         return []
-    return [schemas.FileItem(
-        fileid=item.get("file_id"),
-        parent_fileid=item.get("parent_file_id"),
-        type="dir" if item.get("type") == "folder" else "file",
-        path=f"{path}{item.get('name')}" + "/" if item.get("type") == "folder" else "",
-        name=item.get("name"),
-        size=item.get("size"),
-        extension=item.get("file_extension"),
-        modify_time=StringUtils.str_to_timestamp(item.get("updated_at")),
-        thumbnail=item.get("thumbnail")
+    file_list = [schemas.FileItem(
+        fileid=item.file_id,
+        parent_fileid=item.parent_id,
+        type="dir" if item.is_dir else "file",
+        path=f"{path}{item.name}" + "/" if item.is_dir else "",
+        name=item.name,
+        size=item.size,
+        extension=Path(item.name).suffix[1:],
+        modify_time=item.modified_time.timestamp() if item.modified_time else 0,
+        pickcode=item.pickcode
     ) for item in items]
+    if sort == "name":
+        file_list.sort(key=lambda x: x.name)
+    else:
+        file_list.sort(key=lambda x: x.modify_time, reverse=True)
+    return file_list
 
 
-@router.get("/mkdir", summary="创建目录（115网盘）", response_model=schemas.Response)
-def mkdir_115(fileid: str,
+@router.post("/mkdir", summary="创建目录（115网盘）", response_model=schemas.Response)
+def mkdir_115(fileitem: schemas.FileItem,
               name: str,
               _: schemas.TokenPayload = Depends(verify_token)) -> Any:
     """
     创建目录
     """
-    if not fileid or not name:
+    if not fileitem.fileid or not name:
         return schemas.Response(success=False)
-    result = U115Helper().create_folder(parent_file_id=fileid, name=name)
+    result = U115Helper().create_folder(parent_file_id=fileitem.fileid, name=name)
     if result:
         return schemas.Response(success=True)
     return schemas.Response(success=False)
 
 
-@router.get("/delete", summary="删除文件或目录（115网盘）", response_model=schemas.Response)
-def delete_115(fileid: str,
+@router.post("/delete", summary="删除文件或目录（115网盘）", response_model=schemas.Response)
+def delete_115(fileitem: schemas.FileItem,
                _: schemas.TokenPayload = Depends(verify_token)) -> Any:
     """
     删除文件或目录
     """
-    if not fileid:
+    if not fileitem.fileid:
         return schemas.Response(success=False)
-    result = U115Helper().delete_file(fileid)
+    result = U115Helper().delete_file(fileitem.fileid)
     if result:
         return schemas.Response(success=True)
     return schemas.Response(success=False)
 
 
 @router.get("/download", summary="下载文件（115网盘）")
-def download_115(fileid: str,
+def download_115(pickcode: str,
                  _: schemas.TokenPayload = Depends(verify_uri_token)) -> Any:
     """
     下载文件或目录
     """
-    if not fileid:
+    if not pickcode:
         return schemas.Response(success=False)
-    url = U115Helper().get_download_url(fileid)
-    if url:
-        # 重定向
-        return Response(status_code=302, headers={"Location": url})
+    ticket = U115Helper().download(pickcode)
+    if ticket:
+        # 请求数据，并以文件流的方式返回
+        res = RequestUtils(headers=ticket.headers).get_res(ticket.url)
+        if res:
+            return Response(content=res.content, media_type="application/octet-stream")
     return schemas.Response(success=False)
 
 
-@router.get("/rename", summary="重命名文件或目录（115网盘）", response_model=schemas.Response)
-def rename_115(fileid: str, new_name: str, path: str,
+@router.post("/rename", summary="重命名文件或目录（115网盘）", response_model=schemas.Response)
+def rename_115(fileitem: schemas.FileItem,
+               new_name: str,
                recursive: bool = False,
                _: schemas.TokenPayload = Depends(verify_token)) -> Any:
     """
     重命名文件或目录
     """
-    if not fileid or not new_name:
+    if not fileitem.fileid or not new_name:
         return schemas.Response(success=False)
-    result = U115Helper().rename_file(fileid, new_name)
+    result = U115Helper().rename_file(fileitem.fileid, new_name)
     if result:
         if recursive:
             transferchain = TransferChain()
             media_exts = settings.RMT_MEDIAEXT + settings.RMT_SUBEXT + settings.RMT_AUDIO_TRACK_EXT
             # 递归修改目录内文件（智能识别命名）
-            sub_files: List[schemas.FileItem] = list_115(path=path, fileid=fileid)
-            for sub_file in sub_files:
-                if sub_file.type == "dir":
-                    continue
-                if not sub_file.extension:
-                    continue
-                if f".{sub_file.extension.lower()}" not in media_exts:
-                    continue
-                sub_path = Path(f"{path}{sub_file.name}")
-                meta = MetaInfoPath(sub_path)
-                mediainfo = transferchain.recognize_media(meta)
-                if not mediainfo:
-                    return schemas.Response(success=False, message=f"{sub_path.name} 未识别到媒体信息")
-                new_path = transferchain.recommend_name(meta=meta, mediainfo=mediainfo)
-                if not new_path:
-                    return schemas.Response(success=False, message=f"{sub_path.name} 未识别到新名称")
-                ret: schemas.Response = rename_115(fileid=sub_file.fileid,
-                                                   path=path,
-                                                   new_name=Path(new_path).name,
-                                                   recursive=False)
-                if not ret.success:
-                    return schemas.Response(success=False, message=f"{sub_path.name} 重命名失败！")
+            sub_files: List[schemas.FileItem] = list_115(fileitem)
+            if sub_files:
+                # 开始进度
+                progress = ProgressHelper()
+                progress.start(ProgressKey.BatchRename)
+                total = len(sub_files)
+                handled = 0
+                for sub_file in sub_files:
+                    handled += 1
+                    progress.update(value=handled / total * 100,
+                                    text=f"正在处理 {sub_file.name} ...",
+                                    key=ProgressKey.BatchRename)
+                    if sub_file.type == "dir":
+                        continue
+                    if not sub_file.extension:
+                        continue
+                    if f".{sub_file.extension.lower()}" not in media_exts:
+                        continue
+                    sub_path = Path(f"{fileitem.path}{sub_file.name}")
+                    meta = MetaInfoPath(sub_path)
+                    mediainfo = transferchain.recognize_media(meta)
+                    if not mediainfo:
+                        progress.end(ProgressKey.BatchRename)
+                        return schemas.Response(success=False, message=f"{sub_path.name} 未识别到媒体信息")
+                    new_path = transferchain.recommend_name(meta=meta, mediainfo=mediainfo)
+                    if not new_path:
+                        progress.end(ProgressKey.BatchRename)
+                        return schemas.Response(success=False, message=f"{sub_path.name} 未识别到新名称")
+                    ret: schemas.Response = rename_115(fileitem=sub_file,
+                                                       new_name=Path(new_path).name,
+                                                       recursive=False)
+                    if not ret.success:
+                        progress.end(ProgressKey.BatchRename)
+                        return schemas.Response(success=False, message=f"{sub_path.name} 重命名失败！")
+                progress.end(ProgressKey.BatchRename)
         return schemas.Response(success=True)
     return schemas.Response(success=False)
 
 
-@router.get("/image", summary="读取图片（115网盘）", response_model=schemas.Response)
-def image_115(fileid: str, _: schemas.TokenPayload = Depends(verify_uri_token)) -> Any:
+@router.get("/image", summary="读取图片（115网盘）")
+def image_115(pickcode: str, _: schemas.TokenPayload = Depends(verify_uri_token)) -> Any:
     """
     读取图片
     """
-    if not fileid:
+    if not pickcode:
         return schemas.Response(success=False)
-    url = U115Helper().get_download_url(fileid)
-    if url:
-        # 重定向
-        return Response(status_code=302, headers={"Location": url})
-    return schemas.Response(success=False)
+    ticket = U115Helper().download(pickcode)
+    if ticket:
+        # 请求数据，获取内容编码为图片base64返回
+        res = RequestUtils(headers=ticket.headers).get_res(ticket.url)
+        if res:
+            content_type = res.headers.get("Content-Type")
+            return Response(content=res.content, media_type=content_type)
+    raise HTTPException(status_code=500, detail="下载图片出错")

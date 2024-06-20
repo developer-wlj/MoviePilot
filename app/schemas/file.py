@@ -26,3 +26,7 @@ class FileItem(BaseModel):
     parent_fileid: Optional[str] = None
     # 缩略图
     thumbnail: Optional[str] = None
+    # 115 pickcode
+    pickcode: Optional[str] = None
+    # drive_id
+    drive_id: Optional[str] = None

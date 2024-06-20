@@ -67,8 +67,11 @@ class AliyunHelper:
         if code or message:
             logger.warn(f"Aliyun {apiname}失败：{code} - {display_message or message}")
             if action:
-                if code in ["UserDeviceOffline", "DeviceSessionSignatureInvalid"]:
-                    logger.warn("设备已下线或无效，正在重新建立会话...")
+                if code == "DeviceSessionSignatureInvalid":
+                    logger.warn("设备已失效，正在重新建立会话...")
+                    self.create_session(self.get_headers(self.auth_params))
+                if code == "UserDeviceOffline":
+                    logger.warn("设备已离线，尝试重新登录，如仍报错请检查阿里云盘绑定设备数量是否超限！")
                     self.create_session(self.get_headers(self.auth_params))
                 if code == "AccessTokenInvalid":
                     logger.warn("访问令牌已失效，正在刷新令牌...")
@@ -222,7 +225,7 @@ class AliyunHelper:
                 return '类 Unix 操作系统'
 
         res = RequestUtils(headers=headers, timeout=5).post_res(self.create_session_url, json={
-            'deviceName': f'MoviePilot Web',
+            'deviceName': f'MoviePilot {SystemUtils.platform}',
             'modelName': __os_name(),
             'pubKey': self._X_PUBLIC_KEY,
         })
@@ -301,7 +304,7 @@ class AliyunHelper:
             self.__handle_error(res, "获取用户信息")
         return {}
 
-    def list_files(self, parent_file_id: str = 'root', list_type: str = None,
+    def list_files(self, drive_id: str = None, parent_file_id: str = 'root', list_type: str = None,
                    limit: int = 100, order_by: str = 'updated_at') -> List[dict]:
         """
         浏览文件
@@ -313,17 +316,36 @@ class AliyunHelper:
         params = self.get_access_params()
         if not params:
             return []
-        # 最终返回数据
-        ret_items = []
         # 请求头
         headers = self.get_headers(params)
+        # 根目录处理
+        if not drive_id:
+            return [
+                {
+                    "file_id": parent_file_id,
+                    "drive_id": params.get("resourceDriveId"),
+                    "parent_file_id": "root",
+                    "type": "folder",
+                    "path": "/资源库/",
+                    "name": "资源库",
+                }, {
+                    "file_id": parent_file_id,
+                    "drive_id": params.get("backDriveId"),
+                    "parent_file_id": "root",
+                    "type": "folder",
+                    "path": "/备份盘/",
+                    "name": "备份盘",
+                }
+            ]
+        # 返回数据
+        ret_items = []
         # 分页获取
         next_marker = None
         while True:
             if not parent_file_id or parent_file_id == "/":
                 parent_file_id = "root"
             res = RequestUtils(headers=headers, timeout=10).post_res(self.list_file_url, json={
-                "drive_id": params.get("resourceDriveId"),
+                "drive_id": drive_id,
                 "type": list_type,
                 "limit": limit,
                 "order_by": order_by,
