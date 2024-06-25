@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     # API路径
     API_V1_STR: str = "/api/v1"
     # 前端资源路径
-    FRONTEND_PATH: str = "/public"
+    FRONTEND_PATH: str = "../Nginx1.15.11/html/MoviePilot-Frontend"
     # 密钥
     SECRET_KEY: str = secrets.token_urlsafe(32)
     # 允许的域名
@@ -227,7 +227,7 @@ class Settings(BaseSettings):
     # Github代理服务器，格式：https://mirror.ghproxy.com/
     GITHUB_PROXY: Optional[str] = ''
     # 自动检查和更新站点资源包（站点索引、认证等）
-    AUTO_UPDATE_RESOURCE: bool = True
+    AUTO_UPDATE_RESOURCE: bool = False
     # 元数据识别缓存过期时间（小时）
     META_CACHE_EXPIRE: int = 0
     # 是否启用DOH解析域名

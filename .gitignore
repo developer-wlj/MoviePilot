@@ -12,6 +12,7 @@ app/plugins/**
 !app/plugins/__init__.py
 config/cookies/**
 config/user.db
+config/app.env
 config/sites/**
 *.pyc
 *.log
