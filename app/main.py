@@ -266,6 +266,9 @@ def start_module():
     if 'discfan' in auth_site:
         os.environ['DISCFAN_UID'] = settings.DISCFAN_UID
         os.environ['DISCFAN_PASSKEY'] = settings.DISCFAN_PASSKEY
+    if 'haidan' in auth_site:
+        os.environ['HAIDAN_ID'] = settings.HAIDAN_ID
+        os.environ['HAIDAN_PASSKEY'] = settings.HAIDAN_PASSKEY
     # 初始化超级管理员
     init_super_user()
     # 虚拟显示
