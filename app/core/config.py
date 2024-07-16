@@ -127,9 +127,6 @@ class Settings(BaseSettings):
     # icc2022
     ICC2022_UID: str = ""
     ICC2022_PASSKEY: str = ""
-    # ptlsp
-    PTLSP_UID: str = ""
-    PTLSP_PASSKEY: str = ""
     # xingtan
     XINGTAN_UID: str = ""
     XINGTAN_PASSKEY: str = ""
@@ -151,6 +148,9 @@ class Settings(BaseSettings):
     # haidan
     HAIDAN_ID: str = ""
     HAIDAN_PASSKEY: str = ""
+    # rousi
+    ROUSI_UID: str = ""
+    ROUSI_PASSKEY: str = ""
     # 交互搜索自动下载用户ID，使用,分割
     AUTO_DOWNLOAD_USER: Optional[str] = None
     # 消息通知渠道 telegram/wechat/slack/synologychat/vocechat/webpush，多个通知渠道用,分隔

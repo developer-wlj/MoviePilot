@@ -277,6 +277,9 @@ def start_module():
     if 'haidan' in auth_site:
         os.environ['HAIDAN_ID'] = settings.HAIDAN_ID
         os.environ['HAIDAN_PASSKEY'] = settings.HAIDAN_PASSKEY
+    if 'rousi' in auth_site:
+        os.environ['ROUSI_UID'] = settings.ROUSI_UID
+        os.environ['ROUSI_PASSKEY'] = settings.ROUSI_PASSKEY
     # 初始化超级管理员
     init_super_user()
     # 虚拟显示
