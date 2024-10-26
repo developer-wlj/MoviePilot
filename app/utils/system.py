@@ -454,7 +454,7 @@ class SystemUtils:
                 return False, f"cmd命令{command}执行失败.原因:{str(error)}"
 
         try:
-            success, message = cmd(["start", str(Path(__file__).parents[2].parent / "RebotMP.exe")])
+            success, message = cmd(["start", "", str(Path(__file__).parents[2].parent / "RebotMP.exe")])
             if not success:
                 return False, message
             return True, ""
