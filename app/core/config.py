@@ -30,7 +30,7 @@ class ConfigModel(BaseModel):
     # API路径
     API_V1_STR: str = "/api/v1"
     # 前端资源路径
-    FRONTEND_PATH: str = "/public"
+    FRONTEND_PATH: str = "../../Nginx1.15.11/html/MoviePilot-Frontend"
     # 密钥
     SECRET_KEY: str = secrets.token_urlsafe(32)
     # RESOURCE密钥
@@ -46,7 +46,7 @@ class ConfigModel(BaseModel):
     # API监听地址
     HOST: str = "0.0.0.0"
     # API监听端口
-    PORT: int = 3001
+    PORT: int = 3111
     # 前端监听端口
     NGINX_PORT: int = 3000
     # 是否调试模式
@@ -92,7 +92,7 @@ class ConfigModel(BaseModel):
     # TMDB图片地址
     TMDB_IMAGE_DOMAIN: str = "image.tmdb.org"
     # TMDB API地址
-    TMDB_API_DOMAIN: str = "api.themoviedb.org"
+    TMDB_API_DOMAIN: str = "api.tmdb.org"
     # TMDB API Key
     TMDB_API_KEY: str = "db55323b8d3e4154498498a75642b381"
     # TVDB API Key
@@ -108,9 +108,9 @@ class ConfigModel(BaseModel):
     # 用户认证站点
     AUTH_SITE: str = ""
     # 自动检查和更新站点资源包（站点索引、认证等）
-    AUTO_UPDATE_RESOURCE: bool = True
+    AUTO_UPDATE_RESOURCE: bool = False
     # 是否启用DOH解析域名
-    DOH_ENABLE: bool = True
+    DOH_ENABLE: bool = False
     # 使用 DOH 解析的域名列表
     DOH_DOMAINS: str = "api.themoviedb.org,api.tmdb.org,webservice.fanart.tv,api.github.com,github.com,raw.githubusercontent.com,api.telegram.org"
     # DOH 解析服务器列表
@@ -152,7 +152,7 @@ class ConfigModel(BaseModel):
     # 种子标签
     TORRENT_TAG: str = "MOVIEPILOT"
     # 下载站点字幕
-    DOWNLOAD_SUBTITLE: bool = True
+    DOWNLOAD_SUBTITLE: bool = False
     # 交互搜索自动下载用户ID，使用,分割
     AUTO_DOWNLOAD_USER: Optional[str] = None
     # CookieCloud是否启动本地服务

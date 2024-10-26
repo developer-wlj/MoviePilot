@@ -476,13 +476,16 @@ class PluginHelper(metaclass=Singleton):
         # 添加策略到列表中
         if settings.PIP_PROXY:
             strategies.append(("镜像站",
-                               ["pip", "install", "-r", str(requirements_file),
+                               [Path(settings.ROOT_PATH).parent.parent.joinpath('Python3.11').joinpath('python'), "-m",
+                                "pip", "install", "-r", str(requirements_file),
                                 "-i", settings.PIP_PROXY, "--no-cache-dir"]))
         if settings.PROXY_HOST:
             strategies.append(("代理",
-                               ["pip", "install", "-r", str(requirements_file),
+                               [Path(settings.ROOT_PATH).parent.parent.joinpath('Python3.11').joinpath('python'), "-m",
+                                "pip", "install", "-r", str(requirements_file),
                                 "--proxy", settings.PROXY_HOST, "--no-cache-dir"]))
-        strategies.append(("直连", ["pip", "install", "-r", str(requirements_file), "--no-cache-dir"]))
+        strategies.append(("直连", [Path(settings.ROOT_PATH).parent.parent.joinpath('Python3.11').joinpath('python'),
+                                  "-m", "pip", "install", "-r", str(requirements_file), "--no-cache-dir"]))
 
         # 遍历策略进行安装
         for strategy_name, pip_command in strategies:
@@ -507,11 +510,11 @@ class PluginHelper(metaclass=Singleton):
 
         # 添加策略到列表中
         if settings.PIP_PROXY:
-            strategies.append(("镜像站", ["pip", "install", "-r", str(requirements_file), "-i", settings.PIP_PROXY]))
+            strategies.append(("镜像站", [Path(settings.ROOT_PATH).parent.parent.joinpath('Python3.11').joinpath('python'), "-m", "pip", "install", "-r", str(requirements_file), "-i", settings.PIP_PROXY]))
         if settings.PROXY_HOST:
             strategies.append(
-                ("代理", ["pip", "install", "-r", str(requirements_file), "--proxy", settings.PROXY_HOST]))
-        strategies.append(("直连", ["pip", "install", "-r", str(requirements_file)]))
+                ("代理", [Path(settings.ROOT_PATH).parent.parent.joinpath('Python3.11').joinpath('python'), "-m", "pip", "install", "-r", str(requirements_file), "--proxy", settings.PROXY_HOST]))
+        strategies.append(("直连", [Path(settings.ROOT_PATH).parent.parent.joinpath('Python3.11').joinpath('python'), "-m", "pip", "install", "-r", str(requirements_file)]))
 
         # 遍历策略进行安装
         for strategy_name, pip_command in strategies:

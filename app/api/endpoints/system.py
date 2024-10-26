@@ -449,8 +449,6 @@ def restart_system(_: User = Depends(get_current_active_superuser)):
     """
     重启系统（仅管理员）
     """
-    if not SystemUtils.can_restart():
-        return schemas.Response(success=False, message="当前运行环境不支持重启操作！")
     # 标识停止事件
     global_vars.stop_system()
     # 执行重启

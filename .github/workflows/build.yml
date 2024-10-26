@@ -1,14 +1,6 @@
 name: MoviePilot Builder v2
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - v2
-    paths:
-      - '.github/workflows/build.yml'
-      - 'Dockerfile'
-      - 'version.py'
-      - 'requirements.in'
 
 jobs:
   Docker-build:

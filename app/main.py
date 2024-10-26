@@ -1,6 +1,10 @@
 import multiprocessing
 import os
 import sys
+# 获取当前工作目录的路径
+current_path = os.getcwd()
+print(current_path)
+sys.path.append(current_path)
 import threading
 
 import uvicorn as uvicorn
