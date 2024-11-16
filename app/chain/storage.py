@@ -57,13 +57,15 @@ class StorageChain(ChainBase):
         """
         return self.run_module("download_file", fileitem=fileitem, path=path)
 
-    def upload_file(self, fileitem: schemas.FileItem, path: Path) -> Optional[bool]:
+    def upload_file(self, fileitem: schemas.FileItem, path: Path,
+                    new_name: str = None) -> Optional[schemas.FileItem]:
         """
         上传文件
         :param fileitem: 保存目录项
         :param path: 本地文件路径
+        :param new_name: 新文件名
         """
-        return self.run_module("upload_file", fileitem=fileitem, path=path)
+        return self.run_module("upload_file", fileitem=fileitem, path=path, new_name=new_name)
 
     def delete_file(self, fileitem: schemas.FileItem) -> Optional[bool]:
         """
@@ -111,21 +113,27 @@ class StorageChain(ChainBase):
         """
         删除媒体文件，以及不含媒体文件的目录
         """
+        if fileitem.path == "/" or len(Path(fileitem.path).parts) <= 2:
+            logger.warn(f"【{fileitem.storage}】{fileitem.path} 根目录或一级目录不允许删除")
+            return False
+        logger.warn(f"正在删除【{fileitem.storage}】{fileitem.path}")
         state = self.delete_file(fileitem)
         if not state:
             logger.warn(f"【{fileitem.storage}】{fileitem.path} 删除失败")
             return False
         if fileitem.type == "dir":
+            # 本身是目录不处理父目录
             return True
         # 上级目录
         if mtype and mtype == MediaType.TV:
-            dir_path = Path(fileitem.path).parent.parent
-            dir_item = self.get_file_item(storage=fileitem.storage, path=dir_path)
+            dir_item = self.get_file_item(storage=fileitem.storage, path=Path(fileitem.path).parent.parent)
         else:
             dir_item = self.get_parent_item(fileitem)
-        if dir_item:
+        if dir_item and len(Path(dir_item.path).parts) > 2:
             # 不存在其他媒体文件，删除空目录
-            if not self.any_files(dir_item, extensions=settings.RMT_MEDIAEXT):
+            exts = settings.RMT_MEDIAEXT + settings.DOWNLOAD_TMPEXT
+            if self.any_files(dir_item, extensions=exts) is False:
+                logger.warn(f"【{dir_item.storage}】{dir_item.path} 不存在其它媒体文件，删除空目录")
                 return self.delete_file(dir_item)
 
         # 存在媒体文件，返回文件删除状态
