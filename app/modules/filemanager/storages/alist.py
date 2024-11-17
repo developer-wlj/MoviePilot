@@ -57,9 +57,6 @@ class Alist(StorageBase):
         如果设置永久令牌则返回永久令牌
         否则使用账号密码生成临时令牌
         """
-        token = self.get_conf().get("token")
-        if token:
-            return token
         return self.__generate_token
 
     @property
@@ -216,8 +213,8 @@ class Alist(StorageBase):
                 path=(Path(fileitem.path) / item["name"]).as_posix() + ("/" if item["is_dir"] else ""),
                 name=item["name"],
                 basename=Path(item["name"]).stem,
-                extension=Path(item["name"]).suffix,
-                size=item["size"],
+                extension=Path(item["name"]).suffix if not item["is_dir"] else None,
+                size=item["size"] if not item["is_dir"] else None,
                 modify_time=self.__parse_timestamp(item["modified"]),
                 thumbnail=item["thumb"],
             )
@@ -558,11 +555,12 @@ class Alist(StorageBase):
             logging.warning(f"请求上传文件 {path} 失败，状态码：{resp.status_code}")
             return
 
+        new_item = self.get_item(Path(fileitem.path) / path.name)
         if new_name and new_name != path.name:
-            if self.rename(fileitem, new_name):
-                return self.get_item(Path(fileitem.path).parent / new_name)
+            if self.rename(new_item, new_name):
+                return self.get_item(Path(new_item.path).with_name(new_name))
 
-        return self.get_item(Path(fileitem.path) / path.name)
+        return new_item
 
     def detail(self, fileitem: schemas.FileItem) -> Optional[schemas.FileItem]:
         """
