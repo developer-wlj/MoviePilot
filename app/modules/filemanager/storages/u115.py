@@ -32,13 +32,9 @@ class U115Pan(StorageBase, metaclass=Singleton):
         """
         初始化Cloud
         """
-        credential = self.__credential
-        if not credential:
-            logger.warn("115未登录，请先登录！")
-            return False
         try:
             if not self.client or not self.client.cookies or force:
-                self.client = P115Client(credential)
+                self.client = P115Client(self.__credential)
                 self.fs = P115FileSystem(self.client)
         except Exception as err:
             logger.error(f"115连接失败，请重新扫码登录：{str(err)}")
@@ -75,6 +71,8 @@ class U115Pan(StorageBase, metaclass=Singleton):
         """
         生成二维码
         """
+        if not self.__init_cloud():
+            return None
         try:
             resp = self.client.login_qrcode_token()
             self.session_info = resp["data"]
@@ -93,9 +91,9 @@ class U115Pan(StorageBase, metaclass=Singleton):
         """
         二维码登录确认
         """
+        if not self.session_info:
+            return {}, "请先生成二维码！"
         try:
-            if not self.session_info:
-                return {}, "请先生成二维码！"
             resp = self.client.login_qrcode_scan_status(self.session_info)
             match resp["data"].get("status"):
                 case 0:
