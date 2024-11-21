@@ -10,7 +10,7 @@ from app.chain.tmdb import TmdbChain
 from app.core.config import settings, global_vars
 from app.core.context import MediaInfo
 from app.core.meta import MetaBase
-from app.core.metainfo import MetaInfoPath
+from app.core.metainfo import MetaInfoPath, MetaInfo
 from app.db.downloadhistory_oper import DownloadHistoryOper
 from app.db.models.downloadhistory import DownloadHistory
 from app.db.models.transferhistory import TransferHistory
@@ -184,8 +184,6 @@ class TransferChain(ChainBase):
 
         # 汇总季集清单
         season_episodes: Dict[Tuple, List[int]] = {}
-        # 汇总元数据
-        metas: Dict[Tuple, MetaBase] = {}
         # 汇总媒体信息
         medias: Dict[Tuple, MediaInfo] = {}
         # 汇总整理信息
@@ -393,10 +391,14 @@ class TransferChain(ChainBase):
                 if src_match:
                     # 按源目录匹配，以便找到更合适的目录配置
                     target_directory = self.directoryhelper.get_dir(file_mediainfo,
-                                                                    storage=file_item.storage, src_path=file_path)
+                                                                    storage=file_item.storage,
+                                                                    src_path=file_path,
+                                                                    target_storage=target_storage)
                 else:
                     # 未指定目标路径，根据媒体信息获取目标目录
-                    target_directory = self.directoryhelper.get_dir(file_mediainfo)
+                    target_directory = self.directoryhelper.get_dir(file_mediainfo,
+                                                                    storage=target_storage,
+                                                                    target_storage=target_storage)
 
             # 执行整理
             transferinfo: TransferInfo = self.transfer(fileitem=file_item,
@@ -443,7 +445,6 @@ class TransferChain(ChainBase):
             mkey = (file_mediainfo.tmdb_id, file_meta.begin_season)
             if mkey not in medias:
                 # 新增信息
-                metas[mkey] = file_meta
                 medias[mkey] = file_mediainfo
                 season_episodes[mkey] = file_meta.episode_list
                 transfers[mkey] = transferinfo
@@ -467,6 +468,14 @@ class TransferChain(ChainBase):
                 transferinfo=transferinfo
             )
 
+            # 整理完成事件
+            self.eventmanager.send_event(EventType.TransferComplete, {
+                'meta': file_meta,
+                'mediainfo': file_mediainfo,
+                'transferinfo': transferinfo,
+                'download_hash': download_hash,
+            })
+
             # 更新进度
             processed_num += 1
             self.progress.update(value=processed_num / total_num * 100,
@@ -479,8 +488,9 @@ class TransferChain(ChainBase):
 
         # 执行后续处理
         for mkey, media in medias.items():
-            transfer_meta = metas[mkey]
             transfer_info = transfers[mkey]
+            transfer_meta = MetaInfo(transfer_info.target_diritem.name)
+            transfer_meta.begin_season = mkey[1]
             # 发送通知
             if transfer_info.need_notify:
                 se_str = None
@@ -497,13 +507,6 @@ class TransferChain(ChainBase):
                     'mediainfo': media,
                     'fileitem': transfer_info.target_diritem
                 })
-            # 整理完成事件
-            self.eventmanager.send_event(EventType.TransferComplete, {
-                'meta': transfer_meta,
-                'mediainfo': media,
-                'transferinfo': transfer_info,
-                'download_hash': download_hash,
-            })
 
         # 移动模式处理
         if all_success and current_transfer_type in ["move"]:
