@@ -1,7 +1,10 @@
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List, Set
 
 from pydantic import BaseModel, Field, root_validator
+
+from app.core.context import Context
+from app.schemas import MessageChannel
 
 
 class BaseEventData(BaseModel):
@@ -143,3 +146,59 @@ class TransferRenameEventData(ChainEventData):
     updated: bool = Field(False, description="是否已更新")
     updated_str: Optional[str] = Field(None, description="更新后的字符串")
     source: Optional[str] = Field("未知拦截源", description="拦截源")
+
+
+class ResourceSelectionEventData(BaseModel):
+    """
+    ResourceSelection 事件的数据模型
+
+    Attributes:
+        # 输入参数
+        contexts (List[Context]): 当前待选择的资源上下文列表
+        source (str): 事件源，指示事件的触发来源
+
+        # 输出参数
+        updated (bool): 是否已更新，默认值为 False
+        updated_contexts (Optional[List[Context]]): 已更新的资源上下文列表，默认值为 None
+        source (str): 更新源，默认值为 "未知更新源"
+    """
+    # 输入参数
+    contexts: Any = Field(None, description="待选择的资源上下文列表")
+    downloader: Optional[str] = Field(None, description="下载器")
+
+    # 输出参数
+    updated: bool = Field(False, description="是否已更新")
+    updated_contexts: Optional[List[Context]] = Field(None, description="已更新的资源上下文列表")
+    source: Optional[str] = Field("未知拦截源", description="拦截源")
+
+
+class ResourceDownloadEventData(ChainEventData):
+    """
+    ResourceDownload 事件的数据模型
+
+    Attributes:
+        # 输入参数
+        context (Context): 当前资源上下文
+        episodes (Set[int]): 需要下载的集数
+        channel (MessageChannel): 通知渠道
+        origin (str): 来源（消息通知、Subscribe、Manual等）
+        downloader (str): 下载器
+        options (dict): 其他参数
+
+        # 输出参数
+        cancel (bool): 是否取消下载，默认值为 False
+        source (str): 拦截源，默认值为 "未知拦截源"
+        reason (str): 拦截原因，描述拦截的具体原因
+    """
+    # 输入参数
+    context: Any = Field(None, description="当前资源上下文")
+    episodes: Optional[Set[int]] = Field(None, description="需要下载的集数")
+    channel: Optional[MessageChannel] = Field(None, description="通知渠道")
+    origin: Optional[str] = Field(None, description="来源")
+    downloader: Optional[str] = Field(None, description="下载器")
+    options: Optional[dict] = Field(None, description="其他参数")
+
+    # 输出参数
+    cancel: bool = Field(False, description="是否取消下载")
+    source: str = Field("未知拦截源", description="拦截源")
+    reason: str = Field("", description="拦截原因")
