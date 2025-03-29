@@ -1,11 +1,6 @@
 name: MoviePilot Builder v2
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - v2
-    paths:
-      - 'version.py'
 
 jobs:
   Docker-build:
@@ -14,6 +9,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: docker-fix
 
       - name: Release version
         id: release_version
@@ -49,7 +46,6 @@ jobs:
           file: Dockerfile
           platforms: |
             linux/amd64
-            linux/arm64/v8
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
