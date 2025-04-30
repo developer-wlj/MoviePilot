@@ -101,6 +101,8 @@ class ConfigModel(BaseModel):
     TMDB_IMAGE_DOMAIN: str = "image.tmdb.org"
     # TMDB API地址
     TMDB_API_DOMAIN: str = "api.themoviedb.org"
+    # TMDB元数据语言
+    TMDB_LOCALE: str = "zh"
     # TMDB API Key
     TMDB_API_KEY: str = "db55323b8d3e4154498498a75642b381"
     # TVDB API Key
@@ -238,6 +240,7 @@ class ConfigModel(BaseModel):
     SECURITY_IMAGE_DOMAINS: List[str] = Field(
         default_factory=lambda: ["image.tmdb.org",
                                  "static-mdb.v.geilijiasu.com",
+                                 "bing.com",
                                  "doubanio.com",
                                  "lain.bgm.tv",
                                  "raw.githubusercontent.com",

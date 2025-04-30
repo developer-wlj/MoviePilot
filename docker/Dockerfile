@@ -52,7 +52,7 @@ RUN apt-get update -y \
     && apt-get install -y google-chrome-stable \
     && apt-get clean -y \
     && rm -rf /var/lib/apt/lists/*
-COPY requirements.in requirements.in
+COPY ../requirements.in requirements.in
 RUN apt-get update -y \
     && apt-get install -y build-essential \
     && pip install --upgrade pip \
@@ -68,12 +68,13 @@ RUN apt-get update -y \
         /moviepilot/.cache \
         /var/lib/apt/lists/* \
         /var/tmp/*
-COPY . .
-RUN cp -f /app/nginx.conf /etc/nginx/nginx.template.conf \
-    && cp -f /app/update /usr/local/bin/mp_update \
-    && cp -f /app/entrypoint /entrypoint \
-    && cp -f /app/docker_http_proxy.conf /etc/nginx/docker_http_proxy.conf \
-    && chmod +x /entrypoint /usr/local/bin/mp_update \
+COPY .. .
+RUN cp -f /app/docker/nginx.common.conf /etc/nginx/common.conf \
+    && cp -f /app/docker/nginx.template.conf /etc/nginx/nginx.template.conf \
+    && cp -f /app/docker/update.sh /usr/local/bin/mp_update.sh \
+    && cp -f /app/docker/entrypoint.sh /entrypoint.sh \
+    && cp -f /app/docker/docker_http_proxy.conf /etc/nginx/docker_http_proxy.conf \
+    && chmod +x /entrypoint.sh /usr/local/bin/mp_update.sh \
     && mkdir -p ${HOME} \
     && groupadd -r moviepilot -g 918 \
     && useradd -r moviepilot -g moviepilot -d ${HOME} -s /bin/bash -u 918 \
@@ -95,4 +96,4 @@ RUN cp -f /app/nginx.conf /etc/nginx/nginx.template.conf \
     && find /app/app/plugins -name requirements.txt -type f -exec pip install -r {} \;
 EXPOSE 3000
 VOLUME [ "/config" ]
-ENTRYPOINT [ "/entrypoint" ]
+ENTRYPOINT [ "/entrypoint.sh" ]
