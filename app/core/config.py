@@ -111,7 +111,8 @@ class ConfigModel(BaseModel):
     # TMDB API Key
     TMDB_API_KEY: str = "db55323b8d3e4154498498a75642b381"
     # TVDB API Key
-    TVDB_API_KEY: str = "6b481081-10aa-440c-99f2-21d17717ee02"
+    TVDB_V4_API_KEY: str = "ed2aa66b-7899-4677-92a7-67bc9ce3d93a"
+    TVDB_V4_API_PIN:  str = ""
     # Fanart开关
     FANART_ENABLE: bool = True
     # Fanart API Key
@@ -429,7 +430,8 @@ class Settings(BaseSettings, ConfigModel, LogConfigModel):
             else:
                 value_to_write = str(converted_value) if converted_value is not None else ""
 
-            set_key(SystemUtils.get_env_path(), field.name, value_to_write)
+            set_key(dotenv_path=SystemUtils.get_env_path(), key_to_set=field.name, value_to_set=value_to_write,
+                    quote_mode="always")
             if is_converted:
                 logger.info(f"配置项 '{field.name}' 已自动修正并写入到 'app.env' 文件")
         return True, message
