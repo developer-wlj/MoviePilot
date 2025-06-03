@@ -26,8 +26,12 @@ class SystemHelper:
         if not SystemUtils.is_docker():
             return False, "非Docker环境，无法重启！"
         try:
-            # 创建 Docker 客户端
-            client = docker.DockerClient(base_url=settings.DOCKER_CLIENT_API)
+            kernel_name = SystemUtils.execute("uname -a").lower()
+            if "microsoft" in kernel_name:
+                client = docker.DockerClient(base_url="tcp://host.docker.internal:2375")
+            else:
+                # 创建 Docker 客户端
+                client = docker.DockerClient(base_url=settings.DOCKER_CLIENT_API)
             # 获取当前容器的 ID
             container_id = None
             with open("/proc/self/mountinfo", "r") as f:

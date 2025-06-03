@@ -28,6 +28,7 @@ RUN apt-get update -y \
         rsync \
         ffmpeg \
         nano \
+        gnupg \
     && \
     if [ "$(uname -m)" = "x86_64" ]; \
         then ln -s /usr/lib/x86_64-linux-musl/libc.so /lib/libc.musl-x86_64.so.1; \
@@ -42,6 +43,12 @@ RUN apt-get update -y \
         /moviepilot/.cache \
         /var/lib/apt/lists/* \
         /var/tmp/*
+RUN curl -fsSL https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome-archive-keyring.gpg \
+    && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome-archive-keyring.gpg] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list
+RUN apt-get update -y \
+    && apt-get install -y google-chrome-stable \
+    && apt-get clean -y \
+    && rm -rf /var/lib/apt/lists/*
 COPY ../requirements.in requirements.in
 RUN apt-get update -y \
     && apt-get install -y build-essential \
@@ -82,7 +89,8 @@ RUN cp -f /app/docker/nginx.common.conf /etc/nginx/common.conf \
         while read -r i; do if [ ! -d "/app/app/plugins/$i" ]; then mv "/tmp/MoviePilot-Plugins-main/plugins/$i" "/app/app/plugins/"; else echo "跳过 $i"; fi; done \
     && curl -sL "https://github.com/jxxghp/MoviePilot-Resources/archive/refs/heads/main.zip" | busybox unzip -d /tmp - \
     && mv -f /tmp/MoviePilot-Resources-main/resources/* /app/app/helper/ \
-    && rm -rf /tmp/*
+    && rm -rf /tmp/* \
+    && find /app/app/plugins -name requirements.txt -type f -exec pip install -r {} \;
 EXPOSE 3000
 VOLUME [ "${CONFIG_DIR}" ]
 ENTRYPOINT [ "/entrypoint.sh" ]
