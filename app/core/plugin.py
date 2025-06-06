@@ -16,7 +16,7 @@ from watchdog.observers import Observer
 
 from app import schemas
 from app.core.config import settings
-from app.core.event import eventmanager
+from app.core.event import eventmanager, Event
 from app.db.plugindata_oper import PluginDataOper
 from app.db.systemconfig_oper import SystemConfigOper
 from app.helper.module import ModuleHelper
@@ -87,7 +87,6 @@ class PluginManager(metaclass=Singleton):
     """
     插件管理器
     """
-    systemconfig: SystemConfigOper = None
 
     # 插件列表
     _plugins: dict = {}
@@ -99,10 +98,6 @@ class PluginManager(metaclass=Singleton):
     _observer: Observer = None
 
     def __init__(self):
-        self.siteshelper = SitesHelper()
-        self.pluginhelper = PluginHelper()
-        self.systemconfig = SystemConfigOper()
-        self.plugindata = PluginDataOper()
         # 开发者模式监测插件修改
         if settings.DEV or settings.PLUGIN_AUTO_RELOAD:
             self.__start_monitor()
@@ -141,7 +136,7 @@ class PluginManager(metaclass=Singleton):
                 filter_func=lambda _, obj: check_module(obj)
             )
         # 已安装插件
-        installed_plugins = self.systemconfig.get(SystemConfigKey.UserInstalledPlugins) or []
+        installed_plugins = SystemConfigOper().get(SystemConfigKey.UserInstalledPlugins) or []
         # 排序
         plugins.sort(key=lambda x: x.plugin_order if hasattr(x, "plugin_order") else 0)
         for plugin in plugins:
@@ -241,6 +236,19 @@ class PluginManager(metaclass=Singleton):
         """
         return self._plugins
 
+    @eventmanager.register(EventType.ConfigChanged)
+    def handle_config_changed(self, event: Event):
+        """
+        处理配置变更事件
+        :param event: 事件对象
+        """
+        if not event:
+            return
+        event_data: schemas.ConfigChangeEventData = event.event_data
+        if event_data.key not in ['DEV', 'PLUGIN_AUTO_RELOAD']:
+            return
+        self.reload_monitor()
+
     def reload_monitor(self):
         """
         重新加载插件文件修改监测
@@ -282,12 +290,15 @@ class PluginManager(metaclass=Singleton):
         停止插件
         :param plugin: 插件实例
         """
-        # 关闭数据库
-        if hasattr(plugin, "close"):
-            plugin.close()
-        # 关闭插件
-        if hasattr(plugin, "stop_service"):
-            plugin.stop_service()
+        try:
+            # 关闭数据库
+            if hasattr(plugin, "close"):
+                plugin.close()
+            # 关闭插件
+            if hasattr(plugin, "stop_service"):
+                plugin.stop_service()
+        except Exception as e:
+            logger.warn(f"停止插件 {plugin.get_name()} 时发生错误: {str(e)}")
 
     def remove_plugin(self, plugin_id: str):
         """
@@ -315,7 +326,7 @@ class PluginManager(metaclass=Singleton):
 
         def install_plugin(plugin):
             start_time = time.time()
-            state, msg = self.pluginhelper.install(pid=plugin.id, repo_url=plugin.repo_url, force_install=True)
+            state, msg = PluginHelper().install(pid=plugin.id, repo_url=plugin.repo_url, force_install=True)
             elapsed_time = time.time() - start_time
             if state:
                 logger.info(
@@ -330,7 +341,7 @@ class PluginManager(metaclass=Singleton):
             return []
 
         # 获取已安装插件列表
-        install_plugins = self.systemconfig.get(SystemConfigKey.UserInstalledPlugins) or []
+        install_plugins = SystemConfigOper().get(SystemConfigKey.UserInstalledPlugins) or []
         # 获取在线插件列表
         online_plugins = self.get_online_plugins()
         # 确定需要安装的插件
@@ -366,19 +377,21 @@ class PluginManager(metaclass=Singleton):
         )
         return sync_plugins
 
-    def install_plugin_missing_dependencies(self) -> List[str]:
+    @staticmethod
+    def install_plugin_missing_dependencies() -> List[str]:
         """
         安装插件中缺失或不兼容的依赖项
         """
+        pluginhelper = PluginHelper()
         # 第一步：获取需要安装的依赖项列表
-        missing_dependencies = self.pluginhelper.find_missing_dependencies()
+        missing_dependencies = pluginhelper.find_missing_dependencies()
         if not missing_dependencies:
             return missing_dependencies
         logger.debug(f"检测到缺失的依赖项: {missing_dependencies}")
         logger.info(f"开始安装缺失的依赖项，共 {len(missing_dependencies)} 个...")
         # 第二步：安装依赖项并返回结果
         total_start_time = time.time()
-        success, message = self.pluginhelper.install_dependencies(missing_dependencies)
+        success, message = pluginhelper.install_dependencies(missing_dependencies)
         total_elapsed_time = time.time() - total_start_time
         if success:
             logger.info(f"已完成 {len(missing_dependencies)} 个依赖项安装，总耗时：{total_elapsed_time:.2f} 秒")
@@ -393,7 +406,7 @@ class PluginManager(metaclass=Singleton):
         """
         if not self._plugins.get(pid):
             return {}
-        conf = self.systemconfig.get(self._config_key % pid)
+        conf = SystemConfigOper().get(self._config_key % pid)
         if conf:
             # 去掉空Key
             return {k: v for k, v in conf.items() if k}
@@ -407,7 +420,7 @@ class PluginManager(metaclass=Singleton):
         """
         if not self._plugins.get(pid):
             return False
-        self.systemconfig.set(self._config_key % pid, conf)
+        SystemConfigOper().set(self._config_key % pid, conf)
         return True
 
     def delete_plugin_config(self, pid: str) -> bool:
@@ -417,7 +430,7 @@ class PluginManager(metaclass=Singleton):
         """
         if not self._plugins.get(pid):
             return False
-        return self.systemconfig.delete(self._config_key % pid)
+        return SystemConfigOper().delete(self._config_key % pid)
 
     def delete_plugin_data(self, pid: str) -> bool:
         """
@@ -426,7 +439,7 @@ class PluginManager(metaclass=Singleton):
         """
         if not self._plugins.get(pid):
             return False
-        self.plugindata.del_data(pid)
+        PluginDataOper().del_data(pid)
         return True
 
     def get_plugin_state(self, pid: str) -> bool:
@@ -788,7 +801,7 @@ class PluginManager(metaclass=Singleton):
         # 返回值
         plugins = []
         # 已安装插件
-        installed_apps = self.systemconfig.get(SystemConfigKey.UserInstalledPlugins) or []
+        installed_apps = SystemConfigOper().get(SystemConfigKey.UserInstalledPlugins) or []
         for pid, plugin_class in self._plugins.items():
             # 运行状插件
             plugin_obj = self._running_plugins.get(pid)
@@ -885,9 +898,9 @@ class PluginManager(metaclass=Singleton):
         if not market:
             return []
         # 已安装插件
-        installed_apps = self.systemconfig.get(SystemConfigKey.UserInstalledPlugins) or []
+        installed_apps = SystemConfigOper().get(SystemConfigKey.UserInstalledPlugins) or []
         # 获取在线插件
-        online_plugins = self.pluginhelper.get_plugins(market, package_version)
+        online_plugins = PluginHelper().get_plugins(market, package_version)
         if online_plugins is None:
             logger.warning(
                 f"获取{package_version if package_version else ''}插件库失败：{market}，请检查 GitHub 网络连接")
@@ -974,7 +987,8 @@ class PluginManager(metaclass=Singleton):
 
         return ret_plugins
 
-    def __set_and_check_auth_level(self, plugin: Union[schemas.Plugin, Type[Any]],
+    @staticmethod
+    def __set_and_check_auth_level(plugin: Union[schemas.Plugin, Type[Any]],
                                    source: Optional[Union[dict, Type[Any]]] = None) -> bool:
         """
         设置并检查插件的认证级别
@@ -998,7 +1012,8 @@ class PluginManager(metaclass=Singleton):
         # 3 - 站点&密钥认证可见
         # 99 - 站点&特殊密钥认证可见
         # 如果当前站点认证级别大于 1 且插件级别为 99，并存在插件公钥，说明为特殊密钥认证，通过密钥匹配进行认证
-        if self.siteshelper.auth_level > 1 and plugin.auth_level == 99 and hasattr(plugin, "plugin_public_key"):
+        siteshelper = SitesHelper()
+        if siteshelper.auth_level > 1 and plugin.auth_level == 99 and hasattr(plugin, "plugin_public_key"):
             plugin_id = plugin.id if isinstance(plugin, schemas.Plugin) else plugin.__name__
             public_key = plugin.plugin_public_key
             if public_key:
@@ -1006,7 +1021,7 @@ class PluginManager(metaclass=Singleton):
                 verify = RSAUtils.verify_rsa_keys(public_key=public_key, private_key=private_key)
                 return verify
         # 如果当前站点认证级别小于插件级别，则返回 False
-        if self.siteshelper.auth_level < plugin.auth_level:
+        if siteshelper.auth_level < plugin.auth_level:
             return False
         return True
 
@@ -1085,10 +1100,11 @@ class PluginManager(metaclass=Singleton):
                 return False, msg
 
             # 将分身插件添加到已安装列表
-            installed_plugins = self.systemconfig.get(SystemConfigKey.UserInstalledPlugins) or []
+            systemconfig = SystemConfigOper()
+            installed_plugins = systemconfig.get(SystemConfigKey.UserInstalledPlugins) or []
             if clone_id not in installed_plugins:
                 installed_plugins.append(clone_id)
-                self.systemconfig.set(SystemConfigKey.UserInstalledPlugins, installed_plugins)
+                systemconfig.set(SystemConfigKey.UserInstalledPlugins, installed_plugins)
 
             # 为分身插件创建初始配置（从原插件复制配置）
             logger.info(f"正在为分身插件 {clone_id} 创建初始配置...")

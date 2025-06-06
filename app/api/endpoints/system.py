@@ -20,20 +20,21 @@ from app.core.config import global_vars, settings
 from app.core.metainfo import MetaInfo
 from app.core.module import ModuleManager
 from app.core.security import verify_apitoken, verify_resource_token, verify_token
+from app.core.event import eventmanager
 from app.db.models import User
 from app.db.systemconfig_oper import SystemConfigOper
 from app.db.user_oper import get_current_active_superuser
 from app.helper.mediaserver import MediaServerHelper
-from app.helper.message import MessageHelper, MessageQueueManager
+from app.helper.message import MessageHelper
 from app.helper.progress import ProgressHelper
 from app.helper.rule import RuleHelper
 from app.helper.sites import SitesHelper
 from app.helper.subscribe import SubscribeHelper
 from app.helper.system import SystemHelper
 from app.log import logger
-from app.monitor import Monitor
 from app.scheduler import Scheduler
-from app.schemas.types import SystemConfigKey
+from app.schemas import ConfigChangeEventData
+from app.schemas.types import SystemConfigKey, EventType
 from app.utils.crypto import HashUtils
 from app.utils.http import RequestUtils
 from app.utils.security import SecurityUtils
@@ -219,17 +220,26 @@ def set_env_setting(env: dict,
     result = settings.update_settings(env=env)
     # 统计成功和失败的结果
     success_updates = {k: v for k, v in result.items() if v[0]}
-    failed_updates = {k: v for k, v in result.items() if not v[0]}
+    failed_updates = {k: v for k, v in result.items() if v[0] is False}
 
     if failed_updates:
         return schemas.Response(
             success=False,
-            message="部分配置项更新失败",
+            message=f"{', '.join(failed_updates.keys())} 配置项更新失败",
             data={
                 "success_updates": success_updates,
                 "failed_updates": failed_updates
             }
         )
+
+    if success_updates:
+        for key in success_updates.keys():
+            # 发送配置变更事件
+            eventmanager.send_event(etype=EventType.ConfigChanged, data=ConfigChangeEventData(
+                key=key,
+                value=getattr(settings, key, None),
+                change_type="update"
+            ))
 
     return schemas.Response(
         success=True,
@@ -284,12 +294,28 @@ def set_setting(key: str, value: Union[list, dict, bool, int, str] = None,
     """
     if hasattr(settings, key):
         success, message = settings.update_setting(key=key, value=value)
+        if success:
+            # 发送配置变更事件
+            eventmanager.send_event(etype=EventType.ConfigChanged, data=ConfigChangeEventData(
+                key=key,
+                value=value,
+                change_type="update"
+            ))
+        elif success is None:
+            success = True
         return schemas.Response(success=success, message=message)
     elif key in {item.value for item in SystemConfigKey}:
         if isinstance(value, list):
             value = list(filter(None, value))
             value = value if value else None
-        SystemConfigOper().set(key, value)
+        success = SystemConfigOper().set(key, value)
+        if success:
+            # 发送配置变更事件
+            eventmanager.send_event(etype=EventType.ConfigChanged, data=ConfigChangeEventData(
+                key=key,
+                value=value,
+                change_type="update"
+            ))
         return schemas.Response(success=True)
     else:
         return schemas.Response(success=False, message=f"配置项 '{key}' 不存在")
@@ -481,18 +507,6 @@ def restart_system(_: User = Depends(get_current_active_superuser)):
     # 执行重启
     ret, msg = SystemHelper.restart()
     return schemas.Response(success=ret, message=msg)
-
-
-@router.get("/reload", summary="重新加载模块", response_model=schemas.Response)
-def reload_module(_: User = Depends(get_current_active_superuser)):
-    """
-    重新加载模块（仅管理员）
-    """
-    MessageQueueManager().init_config()
-    ModuleManager().reload()
-    Scheduler().init()
-    Monitor().init()
-    return schemas.Response(success=True)
 
 
 @router.get("/runscheduler", summary="运行服务", response_model=schemas.Response)

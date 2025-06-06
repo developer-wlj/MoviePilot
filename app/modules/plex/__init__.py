@@ -2,12 +2,12 @@ from typing import Optional, Tuple, Union, Any, List, Generator
 
 from app import schemas
 from app.core.context import MediaInfo
-from app.core.event import eventmanager
+from app.core.event import eventmanager, Event
 from app.log import logger
 from app.modules import _ModuleBase, _MediaServerBase
 from app.modules.plex.plex import Plex
 from app.schemas import AuthCredentials, AuthInterceptCredentials
-from app.schemas.types import MediaType, ModuleType, ChainEventType, MediaServerType
+from app.schemas.types import MediaType, ModuleType, ChainEventType, MediaServerType, SystemConfigKey, EventType
 
 
 class PlexModule(_ModuleBase, _MediaServerBase[Plex]):
@@ -18,6 +18,19 @@ class PlexModule(_ModuleBase, _MediaServerBase[Plex]):
         """
         super().init_service(service_name=Plex.__name__.lower(),
                              service_type=lambda conf: Plex(**conf.config, sync_libraries=conf.sync_libraries))
+
+    @eventmanager.register(EventType.ConfigChanged)
+    def handle_config_changed(self, event: Event):
+        """
+        处理配置变更事件
+        :param event: 事件对象
+        """
+        if not event:
+            return
+        event_data: schemas.ConfigChangeEventData = event.event_data
+        if event_data.key not in [SystemConfigKey.MediaServers.value]:
+            return
+        self.init_module()
 
     @staticmethod
     def get_name() -> str:
@@ -45,7 +58,12 @@ class PlexModule(_ModuleBase, _MediaServerBase[Plex]):
         return 3
 
     def stop(self):
-        pass
+        """
+        停止模块服务
+        """
+        for server in self.get_instances().values():
+            if server:
+                server.close()
 
     def test(self) -> Optional[Tuple[bool, str]]:
         """
@@ -273,7 +291,8 @@ class PlexModule(_ModuleBase, _MediaServerBase[Plex]):
             episodes=episodes
         ) for season, episodes in seasoninfo.items()]
 
-    def mediaserver_playing(self, server: str, count: Optional[int] = 20, **kwargs) -> List[schemas.MediaServerPlayItem]:
+    def mediaserver_playing(self, server: str, count: Optional[int] = 20,
+                            **kwargs) -> List[schemas.MediaServerPlayItem]:
         """
         获取媒体服务器正在播放信息
         """

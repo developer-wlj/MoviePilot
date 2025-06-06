@@ -1,8 +1,7 @@
+import gc
 import re
 import traceback
 from typing import Dict, List, Union, Optional
-
-from cachetools import cached, TTLCache
 
 from app.chain import ChainBase
 from app.chain.media import MediaChain
@@ -11,32 +10,23 @@ from app.core.context import TorrentInfo, Context, MediaInfo
 from app.core.metainfo import MetaInfo
 from app.db.site_oper import SiteOper
 from app.db.systemconfig_oper import SystemConfigOper
+from app.helper.memory import memory_optimized, clear_large_objects
 from app.helper.rss import RssHelper
 from app.helper.sites import SitesHelper
 from app.helper.torrent import TorrentHelper
 from app.log import logger
 from app.schemas import Notification
 from app.schemas.types import SystemConfigKey, MessageChannel, NotificationType, MediaType
-from app.utils.singleton import Singleton
 from app.utils.string import StringUtils
 
 
-class TorrentsChain(ChainBase, metaclass=Singleton):
+class TorrentsChain(ChainBase):
     """
     站点首页或RSS种子处理链，服务于订阅、刷流等
     """
 
     _spider_file = "__torrents_cache__"
     _rss_file = "__rss_cache__"
-
-    def __init__(self):
-        super().__init__()
-        self.siteshelper = SitesHelper()
-        self.siteoper = SiteOper()
-        self.rsshelper = RssHelper()
-        self.systemconfig = SystemConfigOper()
-        self.mediachain = MediaChain()
-        self.torrenthelper = TorrentHelper()
 
     @property
     def cache_file(self) -> str:
@@ -81,39 +71,39 @@ class TorrentsChain(ChainBase, metaclass=Singleton):
         self.remove_cache(self._rss_file)
         logger.info(f'种子缓存数据清理完成')
 
-    @cached(cache=TTLCache(maxsize=128, ttl=595))
+    @memory_optimized(force_gc_after=True, log_memory=True)
     def browse(self, domain: str, keyword: Optional[str] = None, cat: Optional[str] = None,
                page: Optional[int] = 0) -> List[TorrentInfo]:
         """
-        浏览站点首页内容，返回种子清单，TTL缓存10分钟
+        浏览站点首页内容，返回种子清单，TTL缓存5分钟
         :param domain: 站点域名
         :param keyword: 搜索标题
         :param cat: 搜索分类
         :param page: 页码
         """
         logger.info(f'开始获取站点 {domain} 最新种子 ...')
-        site = self.siteshelper.get_indexer(domain)
+        site = SitesHelper().get_indexer(domain)
         if not site:
             logger.error(f'站点 {domain} 不存在！')
             return []
         return self.refresh_torrents(site=site, keyword=keyword, cat=cat, page=page)
 
-    @cached(cache=TTLCache(maxsize=128, ttl=295))
+    @memory_optimized(force_gc_after=True, log_memory=True)
     def rss(self, domain: str) -> List[TorrentInfo]:
         """
-        获取站点RSS内容，返回种子清单，TTL缓存5分钟
+        获取站点RSS内容，返回种子清单，TTL缓存3分钟
         :param domain: 站点域名
         """
         logger.info(f'开始获取站点 {domain} RSS ...')
-        site = self.siteshelper.get_indexer(domain)
+        site = SitesHelper().get_indexer(domain)
         if not site:
             logger.error(f'站点 {domain} 不存在！')
             return []
         if not site.get("rss"):
             logger.error(f'站点 {domain} 未配置RSS地址！')
             return []
-        rss_items = self.rsshelper.parse(site.get("rss"), True if site.get("proxy") else False,
-                                         timeout=int(site.get("timeout") or 30))
+        rss_items = RssHelper().parse(site.get("rss"), True if site.get("proxy") else False,
+                                      timeout=int(site.get("timeout") or 30))
         if rss_items is None:
             # rss过期，尝试保留原配置生成新的rss
             self.__renew_rss_url(domain=domain, site=site)
@@ -144,6 +134,7 @@ class TorrentsChain(ChainBase, metaclass=Singleton):
 
         return ret_torrents
 
+    @memory_optimized(force_gc_after=True, log_memory=True)
     def refresh(self, stype: Optional[str] = None, sites: List[int] = None) -> Dict[str, List[Context]]:
         """
         刷新站点最新资源，识别并缓存起来
@@ -156,7 +147,7 @@ class TorrentsChain(ChainBase, metaclass=Singleton):
 
         # 刷新站点
         if not sites:
-            sites = self.systemconfig.get(SystemConfigKey.RssSites) or []
+            sites = SystemConfigOper().get(SystemConfigKey.RssSites) or []
 
         # 读取缓存
         torrents_cache = self.get_torrents()
@@ -164,12 +155,13 @@ class TorrentsChain(ChainBase, metaclass=Singleton):
         # 缓存过滤掉无效种子
         for _domain, _torrents in torrents_cache.items():
             torrents_cache[_domain] = [_torrent for _torrent in _torrents
-                                       if not self.torrenthelper.is_invalid(_torrent.torrent_info.enclosure)]
+                                       if not TorrentHelper().is_invalid(_torrent.torrent_info.enclosure)]
 
         # 所有站点索引
-        indexers = self.siteshelper.get_indexers()
+        indexers = SitesHelper().get_indexers()
         # 需要刷新的站点domain
         domains = []
+
         # 遍历站点缓存资源
         for indexer in indexers:
             if global_vars.is_system_stopped:
@@ -190,11 +182,11 @@ class TorrentsChain(ChainBase, metaclass=Singleton):
             # 取前N条
             torrents = torrents[:settings.CACHE_CONF["refresh"]]
             if torrents:
-                # 过滤出没有处理过的种子
+                # 过滤出没有处理过的种子 - 优化：使用集合查找，避免重复创建字符串列表
+                cached_signatures = {f'{t.torrent_info.title}{t.torrent_info.description}'
+                                     for t in torrents_cache.get(domain) or []}
                 torrents = [torrent for torrent in torrents
-                            if f'{torrent.title}{torrent.description}'
-                            not in [f'{t.torrent_info.title}{t.torrent_info.description}'
-                                    for t in torrents_cache.get(domain) or []]]
+                            if f'{torrent.title}{torrent.description}' not in cached_signatures]
                 if torrents:
                     logger.info(f'{indexer.get("name")} 有 {len(torrents)} 个新种子')
                 else:
@@ -213,12 +205,12 @@ class TorrentsChain(ChainBase, metaclass=Singleton):
                             and torrent.category == MediaType.TV.value:
                         meta.type = MediaType.TV
                     # 识别媒体信息
-                    mediainfo: MediaInfo = self.mediachain.recognize_by_meta(meta)
+                    mediainfo: MediaInfo = MediaChain().recognize_by_meta(meta)
                     if not mediainfo:
                         logger.warn(f'{torrent.title} 未识别到媒体信息')
                         # 存储空的媒体信息
                         mediainfo = MediaInfo()
-                    # 清理多余数据
+                    # 清理多余数据，减少内存占用
                     mediainfo.clear()
                     # 上下文
                     context = Context(meta_info=meta, media_info=mediainfo, torrent_info=torrent)
@@ -229,9 +221,17 @@ class TorrentsChain(ChainBase, metaclass=Singleton):
                         torrents_cache[domain].append(context)
                     # 如果超过了限制条数则移除掉前面的
                     if len(torrents_cache[domain]) > settings.CACHE_CONF["torrents"]:
+                        # 优化：直接删除旧数据，无需重复清理（数据进缓存前已经clear过）
+                        old_contexts = torrents_cache[domain][:-settings.CACHE_CONF["torrents"]]
                         torrents_cache[domain] = torrents_cache[domain][-settings.CACHE_CONF["torrents"]:]
+                        # 清理旧对象
+                        clear_large_objects(*old_contexts)
+                    # 优化：清理不再需要的临时变量
+                    del meta, mediainfo, context
                 # 回收资源
+                torrents.clear()
                 del torrents
+                gc.collect()
             else:
                 logger.info(f'{indexer.get("name")} 没有获取到种子')
 
@@ -243,7 +243,18 @@ class TorrentsChain(ChainBase, metaclass=Singleton):
 
         # 去除不在站点范围内的缓存种子
         if sites and torrents_cache:
+            old_cache = torrents_cache
             torrents_cache = {k: v for k, v in torrents_cache.items() if k in domains}
+            # 清理不再使用的缓存数据（数据进缓存前已经clear过，无需重复清理）
+            removed_contexts = []
+            for domain, contexts in old_cache.items():
+                if domain not in domains:
+                    removed_contexts.extend(contexts)
+            # 批量清理
+            if removed_contexts:
+                clear_large_objects(*removed_contexts)
+            del old_cache
+
         return torrents_cache
 
     def __renew_rss_url(self, domain: str, site: dict):
@@ -254,7 +265,7 @@ class TorrentsChain(ChainBase, metaclass=Singleton):
             # RSS链接过期
             logger.error(f"站点 {domain} RSS链接已过期，正在尝试自动获取！")
             # 自动生成rss地址
-            rss_url, errmsg = self.rsshelper.get_rss_link(
+            rss_url, errmsg = RssHelper().get_rss_link(
                 url=site.get("url"),
                 cookie=site.get("cookie"),
                 ua=site.get("ua") or settings.USER_AGENT,
@@ -268,7 +279,7 @@ class TorrentsChain(ChainBase, metaclass=Singleton):
                     # 获取过期rss除去passkey部分
                     new_rss = re.sub(r'&passkey=([a-zA-Z0-9]+)', f'&passkey={new_passkey}', site.get("rss"))
                     logger.info(f"更新站点 {domain} RSS地址 ...")
-                    self.siteoper.update_rss(domain=domain, rss=new_rss)
+                    SiteOper().update_rss(domain=domain, rss=new_rss)
                 else:
                     # 发送消息
                     self.post_message(

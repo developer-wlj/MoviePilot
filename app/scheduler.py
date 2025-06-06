@@ -15,20 +15,19 @@ from app.chain.mediaserver import MediaServerChain
 from app.chain.recommend import RecommendChain
 from app.chain.site import SiteChain
 from app.chain.subscribe import SubscribeChain
-from app.chain.tmdb import TmdbChain
 from app.chain.transfer import TransferChain
 from app.chain.workflow import WorkflowChain
 from app.core.config import settings
-from app.core.event import EventManager
+from app.core.event import EventManager, eventmanager, Event
 from app.core.plugin import PluginManager
 from app.db.systemconfig_oper import SystemConfigOper
 from app.helper.sites import SitesHelper
+from app.helper.wallpaper import WallpaperHelper
 from app.log import logger
-from app.schemas import Notification, NotificationType, Workflow
+from app.schemas import Notification, NotificationType, Workflow, ConfigChangeEventData
 from app.schemas.types import EventType, SystemConfigKey
 from app.utils.singleton import Singleton
 from app.utils.timer import TimerUtils
-
 
 lock = threading.Lock()
 
@@ -55,6 +54,20 @@ class Scheduler(metaclass=Singleton):
     _auth_message = False
 
     def __init__(self):
+        self.init()
+
+    @eventmanager.register(EventType.ConfigChanged)
+    def handle_config_changed(self, event: Event):
+        """
+        处理配置变更事件
+        :param event: 事件对象
+        """
+        if not event:
+            return
+        event_data: ConfigChangeEventData = event.event_data
+        if event_data.key not in ['DEV', 'COOKIECLOUD_INTERVAL', 'MEDIASERVER_SYNC_INTERVAL', 'SUBSCRIBE_SEARCH',
+                                  'SUBSCRIBE_MODE', 'SUBSCRIBE_RSS_INTERVAL', 'SITEDATA_REFRESH_INTERVAL']:
+            return
         self.init()
 
     def init(self):
@@ -135,7 +148,7 @@ class Scheduler(metaclass=Singleton):
                 },
                 "random_wallpager": {
                     "name": "壁纸缓存",
-                    "func": TmdbChain().get_trending_wallpapers,
+                    "func": WallpaperHelper().get_wallpapers,
                     "running": False,
                 },
                 "sitedata_refresh": {

@@ -1,7 +1,6 @@
 import copy
 import json
 import os
-import re
 import secrets
 import sys
 import threading
@@ -255,30 +254,26 @@ class ConfigModel(BaseModel):
     # 编码探测的最低置信度阈值
     ENCODING_DETECTION_MIN_CONFIDENCE: float = 0.8
     # 允许的图片缓存域名
-    SECURITY_IMAGE_DOMAINS: List[str] = Field(
-        default_factory=lambda: ["image.tmdb.org",
-                                 "static-mdb.v.geilijiasu.com",
-                                 "bing.com",
-                                 "doubanio.com",
-                                 "lain.bgm.tv",
-                                 "raw.githubusercontent.com",
-                                 "github.com",
-                                 "thetvdb.com",
-                                 "cctvpic.com",
-                                 "iqiyipic.com",
-                                 "hdslb.com",
-                                 "cmvideo.cn",
-                                 "ykimg.com",
-                                 "qpic.cn"]
-    )
+    SECURITY_IMAGE_DOMAINS: list = Field(default=[
+        "image.tmdb.org",
+        "static-mdb.v.geilijiasu.com",
+        "bing.com",
+        "doubanio.com",
+        "lain.bgm.tv",
+        "raw.githubusercontent.com",
+        "github.com",
+        "thetvdb.com",
+        "cctvpic.com",
+        "iqiyipic.com",
+        "hdslb.com",
+        "cmvideo.cn",
+        "ykimg.com",
+        "qpic.cn"
+    ])
     # 允许的图片文件后缀格式
-    SECURITY_IMAGE_SUFFIXES: List[str] = Field(
-        default_factory=lambda: [".jpg", ".jpeg", ".png", ".webp", ".gif", ".svg", ".avif"]
-    )
+    SECURITY_IMAGE_SUFFIXES: list = Field(default=[".jpg", ".jpeg", ".png", ".webp", ".gif", ".svg", ".avif"])
     # 重命名时支持的S0别名
-    RENAME_FORMAT_S0_NAMES: List[str] = Field(
-        default_factory=lambda: ["Specials", "SPs"]
-    )
+    RENAME_FORMAT_S0_NAMES: list = Field(default=["Specials", "SPs"])
     # 启用分词搜索
     TOKENIZED_SEARCH: bool = False
     # 为指定默认字幕添加.default后缀
@@ -333,6 +328,7 @@ class Settings(BaseSettings, ConfigModel, LogConfigModel):
                                raise_exception: bool = False) -> Tuple[Any, bool]:
         """
         通用类型转换函数，根据预期类型转换值。如果转换失败，返回默认值
+        :return: 元组 (转换后的值, 是否需要更新)
         """
         if isinstance(value, (list, dict, set)):
             value = copy.deepcopy(value)
@@ -373,12 +369,8 @@ class Settings(BaseSettings, ConfigModel, LogConfigModel):
                     converted = float(value)
                     return converted, str(converted) != str(original_value)
             elif expected_type is str:
-                # 清理 value 中所有空白字符的字段
-                fields_not_keep_spaces = {"AUTO_DOWNLOAD_USER", "REPO_GITHUB_TOKEN", "PLUGIN_MARKET"}
-                if field_name in fields_not_keep_spaces:
-                    value = re.sub(r"\s+", "", value)
-                return value, str(value) != str(original_value)
-            # 支持 list 类型的处理
+                converted = str(value).strip()
+                return converted, converted != str(original_value)
             elif expected_type is list:
                 if isinstance(value, list):
                     return value, str(value) != str(original_value)
@@ -388,7 +380,6 @@ class Settings(BaseSettings, ConfigModel, LogConfigModel):
                         return items, items != original_value
                     else:
                         return items, str(items) != str(original_value)
-            # 可根据需要添加更多类型处理
             else:
                 return value, str(value) != str(original_value)
         except (ValueError, TypeError) as e:
@@ -398,8 +389,6 @@ class Settings(BaseSettings, ConfigModel, LogConfigModel):
                 f"配置项 '{field_name}' 的值 '{value}' 无法转换成正确的类型，使用默认值 '{default}'，错误信息: {e}")
         return default, True
 
-    # TODO[pydantic]: We couldn't refactor the `validator`, please replace it by `field_validator` manually.
-    # Check https://docs.pydantic.dev/dev-v2/migration/#changes-to-validators for more information.
     @validator('*', pre=True, always=True)
     def generic_type_validator(cls, value: Any, field):  # noqa
         """
@@ -442,9 +431,12 @@ class Settings(BaseSettings, ConfigModel, LogConfigModel):
                 logger.info(f"配置项 '{field.name}' 已自动修正并写入到 'app.env' 文件")
         return True, message
 
-    def update_setting(self, key: str, value: Any) -> Tuple[bool, str]:
+    def update_setting(self, key: str, value: Any) -> Tuple[Optional[bool], str]:
         """
         更新单个配置项
+        :param key: 配置项的名称
+        :param value: 配置项的新值
+        :return: (是否成功 True 成功/False 失败/None 无需更新, 错误信息)
         """
         if not hasattr(self, key):
             return False, f"配置项 '{key}' 不存在"
@@ -455,8 +447,11 @@ class Settings(BaseSettings, ConfigModel, LogConfigModel):
             if field.name == "API_TOKEN":
                 converted_value, needs_update = self.validate_api_token(value, original_value)
             else:
-                converted_value, needs_update = self.generic_type_converter(value, original_value, field.type_,
-                                                                            field.default, key)
+                converted_value, needs_update = self.generic_type_converter(value,
+                                                                            original_value,
+                                                                            field.type_,
+                                                                            field.default,
+                                                                            key)
             # 如果没有抛出异常，则统一使用 converted_value 进行更新
             if needs_update or str(value) != str(converted_value):
                 success, message = self.update_env_config(field, value, converted_value)
@@ -466,30 +461,17 @@ class Settings(BaseSettings, ConfigModel, LogConfigModel):
                     if hasattr(log_settings, key):
                         setattr(log_settings, key, converted_value)
                 return success, message
-            return True, ""
+            return None, ""
         except Exception as e:
             return False, str(e)
 
-    def update_settings(self, env: Dict[str, Any]) -> Dict[str, Tuple[bool, str]]:
+    def update_settings(self, env: Dict[str, Any]) -> Dict[str, Tuple[Optional[bool], str]]:
         """
         更新多个配置项
         """
         results = {}
-        log_updated, plugin_monitor_updated = False, False
         for k, v in env.items():
             results[k] = self.update_setting(k, v)
-            if hasattr(log_settings, k):
-                log_updated = True
-            if k in ["PLUGIN_AUTO_RELOAD", "DEV"]:
-                plugin_monitor_updated = True
-        # 本次更新存在日志配置项更新，需要重新加载日志配置
-        if log_updated:
-            logger.update_loggers()
-        # 本次更新存在插件监控配置项更新，需要重新加载插件监控
-        if plugin_monitor_updated:
-            # 解决顶层循环导入问题
-            from app.core.plugin import PluginManager
-            PluginManager().reload_monitor()
         return results
 
     @property
@@ -546,7 +528,8 @@ class Settings(BaseSettings, ConfigModel, LogConfigModel):
             "tmdb": "TMDB请求缓存数量",
             "douban": "豆瓣请求缓存数量",
             "fanart": "Fanart请求缓存数量",
-            "meta": "元数据缓存过期时间（秒）"
+            "meta": "元数据缓存过期时间（秒）",
+            "memory": "最大占用内存（MB）"
         }
         """
         if self.BIG_MEMORY_MODE:
@@ -557,7 +540,8 @@ class Settings(BaseSettings, ConfigModel, LogConfigModel):
                 "douban": 512,
                 "bangumi": 512,
                 "fanart": 512,
-                "meta": (self.META_CACHE_EXPIRE or 24) * 3600
+                "meta": (self.META_CACHE_EXPIRE or 24) * 3600,
+                "memory": 2 * 1024
             }
         return {
             "torrents": 100,
@@ -566,7 +550,8 @@ class Settings(BaseSettings, ConfigModel, LogConfigModel):
             "douban": 256,
             "bangumi": 256,
             "fanart": 128,
-            "meta": (self.META_CACHE_EXPIRE or 2) * 3600
+            "meta": (self.META_CACHE_EXPIRE or 2) * 3600,
+            "memory": 1024
         }
 
     @property
@@ -642,6 +627,10 @@ class Settings(BaseSettings, ConfigModel, LogConfigModel):
         return UrlUtils.combine_url(host=self.APP_DOMAIN, path=url)
 
 
+# 实例化配置
+settings = Settings()
+
+
 class GlobalVar(object):
     """
     全局标识
@@ -698,9 +687,6 @@ class GlobalVar(object):
         """
         return self.is_system_stopped or workflow_id in self.EMERGENCY_STOP_WORKFLOWS
 
-
-# 实例化配置
-settings = Settings()
 
 # 全局标识
 global_vars = GlobalVar()

@@ -2,7 +2,6 @@ import threading
 from typing import List, Union, Optional, Generator, Any
 
 from app.chain import ChainBase
-from app.core.cache import cached
 from app.core.config import global_vars
 from app.db.mediaserver_oper import MediaServerOper
 from app.helper.service import ServiceConfigHelper
@@ -16,10 +15,6 @@ class MediaServerChain(ChainBase):
     """
     媒体服务器处理链
     """
-
-    def __init__(self):
-        super().__init__()
-        self.dboper = MediaServerOper()
 
     def librarys(self, server: str, username: Optional[str] = None,
                  hidden: bool = False) -> List[MediaServerLibrary]:
@@ -96,7 +91,6 @@ class MediaServerChain(ChainBase):
         """
         return self.run_module("mediaserver_latest", count=count, server=server, username=username)
 
-    @cached(maxsize=1, ttl=3600)
     def get_latest_wallpapers(self, server: Optional[str] = None, count: Optional[int] = 10,
                               remote: bool = True, username: Optional[str] = None) -> List[str]:
         """
@@ -131,7 +125,8 @@ class MediaServerChain(ChainBase):
             # 汇总统计
             total_count = 0
             # 清空登记薄
-            self.dboper.empty()
+            dboper = MediaServerOper()
+            dboper.empty()
             # 遍历媒体服务器
             for mediaserver in mediaservers:
                 if not mediaserver:
@@ -175,7 +170,7 @@ class MediaServerChain(ChainBase):
                         item_dict = item.dict()
                         item_dict["seasoninfo"] = seasoninfo
                         item_dict["item_type"] = item_type
-                        self.dboper.add(**item_dict)
+                        dboper.add(**item_dict)
                     logger.info(f"{server_name} 媒体库 {library.name} 同步完成，共同步数量：{library_count}")
                     # 总数累加
                     total_count += library_count
