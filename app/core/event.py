@@ -456,6 +456,9 @@ class EventManager(metaclass=Singleton):
             elif class_name.endswith("Chain"):
                 module_name = f"app.chain.{class_name[:-5].lower()}"
                 module = importlib.import_module(module_name)
+            elif class_name.endswith("Helper"):
+                module_name = f"app.helper.{class_name[:-6].lower()}"
+                module = importlib.import_module(module_name)
             else:
                 module_name = f"app.{class_name.lower()}"
                 module = importlib.import_module(module_name)
@@ -465,7 +468,7 @@ class EventManager(metaclass=Singleton):
             else:
                 logger.debug(f"事件处理出错：模块 {module_name} 中没有找到类 {class_name}")
         except Exception as e:
-            logger.error(f"事件处理出错：{str(e)} - {traceback.format_exc()}")
+            logger.debug(f"事件处理出错：{str(e)} - {traceback.format_exc()}")
         return None
 
     def __broadcast_consumer_loop(self):
