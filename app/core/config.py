@@ -285,7 +285,7 @@ class ConfigModel(BaseModel):
     # 为指定默认字幕添加.default后缀
     DEFAULT_SUB: Optional[str] = "zh-cn"
     # Docker Client API地址
-    DOCKER_CLIENT_API: Optional[str] = "tcp://127.0.0.1:38379"
+    DOCKER_CLIENT_API: Optional[str] = "tcp://host.docker.internal:2375"
 
 
 class Settings(BaseSettings, ConfigModel, LogConfigModel):
