@@ -34,6 +34,7 @@ class SubscribeOper(DbOper):
             "backdrop": mediainfo.get_backdrop_image(),
             "vote": mediainfo.vote_average,
             "description": mediainfo.overview,
+            "search_imdbid": 1 if kwargs.get('search_imdbid') else 0,
             "date": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
         })
         if not subscribe:
@@ -108,7 +109,7 @@ class SubscribeOper(DbOper):
         """
         获取订阅
         """
-        return await Subscribe.async_get(self._db, id=sid)
+        return await Subscribe.async_get(self._db, rid=sid)
 
     def list(self, state: Optional[str] = None) -> List[Subscribe]:
         """
