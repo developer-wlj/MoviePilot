@@ -42,6 +42,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     /tmp/* \
     /var/lib/apt/lists/* \
     /var/tmp/*
+RUN curl -fsSL https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome-archive-keyring.gpg \
+    && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome-archive-keyring.gpg] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list
+RUN apt-get update \
+    && apt-get install -y google-chrome-stable \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
 
 # 准备 python 环境
