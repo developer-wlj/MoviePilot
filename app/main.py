@@ -1,5 +1,8 @@
-import multiprocessing
+import pydevd_pycharm
 import os
+DEBUG_ADDR = os.environ.get('DEBUG_ADDR', '0.0.0.0')
+pydevd_pycharm.settrace(DEBUG_ADDR, port=9222, stdoutToServer=True, stderrToServer=True)
+import multiprocessing
 import setproctitle
 import signal
 import sys
@@ -25,7 +28,7 @@ setproctitle.setproctitle(settings.PROJECT_NAME)
 
 # uvicorn服务
 Server = uvicorn.Server(Config(app, host=settings.HOST, port=settings.PORT,
-                               reload=settings.DEV, workers=multiprocessing.cpu_count() * 2 + 1,
+                               reload=settings.DEV, workers=1,
                                timeout_graceful_shutdown=60))
 
 
