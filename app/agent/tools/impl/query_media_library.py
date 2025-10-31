@@ -26,8 +26,8 @@ class QueryMediaLibraryTool(MoviePilotTool):
                     continue
                 filtered_medias.append(media)
             if filtered_medias:
-                return json.dumps([m.dict() for m in filtered_medias], ensure_ascii=False, indent=2)
+                return json.dumps([m.to_dict() for m in filtered_medias])
             return "媒体库中未找到相关媒体。"
         except Exception as e:
-            logger.error(f"查询媒体库失败: {e}")
+            logger.error(f"查询媒体库失败: {e}", exc_info=True)
             return f"查询媒体库时发生错误: {str(e)}"
