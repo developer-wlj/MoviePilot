@@ -13,7 +13,7 @@ class QueryDownloadsTool(MoviePilotTool):
     description: str = "查询下载状态，查看下载器的任务列表和进度。"
 
     async def _arun(self, explanation: str, downloader: Optional[str] = None, 
-                    status: Optional[str] = "all") -> str:
+                    status: Optional[str] = "all", **kwargs) -> str:
         logger.info(f"执行工具: {self.name}, 参数: downloader={downloader}, status={status}")
         try:
             download_chain = DownloadChain()
@@ -27,7 +27,7 @@ class QueryDownloadsTool(MoviePilotTool):
                     continue
                 filtered_downloads.append(dl)
             if filtered_downloads:
-                return json.dumps([d.dict() for d in filtered_downloads])
+                return json.dumps([d.model_dump() for d in filtered_downloads])
             return "未找到相关下载任务。"
         except Exception as e:
             logger.error(f"查询下载失败: {e}", exc_info=True)
