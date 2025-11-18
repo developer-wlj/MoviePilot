@@ -16,13 +16,31 @@ class QuerySubscribesInput(BaseModel):
     status: Optional[str] = Field("all",
                                   description="Filter subscriptions by status: 'R' for enabled subscriptions, 'P' for disabled ones, 'all' for all subscriptions")
     media_type: Optional[str] = Field("all",
-                                      description="Filter by media type: 'movie' for films, 'tv' for television series, 'all' for all types")
+                                      description="Filter by media type: '电影' for films, '电视剧' for television series, 'all' for all types")
 
 
 class QuerySubscribesTool(MoviePilotTool):
     name: str = "query_subscribes"
     description: str = "Query subscription status and list all user subscriptions. Shows active subscriptions, their download status, and configuration details."
     args_schema: Type[BaseModel] = QuerySubscribesInput
+
+    def get_tool_message(self, **kwargs) -> Optional[str]:
+        """根据查询参数生成友好的提示消息"""
+        status = kwargs.get("status", "all")
+        media_type = kwargs.get("media_type", "all")
+        
+        parts = ["正在查询订阅"]
+        
+        # 根据状态过滤条件生成提示
+        if status != "all":
+            status_map = {"R": "已启用", "P": "已禁用"}
+            parts.append(f"状态: {status_map.get(status, status)}")
+        
+        # 根据媒体类型过滤条件生成提示
+        if media_type != "all":
+            parts.append(f"类型: {media_type}")
+        
+        return " | ".join(parts) if len(parts) > 1 else parts[0]
 
     async def run(self, status: Optional[str] = "all", media_type: Optional[str] = "all", **kwargs) -> str:
         logger.info(f"执行工具: {self.name}, 参数: status={status}, media_type={media_type}")

@@ -828,7 +828,8 @@ class MessageChain(ChainBase):
 
         return buttons
 
-    def _get_or_create_session_id(self, userid: Union[str, int]) -> str:
+    @staticmethod
+    def _get_or_create_session_id(userid: Union[str, int]) -> str:
         """
         获取或创建会话ID
         如果用户上次会话在15分钟内，则复用相同的会话ID；否则创建新的会话ID
@@ -951,15 +952,6 @@ class MessageChain(ChainBase):
                     title="请输入您的问题或需求"
                 ))
                 return
-
-            # 发送处理中消息
-            self.post_message(Notification(
-                channel=channel,
-                source=source,
-                userid=userid,
-                username=username,
-                title="MoviePilot助手已收到您的请求，请稍候..."
-            ))
 
             # 生成或复用会话ID
             session_id = self._get_or_create_session_id(userid)
