@@ -74,14 +74,11 @@ class QueryEpisodeScheduleTool(MoviePilotTool):
                     "episode_number": episode.episode_number,
                     "name": episode.name,
                     "air_date": air_date,
-                    "overview": episode.overview,
                     "runtime": episode.runtime,
                     "vote_average": episode.vote_average,
                     "still_path": episode.still_path,
                     "episode_type": episode.episode_type,
-                    "season_number": episode.season_number,
-                    "crew": episode.crew if episode.crew else [],
-                    "guest_stars": episode.guest_stars if episode.guest_stars else []
+                    "season_number": episode.season_number
                 }
                 episode_list.append(episode_info)
 
