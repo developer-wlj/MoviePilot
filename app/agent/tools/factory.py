@@ -4,11 +4,14 @@ from typing import List, Callable
 
 from app.agent.tools.impl.add_download import AddDownloadTool
 from app.agent.tools.impl.add_subscribe import AddSubscribeTool
+from app.agent.tools.impl.update_subscribe import UpdateSubscribeTool
 from app.agent.tools.impl.get_recommendations import GetRecommendationsTool
 from app.agent.tools.impl.query_downloaders import QueryDownloadersTool
 from app.agent.tools.impl.query_downloads import QueryDownloadsTool
 from app.agent.tools.impl.query_media_library import QueryMediaLibraryTool
 from app.agent.tools.impl.query_sites import QuerySitesTool
+from app.agent.tools.impl.update_site import UpdateSiteTool
+from app.agent.tools.impl.query_site_userdata import QuerySiteUserdataTool
 from app.agent.tools.impl.test_site import TestSiteTool
 from app.agent.tools.impl.query_subscribes import QuerySubscribesTool
 from app.agent.tools.impl.query_subscribe_shares import QuerySubscribeSharesTool
@@ -16,6 +19,9 @@ from app.agent.tools.impl.query_popular_subscribes import QueryPopularSubscribes
 from app.agent.tools.impl.query_subscribe_history import QuerySubscribeHistoryTool
 from app.agent.tools.impl.delete_subscribe import DeleteSubscribeTool
 from app.agent.tools.impl.search_media import SearchMediaTool
+from app.agent.tools.impl.recognize_media import RecognizeMediaTool
+from app.agent.tools.impl.scrape_metadata import ScrapeMetadataTool
+from app.agent.tools.impl.query_episode_schedule import QueryEpisodeScheduleTool
 from app.agent.tools.impl.search_torrents import SearchTorrentsTool
 from app.agent.tools.impl.send_message import SendMessageTool
 from app.agent.tools.impl.query_schedulers import QuerySchedulersTool
@@ -44,7 +50,11 @@ class MoviePilotToolFactory:
         tools = []
         tool_definitions = [
             SearchMediaTool,
+            RecognizeMediaTool,
+            ScrapeMetadataTool,
+            QueryEpisodeScheduleTool,
             AddSubscribeTool,
+            UpdateSubscribeTool,
             SearchTorrentsTool,
             AddDownloadTool,
             QuerySubscribesTool,
@@ -56,6 +66,8 @@ class MoviePilotToolFactory:
             DeleteDownloadTool,
             QueryDownloadersTool,
             QuerySitesTool,
+            UpdateSiteTool,
+            QuerySiteUserdataTool,
             TestSiteTool,
             UpdateSiteCookieTool,
             GetRecommendationsTool,
