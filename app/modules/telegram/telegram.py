@@ -7,6 +7,7 @@ from typing import Optional, List, Dict, Callable
 from urllib.parse import urljoin
 
 import telebot
+import telegramify_markdown
 from telebot import apihelper
 from telebot.types import InputFile, InlineKeyboardMarkup, InlineKeyboardButton
 from telebot.types import InputMediaPhoto
@@ -31,8 +32,7 @@ class Telegram:
     _callback_handlers: Dict[str, Callable] = {}  # 存储回调处理器
     _user_chat_mapping: Dict[str, str] = {}  # userid -> chat_id mapping for reply targeting
     _bot_username: Optional[str] = None  # Bot username for mention detection
-    _escape_chars = r'_*[]()~`>#+-=|{}.!' # Telegram MarkdownV2
-    _markdown_escape_pattern = re.compile(f'([{re.escape(_escape_chars)}])') # Telegram MarkdownV2 规则转义特殊字符正则pattern
+
     def __init__(self, TELEGRAM_TOKEN: Optional[str] = None, TELEGRAM_CHAT_ID: Optional[str] = None, **kwargs):
         """
         初始化参数
@@ -216,8 +216,7 @@ class Telegram:
                  userid: Optional[str] = None, link: Optional[str] = None,
                  buttons: Optional[List[List[dict]]] = None,
                  original_message_id: Optional[int] = None,
-                 original_chat_id: Optional[str] = None,
-                 escape_markdown: bool = True) -> Optional[bool]:
+                 original_chat_id: Optional[str] = None) -> Optional[bool]:
         """
         发送Telegram消息
         :param title: 消息标题
@@ -228,7 +227,6 @@ class Telegram:
         :param buttons: 按钮列表，格式：[[{"text": "按钮文本", "callback_data": "回调数据"}]]
         :param original_message_id: 原消息ID，如果提供则编辑原消息
         :param original_chat_id: 原消息的聊天ID，编辑消息时需要
-        :param escape_markdown: 是否对内容进行Markdown转义
 
         """
         if not self._telegram_token or not self._telegram_chat_id:
@@ -239,22 +237,14 @@ class Telegram:
             return False
 
         try:
-            if title:
-                # 标题总是转义（因为通常标题不包含Markdown格式）
-                title = self.escape_markdown(title)
-            if text:
-                if escape_markdown:
-                    # 完全转义模式：转义所有特殊字符
-                    text = self.escape_markdown(text)
-                else:
-                    # 智能转义模式：保留Markdown格式，只转义普通文本中的特殊字符
-                    text = self.escape_markdown_smart(text)
-                if title:
-                    caption = f"*{title}*\n{text}"
-                else:
-                    caption = text
+            if title and text:
+                caption = f"**{title}**\n{text}"
+            elif title:
+                caption = f"**{title}**"
+            elif text:
+                caption = text
             else:
-                caption = f"*{title}*"
+                caption = ""
 
             if link:
                 caption = f"{caption}\n[查看详情]({link})"
@@ -321,10 +311,7 @@ class Telegram:
             return None
 
         try:
-            if title:
-                # 标题总是转义（因为通常标题不包含Markdown格式）
-                title = self.escape_markdown(title)
-            index, image, caption = 1, "", "*%s*" % title
+            index, image, caption = 1, "", f"**{title}**" if title else ""
             for media in medias:
                 if not image:
                     image = media.get_message_image()
@@ -385,10 +372,7 @@ class Telegram:
             return None
 
         try:
-            if title:
-                # 标题总是转义（因为通常标题不包含Markdown格式）
-                title = self.escape_markdown(title)
-            index, caption = 1, "*%s*" % title
+            index, caption = 1, f"**{title}**" if title else ""
             image = torrents[0].media_info.get_message_image()
             for context in torrents:
                 torrent = context.torrent_info
@@ -566,21 +550,39 @@ class Telegram:
                 if ret is None:
                     raise RetryException("发送图片消息失败")
                 return True
-        # 按4096分段循环发送消息
+        # 使用 telegramify-markdown 的 telegramify 函数智能分割长消息
+        # telegramify 会自动处理 Markdown 格式转换和智能分割，避免在格式标记中间分割
         ret = None
-        if len(caption) > 4095:
-            for i in range(0, len(caption), 4095):
+        try:
+            # 使用 telegramify 处理原始 Markdown 文本
+            # telegramify 会同时完成格式转换和智能分割
+            # 如果文本已经转换过，也可以直接传入，telegramify 会处理
+            chunks = list(telegramify_markdown.telegramify(
+                caption,
+                max_length=4095,  # Telegram 消息最大长度
+                interpreter=None  # 不使用代码块解释器，直接发送文本
+            ))
+
+            if not chunks:
+                # 如果没有分割，使用 markdownify 转换后直接发送
+                converted = telegramify_markdown.markdownify(
+                    caption,
+                    max_line_length=None,
+                    normalize_whitespace=False
+                )
+                chunks = [converted]
+
+            # 发送所有消息块（telegramify 已经转换过格式，直接发送）
+            for i, chunk in enumerate(chunks):
                 ret = self._bot.send_message(chat_id=userid or self._telegram_chat_id,
-                                             text=caption[i:i + 4095],
+                                             text=chunk,
                                              parse_mode="MarkdownV2",
                                              reply_markup=reply_markup if i == 0 else None)
-        else:
-            ret = self._bot.send_message(chat_id=userid or self._telegram_chat_id,
-                                         text=caption,
-                                         parse_mode="MarkdownV2",
-                                         reply_markup=reply_markup)
-        if ret is None:
-            raise RetryException("发送文本消息失败")
+                if ret is None:
+                    raise RetryException(f"发送文本消息失败（第 {i + 1}/{len(chunks)} 条）")
+        except Exception as e:
+            logger.warning(f"Telegram 发送消息失败：{e}")
+
         return True if ret else False
 
     def register_commands(self, commands: Dict[str, dict]):
@@ -617,83 +619,32 @@ class Telegram:
             self._polling_thread.join()
             logger.info("Telegram消息接收服务已停止")
 
-    def escape_markdown(self, text: str) -> str:
-        # 按 Telegram MarkdownV2 规则转义特殊字符
+    @staticmethod
+    def escape_markdown_smart(text: str) -> str:
+        """
+        使用 telegramify-markdown 库将文本转换为 Telegram MarkdownV2 格式
+        支持原始 Markdown 格式转换，自动处理特殊字符转义
+        
+        :param text: 要转换的文本（可以是纯文本或包含 Markdown 格式）
+        :return: 转换后的 Telegram MarkdownV2 格式文本
+        """
         if not isinstance(text, str):
             return str(text) if text is not None else ""
-        return self._markdown_escape_pattern.sub(r'\\\1', text)
 
-    def escape_markdown_smart(self, text: str) -> str:
-        """
-        智能转义Markdown文本：只转义不在Markdown标记内的特殊字符
-        这样可以保留已有的Markdown格式（如*粗体*、_斜体_、[链接](url)等），
-        同时转义普通文本中的特殊字符以避免API错误
-        
-        注意：Telegram MarkdownV2不支持以下语法，这些字符会被转义：
-        - 标题语法（#、##、###）会被转义为 \#、\##、\###
-        - 列表语法（-、*、+）会被转义为 \-、\*、\+
-        - 引用语法（>）会被转义为 \>
-        
-        建议使用加粗文本模拟标题：*标题文本*
-        
-        :param text: 要转义的文本
-        :return: 转义后的文本
-        """
-        if not isinstance(text, str):
-            return str(text) if text is not None else ""
-        
-        # 如果没有特殊字符，直接返回
-        if not any(char in self._escape_chars for char in text):
-            return text
-        
-        # 标记受保护的区域（Markdown标记内的内容不转义）
-        protected = [False] * len(text)
-        
-        # 按优先级匹配Markdown标记（从最复杂到最简单）
-        # 1. 链接：[text](url) - 必须最先匹配
-        link_pattern = r'\[([^\]]*)\]\(([^)]*)\)'
-        for match in re.finditer(link_pattern, text):
-            for i in range(match.start(), match.end()):
-                protected[i] = True
-        
-        # 2. 粗体：*text*（单个*，不是**）
-        bold_pattern = r'(?<!\*)\*(?!\*)([^*]+?)(?<!\*)\*(?!\*)'
-        for match in re.finditer(bold_pattern, text):
-            if not any(protected[match.start():match.end()]):
-                for i in range(match.start(), match.end()):
-                    protected[i] = True
-        
-        # 3. 斜体：_text_（单个_，不是__）
-        italic_pattern = r'(?<!_)_(?!_)([^_]+?)(?<!_)_(?!_)'
-        for match in re.finditer(italic_pattern, text):
-            if not any(protected[match.start():match.end()]):
-                for i in range(match.start(), match.end()):
-                    protected[i] = True
-        
-        # 4. 代码：`text`
-        code_pattern = r'`([^`]+)`'
-        for match in re.finditer(code_pattern, text):
-            if not any(protected[match.start():match.end()]):
-                for i in range(match.start(), match.end()):
-                    protected[i] = True
-        
-        # 5. 删除线：~text~
-        strikethrough_pattern = r'~([^~]+)~'
-        for match in re.finditer(strikethrough_pattern, text):
-            if not any(protected[match.start():match.end()]):
-                for i in range(match.start(), match.end()):
-                    protected[i] = True
-        
-        # 构建结果：只转义未保护区域的特殊字符
-        result = []
-        for i, char in enumerate(text):
-            if protected[i]:
-                # 受保护区域（Markdown标记内），不转义
-                result.append(char)
-            elif char in self._escape_chars:
-                # 未保护区域，转义特殊字符
-                result.append('\\' + char)
-            else:
-                result.append(char)
-        
-        return ''.join(result)
+        if not text:
+            return ""
+
+        try:
+            # 使用 telegramify-markdown 的 markdownify 函数进行转换
+            # markdownify 会自动处理 Markdown 格式和特殊字符转义
+            converted = telegramify_markdown.markdownify(
+                text,
+                max_line_length=None,  # 不限制行长度
+                normalize_whitespace=False  # 保留原始空白字符
+            )
+            return converted
+        except Exception as e:
+            # 如果转换失败，记录错误并返回转义后的文本（使用简单转义作为后备）
+            logger.warning(f"使用 telegramify-markdown 转换失败，使用简单转义: {e}")
+            # 简单转义所有特殊字符作为后备方案
+            return re.sub(r'([_*\[\]()~`>#+\-=|{}.!])', r'\\\1', text)
