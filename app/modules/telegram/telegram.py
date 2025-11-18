@@ -7,7 +7,6 @@ from typing import Optional, List, Dict, Callable
 from urllib.parse import urljoin
 
 import telebot
-import telegramify_markdown
 from telebot import apihelper
 from telebot.types import InputFile, InlineKeyboardMarkup, InlineKeyboardButton
 from telebot.types import InputMediaPhoto
@@ -53,7 +52,7 @@ class Telegram:
             else:
                 apihelper.proxy = settings.PROXY
             # bot
-            _bot = telebot.TeleBot(self._telegram_token, parse_mode="MarkdownV2")
+            _bot = telebot.TeleBot(self._telegram_token, parse_mode="Markdown")
             # 记录句柄
             self._bot = _bot
             # 获取并存储bot用户名用于@检测
@@ -237,14 +236,12 @@ class Telegram:
             return False
 
         try:
-            if title and text:
-                caption = f"**{title}**\n{text}"
-            elif title:
-                caption = f"**{title}**"
-            elif text:
-                caption = text
+            if text:
+                # 对text进行Markdown特殊字符转义
+                text = re.sub(r"([_`])", r"\\\1", text)
+                caption = f"*{title}*\n{text}"
             else:
-                caption = ""
+                caption = f"*{title}*"
 
             if link:
                 caption = f"{caption}\n[查看详情]({link})"
@@ -266,7 +263,7 @@ class Telegram:
                 return self.__send_request(userid=chat_id, image=image, caption=caption, reply_markup=reply_markup)
 
         except Exception as msg_e:
-            logger.error(f"使用 send_msg 发送消息失败：{msg_e}")
+            logger.error(f"发送消息失败：{msg_e}")
             return False
 
     def _determine_target_chat_id(self, userid: Optional[str] = None,
@@ -311,7 +308,7 @@ class Telegram:
             return None
 
         try:
-            index, image, caption = 1, "", f"**{title}**" if title else ""
+            index, image, caption = 1, "", "*%s*" % title
             for media in medias:
                 if not image:
                     image = media.get_message_image()
@@ -350,7 +347,7 @@ class Telegram:
                 return self.__send_request(userid=chat_id, image=image, caption=caption, reply_markup=reply_markup)
 
         except Exception as msg_e:
-            logger.error(f"使用 send_medias_msg 发送消息失败：{msg_e}")
+            logger.error(f"发送消息失败：{msg_e}")
             return False
 
     def send_torrents_msg(self, torrents: List[Context],
@@ -372,7 +369,7 @@ class Telegram:
             return None
 
         try:
-            index, caption = 1, f"**{title}**" if title else ""
+            index, caption = 1, "*%s*" % title
             image = torrents[0].media_info.get_message_image()
             for context in torrents:
                 torrent = context.torrent_info
@@ -410,7 +407,7 @@ class Telegram:
                 return self.__send_request(userid=chat_id, image=image, caption=caption, reply_markup=reply_markup)
 
         except Exception as msg_e:
-            logger.error(f"使用 send_torrents_msg 发送消息失败：{msg_e}")
+            logger.error(f"发送消息失败：{msg_e}")
             return False
 
     @staticmethod
@@ -502,7 +499,7 @@ class Telegram:
 
             if image:
                 # 如果有图片，使用edit_message_media
-                media = InputMediaPhoto(media=image, caption=text, parse_mode="MarkdownV2")
+                media = InputMediaPhoto(media=image, caption=text, parse_mode="Markdown")
                 self._bot.edit_message_media(
                     chat_id=chat_id,
                     message_id=message_id,
@@ -515,7 +512,7 @@ class Telegram:
                     chat_id=chat_id,
                     message_id=message_id,
                     text=text,
-                    parse_mode="MarkdownV2",
+                    parse_mode="Markdown",
                     reply_markup=reply_markup
                 )
             return True
@@ -545,44 +542,26 @@ class Telegram:
                 ret = self._bot.send_photo(chat_id=userid or self._telegram_chat_id,
                                            photo=photo,
                                            caption=caption,
-                                           parse_mode="MarkdownV2",
+                                           parse_mode="Markdown",
                                            reply_markup=reply_markup)
                 if ret is None:
                     raise RetryException("发送图片消息失败")
                 return True
-        # 使用 telegramify-markdown 的 telegramify 函数智能分割长消息
-        # telegramify 会自动处理 Markdown 格式转换和智能分割，避免在格式标记中间分割
+        # 按4096分段循环发送消息
         ret = None
-        try:
-            # 使用 telegramify 处理原始 Markdown 文本
-            # telegramify 会同时完成格式转换和智能分割
-            # 如果文本已经转换过，也可以直接传入，telegramify 会处理
-            chunks = list(telegramify_markdown.telegramify(
-                caption,
-                max_length=4095,  # Telegram 消息最大长度
-                interpreter=None  # 不使用代码块解释器，直接发送文本
-            ))
-
-            if not chunks:
-                # 如果没有分割，使用 markdownify 转换后直接发送
-                converted = telegramify_markdown.markdownify(
-                    caption,
-                    max_line_length=None,
-                    normalize_whitespace=False
-                )
-                chunks = [converted]
-
-            # 发送所有消息块（telegramify 已经转换过格式，直接发送）
-            for i, chunk in enumerate(chunks):
+        if len(caption) > 4095:
+            for i in range(0, len(caption), 4095):
                 ret = self._bot.send_message(chat_id=userid or self._telegram_chat_id,
-                                             text=chunk,
-                                             parse_mode="MarkdownV2",
+                                             text=caption[i:i + 4095],
+                                             parse_mode="Markdown",
                                              reply_markup=reply_markup if i == 0 else None)
-                if ret is None:
-                    raise RetryException(f"发送文本消息失败（第 {i + 1}/{len(chunks)} 条）")
-        except Exception as e:
-            logger.warning(f"Telegram 发送消息失败：{e}")
-
+        else:
+            ret = self._bot.send_message(chat_id=userid or self._telegram_chat_id,
+                                         text=caption,
+                                         parse_mode="Markdown",
+                                         reply_markup=reply_markup)
+        if ret is None:
+            raise RetryException("发送文本消息失败")
         return True if ret else False
 
     def register_commands(self, commands: Dict[str, dict]):
@@ -618,33 +597,3 @@ class Telegram:
             self._bot.stop_polling()
             self._polling_thread.join()
             logger.info("Telegram消息接收服务已停止")
-
-    @staticmethod
-    def escape_markdown_smart(text: str) -> str:
-        """
-        使用 telegramify-markdown 库将文本转换为 Telegram MarkdownV2 格式
-        支持原始 Markdown 格式转换，自动处理特殊字符转义
-        
-        :param text: 要转换的文本（可以是纯文本或包含 Markdown 格式）
-        :return: 转换后的 Telegram MarkdownV2 格式文本
-        """
-        if not isinstance(text, str):
-            return str(text) if text is not None else ""
-
-        if not text:
-            return ""
-
-        try:
-            # 使用 telegramify-markdown 的 markdownify 函数进行转换
-            # markdownify 会自动处理 Markdown 格式和特殊字符转义
-            converted = telegramify_markdown.markdownify(
-                text,
-                max_line_length=None,  # 不限制行长度
-                normalize_whitespace=False  # 保留原始空白字符
-            )
-            return converted
-        except Exception as e:
-            # 如果转换失败，记录错误并返回转义后的文本（使用简单转义作为后备）
-            logger.warning(f"使用 telegramify-markdown 转换失败，使用简单转义: {e}")
-            # 简单转义所有特殊字符作为后备方案
-            return re.sub(r'([_*\[\]()~`>#+\-=|{}.!])', r'\\\1', text)
