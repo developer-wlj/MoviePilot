@@ -1,59 +1,40 @@
 """MoviePilot AI智能体实现"""
 
 import asyncio
-import threading
 from typing import Dict, List, Any
 
 from langchain.agents import AgentExecutor, create_openai_tools_agent
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_community.callbacks import get_openai_callback
-from langchain_core.callbacks import AsyncCallbackHandler
 from langchain_core.chat_history import InMemoryChatMessageHistory
 from langchain_core.messages import HumanMessage, AIMessage, ToolCall
 from langchain_core.runnables.history import RunnableWithMessageHistory
 
+from app.agent.callback import StreamingCallbackHandler
 from app.agent.memory import ConversationMemoryManager
 from app.agent.prompt import PromptManager
-from app.agent.tools import MoviePilotToolFactory
+from app.agent.tools.factory import MoviePilotToolFactory
+from app.chain import ChainBase
 from app.core.config import settings
 from app.helper.message import MessageHelper
 from app.log import logger
+from app.schemas import Notification
 
 
-class StreamingCallbackHandler(AsyncCallbackHandler):
-    """流式输出回调处理器"""
-
-    def __init__(self, session_id: str):
-        self._lock = threading.Lock()
-        self.session_id = session_id
-        self.current_message = ""
-        self.message_helper = MessageHelper()
-
-    async def get_message(self):
-        """获取当前消息内容，获取后清空"""
-        with self._lock:
-            if not self.current_message:
-                return ""
-            msg = self.current_message
-            logger.info(f"Agent消息: {msg}")
-            self.current_message = ""
-            return msg
-
-    async def on_llm_new_token(self, token: str, **kwargs):
-        """处理新的token"""
-        if not token:
-            return
-        with self._lock:
-            # 缓存当前消息
-            self.current_message += token
+class AgentChain(ChainBase):
+    pass
 
 
 class MoviePilotAgent:
     """MoviePilot AI智能体"""
 
-    def __init__(self, session_id: str, user_id: str = None):
+    def __init__(self, session_id: str, user_id: str = None,
+                 channel: str = None, source: str = None, username: str = None):
         self.session_id = session_id
         self.user_id = user_id
+        self.channel = channel  # 消息渠道
+        self.source = source  # 消息来源
+        self.username = username  # 用户名
 
         # 消息助手
         self.message_helper = MessageHelper()
@@ -130,7 +111,10 @@ class MoviePilotAgent:
         return MoviePilotToolFactory.create_tools(
             session_id=self.session_id,
             user_id=self.user_id,
-            message_helper=self.message_helper
+            channel=self.channel,
+            source=self.source,
+            username=self.username,
+            callback_handler=self.callback_handler
         )
 
     @staticmethod
@@ -173,14 +157,14 @@ class MoviePilotAgent:
     def _initialize_prompt() -> ChatPromptTemplate:
         """初始化提示词模板"""
         try:
-            prompt = ChatPromptTemplate.from_messages([
+            prompt_template = ChatPromptTemplate.from_messages([
                 ("system", "{system_prompt}"),
                 MessagesPlaceholder(variable_name="chat_history"),
                 ("user", "{input}"),
                 MessagesPlaceholder(variable_name="agent_scratchpad"),
             ])
             logger.info("LangChain提示词模板初始化成功")
-            return prompt
+            return prompt_template
         except Exception as e:
             logger.error(f"初始化提示词失败: {e}")
             raise e
@@ -225,7 +209,7 @@ class MoviePilotAgent:
 
             # 构建输入上下文
             input_context = {
-                "system_prompt": self.prompt_manager.get_agent_prompt(),
+                "system_prompt": self.prompt_manager.get_agent_prompt(channel=self.channel),
                 "input": message
             }
 
@@ -236,31 +220,29 @@ class MoviePilotAgent:
             # 获取Agent回复
             agent_message = await self.callback_handler.get_message()
 
-            # 发送Agent回复给用户
-            self.message_helper.put(
-                message=agent_message,
-                role="system"
-            )
+            # 发送Agent回复给用户（通过原渠道）
+            if agent_message:
+                # 发送回复
+                await self.send_agent_message(agent_message)
 
-            # 添加Agent回复到记忆
-            await self.memory_manager.add_memory(
-                session_id=self.session_id,
-                user_id=self.user_id,
-                role="agent",
-                content=agent_message
-            )
+                # 添加Agent回复到记忆
+                await self.memory_manager.add_memory(
+                    session_id=self.session_id,
+                    user_id=self.user_id,
+                    role="agent",
+                    content=agent_message
+                )
+            else:
+                agent_message = "很抱歉，智能体出错了，未能生成回复内容。"
+                await self.send_agent_message(agent_message)
 
             return agent_message
 
         except Exception as e:
             error_message = f"处理消息时发生错误: {str(e)}"
             logger.error(error_message)
-            # 发送错误消息给用户
-            self.message_helper.put(
-                message=error_message,
-                role="system",
-                title="MoviePilot助手错误"
-            )
+            # 发送错误消息给用户（通过原渠道）
+            await self.send_agent_message(error_message)
             return error_message
 
     async def _execute_agent(self, input_context: Dict[str, Any]) -> Dict[str, Any]:
@@ -296,6 +278,19 @@ class MoviePilotAgent:
                 "token_usage": {}
             }
 
+    async def send_agent_message(self, message: str, title: str = "MoviePilot助手"):
+        """通过原渠道发送消息给用户"""
+        await AgentChain().async_post_message(
+            Notification(
+                channel=self.channel,
+                source=self.source,
+                userid=self.user_id,
+                username=self.username,
+                title=title,
+                text=message
+            )
+        )
+
     async def cleanup(self):
         """清理智能体资源"""
         if self.session_id in self.session_store:
@@ -322,20 +317,31 @@ class AgentManager:
             await agent.cleanup()
         self.active_agents.clear()
 
-    async def process_message(self, session_id: str, user_id: str, message: str) -> str:
+    async def process_message(self, session_id: str, user_id: str, message: str,
+                              channel: str = None, source: str = None, username: str = None) -> str:
         """处理用户消息"""
         # 获取或创建Agent实例
         if session_id not in self.active_agents:
             logger.info(f"创建新的AI智能体实例，session_id: {session_id}, user_id: {user_id}")
             agent = MoviePilotAgent(
                 session_id=session_id,
-                user_id=user_id
+                user_id=user_id,
+                channel=channel,
+                source=source,
+                username=username
             )
             agent.memory_manager = self.memory_manager
             self.active_agents[session_id] = agent
         else:
             agent = self.active_agents[session_id]
             agent.user_id = user_id  # 确保user_id是最新的
+            # 更新渠道信息
+            if channel:
+                agent.channel = channel
+            if source:
+                agent.source = source
+            if username:
+                agent.username = username
 
         # 处理消息
         return await agent.process_message(message)

@@ -261,7 +261,7 @@ class TelegramModule(_ModuleBase, _MessageBase[Telegram]):
 
         return cleaned
 
-    def post_message(self, message: Notification) -> None:
+    def post_message(self, message: Notification, **kwargs) -> None:
         """
         发送消息
         :param message: 消息体

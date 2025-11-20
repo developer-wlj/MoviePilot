@@ -5,6 +5,7 @@ from typing import Any, Union, Dict, Optional
 
 from app.chain import ChainBase
 from app.chain.download import DownloadChain
+from app.chain.message import MessageChain
 from app.chain.site import SiteChain
 from app.chain.subscribe import SubscribeChain
 from app.chain.system import SystemChain
@@ -140,6 +141,12 @@ class Command(metaclass=Singleton):
                 "description": "当前版本",
                 "category": "管理",
                 "data": {}
+            },
+            "/clear_session": {
+                "func": MessageChain().remote_clear_session,
+                "description": "清除会话",
+                "category": "管理",
+                "data": {}
             }
         }
         # 插件命令集合
@@ -215,7 +222,7 @@ class Command(metaclass=Singleton):
         except Exception as e:
             logger.error(f"Error occurred during command initialization in background: {e}", exc_info=True)
 
-    def __trigger_register_commands_event(self) -> (Optional[Event], dict):
+    def __trigger_register_commands_event(self) -> tuple[Optional[Event], dict]:
         """
         触发事件，允许调整命令数据
         """

@@ -1,18 +1,31 @@
 """查询下载器工具"""
 
 import json
+from typing import Optional, Type
 
+from pydantic import BaseModel, Field
+
+from app.agent.tools.base import MoviePilotTool
 from app.db.systemconfig_oper import SystemConfigOper
 from app.log import logger
 from app.schemas.types import SystemConfigKey
-from app.agent.tools.base import MoviePilotTool
+
+
+class QueryDownloadersInput(BaseModel):
+    """查询下载器工具的输入参数模型"""
+    explanation: str = Field(..., description="Clear explanation of why this tool is being used in the current context")
 
 
 class QueryDownloadersTool(MoviePilotTool):
     name: str = "query_downloaders"
-    description: str = "查询下载器配置，查看可用的下载器列表和配置信息。"
+    description: str = "Query downloader configuration and list all available downloaders. Shows downloader status, connection details, and configuration settings."
+    args_schema: Type[BaseModel] = QueryDownloadersInput
 
-    async def _arun(self, explanation: str) -> str:
+    def get_tool_message(self, **kwargs) -> Optional[str]:
+        """生成友好的提示消息"""
+        return "正在查询下载器配置"
+
+    async def run(self, **kwargs) -> str:
         logger.info(f"执行工具: {self.name}")
         try:
             system_config_oper = SystemConfigOper()

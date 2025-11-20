@@ -1,12 +1,16 @@
+import asyncio
 import re
+import time
+from datetime import datetime, timedelta
 from typing import Any, Optional, Dict, Union, List
 
+from app.agent import agent_manager
 from app.chain import ChainBase
 from app.chain.download import DownloadChain
 from app.chain.media import MediaChain
 from app.chain.search import SearchChain
 from app.chain.subscribe import SubscribeChain
-from app.core.config import settings
+from app.core.config import settings, global_vars
 from app.core.context import MediaInfo, Context
 from app.core.meta import MetaBase
 from app.db.user_oper import UserOper
@@ -33,6 +37,10 @@ class MessageChain(ChainBase):
     _cache_file = "__user_messages__"
     # 每页数据量
     _page_size: int = 8
+    # 用户会话信息 {userid: (session_id, last_time)}
+    _user_sessions: Dict[Union[str, int], tuple] = {}
+    # 会话超时时间（分钟）
+    _session_timeout_minutes: int = 15
 
     @staticmethod
     def __get_noexits_info(
@@ -166,7 +174,7 @@ class MessageChain(ChainBase):
             elif text.startswith('/ai') or text.startswith('/AI'):
                 # AI智能体处理
                 self._handle_ai_message(text=text, channel=channel, source=source,
-                                      userid=userid, username=username)
+                                        userid=userid, username=username)
             elif text.startswith('/'):
                 # 执行命令
                 self.eventmanager.send_event(
@@ -321,7 +329,8 @@ class MessageChain(ChainBase):
                             else:
                                 best_version = True
                             # 转换用户名
-                            mp_name = UserOper().get_name(**{f"{channel.name.lower()}_userid": userid}) if channel else None
+                            mp_name = UserOper().get_name(
+                                **{f"{channel.name.lower()}_userid": userid}) if channel else None
                             # 添加订阅，状态为N
                             SubscribeChain().add(title=mediainfo.title,
                                                  year=mediainfo.year,
@@ -497,7 +506,8 @@ class MessageChain(ChainBase):
                     # 开始搜索
                     if not medias:
                         self.post_message(Notification(
-                            channel=channel, source=source, title=f"{meta.name} 没有找到对应的媒体信息！", userid=userid))
+                            channel=channel, source=source, title=f"{meta.name} 没有找到对应的媒体信息！",
+                            userid=userid))
                         return
                     logger.info(f"搜索到 {len(medias)} 条相关媒体信息")
                     try:
@@ -820,62 +830,140 @@ class MessageChain(ChainBase):
 
         return buttons
 
+    @staticmethod
+    def _get_or_create_session_id(userid: Union[str, int]) -> str:
+        """
+        获取或创建会话ID
+        如果用户上次会话在15分钟内，则复用相同的会话ID；否则创建新的会话ID
+        """
+        current_time = datetime.now()
+
+        # 检查用户是否有已存在的会话
+        if userid in MessageChain._user_sessions:
+            session_id, last_time = MessageChain._user_sessions[userid]
+
+            # 计算时间差
+            time_diff = current_time - last_time
+
+            # 如果时间差小于等于15分钟，复用会话ID
+            if time_diff <= timedelta(minutes=MessageChain._session_timeout_minutes):
+                # 更新最后使用时间
+                MessageChain._user_sessions[userid] = (session_id, current_time)
+                logger.info(
+                    f"复用会话ID: {session_id}, 用户: {userid}, 距离上次会话: {time_diff.total_seconds() / 60:.1f}分钟")
+                return session_id
+
+        # 创建新的会话ID
+        new_session_id = f"user_{userid}_{int(time.time())}"
+        MessageChain._user_sessions[userid] = (new_session_id, current_time)
+        logger.info(f"创建新会话ID: {new_session_id}, 用户: {userid}")
+        return new_session_id
+
+    @staticmethod
+    def clear_user_session(userid: Union[str, int]) -> bool:
+        """
+        清除指定用户的会话信息
+        返回是否成功清除
+        """
+        if userid in MessageChain._user_sessions:
+            session_id, _ = MessageChain._user_sessions.pop(userid)
+            logger.info(f"已清除用户 {userid} 的会话: {session_id}")
+            return True
+        return False
+
+    def remote_clear_session(self, channel: MessageChannel, userid: Union[str, int], source: Optional[str] = None):
+        """
+        清除用户会话（远程命令接口）
+        """
+        # 获取并清除会话信息
+        session_id = None
+        if userid in MessageChain._user_sessions:
+            session_id, _ = MessageChain._user_sessions.pop(userid)
+            logger.info(f"已清除用户 {userid} 的会话: {session_id}")
+
+        # 如果有会话ID，同时清除智能体的会话记忆
+        if session_id:
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    agent_manager.clear_session(
+                        session_id=session_id,
+                        user_id=str(userid)
+                    ),
+                    global_vars.loop
+                )
+            except Exception as e:
+                logger.warning(f"清除智能体会话记忆失败: {e}")
+
+            self.post_message(Notification(
+                channel=channel,
+                source=source,
+                title="智能体会话已清除，下次将创建新的会话",
+                userid=userid
+            ))
+        else:
+            self.post_message(Notification(
+                channel=channel,
+                source=source,
+                title="您当前没有活跃的智能体会话",
+                userid=userid
+            ))
+
     def _handle_ai_message(self, text: str, channel: MessageChannel, source: str,
-                          userid: Union[str, int], username: str) -> None:
+                           userid: Union[str, int], username: str) -> None:
         """
         处理AI智能体消息
         """
         try:
             # 检查AI智能体是否启用
             if not settings.AI_AGENT_ENABLE:
-                self.messagehelper.put("AI智能体功能未启用，请在系统设置中启用", role="system", title="AI助手")
+                self.post_message(Notification(
+                    channel=channel,
+                    source=source,
+                    userid=userid,
+                    username=username,
+                    title="MoviePilot智能助手未启用，请在系统设置中启用"
+                ))
                 return
 
             # 检查LLM配置
             if not settings.LLM_API_KEY:
-                self.messagehelper.put("LLM API密钥未配置，请检查系统设置", role="system", title="AI助手")
+                self.post_message(Notification(
+                    channel=channel,
+                    source=source,
+                    userid=userid,
+                    username=username,
+                    title="MoviePilot智能助未配置，请在系统设置中配置"
+                ))
                 return
 
             # 提取用户消息
             user_message = text[3:].strip()  # 移除 "/ai" 前缀
             if not user_message:
-                self.messagehelper.put("请输入您的问题或需求", role="system", title="AI助手")
+                self.post_message(Notification(
+                    channel=channel,
+                    source=source,
+                    userid=userid,
+                    username=username,
+                    title="请输入您的问题或需求"
+                ))
                 return
 
-            # 发送处理中消息
-            self.messagehelper.put("正在处理您的请求，请稍候...", role="system", title="AI助手")
+            # 生成或复用会话ID
+            session_id = self._get_or_create_session_id(userid)
 
-            # 异步处理AI智能体请求
-            import asyncio
-            from app.agent import agent_manager
-            
-            # 生成会话ID
-            session_id = f"user_{userid}_{hash(user_message) % 10000}"
-            
             # 在事件循环中处理
-            try:
-                loop = asyncio.get_event_loop()
-                response = loop.run_until_complete(
-                    agent_manager.process_message(
-                        session_id=session_id,
-                        user_id=str(userid),
-                        message=user_message
-                    )
-                )
-            except RuntimeError:
-                # 如果没有事件循环，创建新的
-                response = asyncio.run(
-                    agent_manager.process_message(
-                        session_id=session_id,
-                        user_id=str(userid),
-                        message=user_message
-                    )
-                )
-
-            # 发送AI智能体回复
-            self.messagehelper.put(response, role="system", title="AI助手")
+            asyncio.run_coroutine_threadsafe(
+                agent_manager.process_message(
+                    session_id=session_id,
+                    user_id=str(userid),
+                    message=user_message,
+                    channel=channel.value if channel else None,
+                    source=source,
+                    username=username
+                ),
+                global_vars.loop
+            )
 
         except Exception as e:
             logger.error(f"处理AI智能体消息失败: {e}")
-            self.messagehelper.put(f"AI智能体处理失败: {str(e)}", role="system", title="AI助手")
-
+            self.messagehelper.put(f"AI智能体处理失败: {str(e)}", role="system", title="MoviePilot助手")
