@@ -81,6 +81,9 @@ class ResourceHelper:
                         # 下载资源文件
                         success = True
                         for item in files_info:
+                            if item.get('name') in "sites.cp312-win_amd64.pyd":
+                                logger.warn("sites.cp312-win_amd64.pyd只允许以安装包方式进行更新")
+                                continue
                             save_path = need_updates.get(item.get("name"))
                             if not save_path:
                                 continue
@@ -105,8 +108,8 @@ class ResourceHelper:
                                 # 写入文件
                                 file_path.write_bytes(res.content)
                         if success:
-                            logger.info("资源包更新完成，开始重启服务...")
-                            SystemHelper.restart()
+                            logger.info("资源包更新完成...")
+                            # SystemHelper.restart()
                         else:
                             logger.warn("资源包更新失败，跳过升级！")
                     else:
