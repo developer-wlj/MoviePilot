@@ -332,7 +332,8 @@ class JobManager:
                 return 0
             return sum([
                 task.fileitem.size if task.fileitem.size is not None
-                else (SystemUtils.get_directory_size(Path(task.fileitem.path)) if task.fileitem.storage == "local" else 0)
+                else (
+                    SystemUtils.get_directory_size(Path(task.fileitem.path)) if task.fileitem.storage == "local" else 0)
                 for task in self._job_view[__mediaid__].tasks
                 if task.state == "completed"
             ])
@@ -366,8 +367,10 @@ class TransferChain(ChainBase, metaclass=Singleton):
 
     def __init__(self):
         super().__init__()
-        # 可处理的文件后缀
-        self.all_exts = settings.RMT_MEDIAEXT
+        # 可处理的文件后缀（视频文件、字幕、音频文件）
+        self._allowed_exts = settings.RMT_MEDIAEXT + settings.RMT_SUBEXT + settings.RMT_AUDIOEXT
+        # 附加文件后缀
+        self._extra_exts = settings.RMT_SUBEXT + settings.RMT_AUDIOEXT
         # 待整理任务队列
         self._queue = queue.Queue()
         # 文件整理线程
@@ -892,13 +895,13 @@ class TransferChain(ChainBase, metaclass=Singleton):
             return True
 
     def __get_trans_fileitems(
-            self, fileitem: FileItem, depth: int = 1
+        self, fileitem: FileItem, check: bool = True
     ) -> List[Tuple[FileItem, bool]]:
         """
         获取整理目录或文件列表
 
         :param fileitem: 文件项
-        :param depth: 递归深度，默认为1
+        :param check: 检查文件是否存在，默认为True
         """
         storagechain = StorageChain()
 
@@ -917,44 +920,40 @@ class TransferChain(ChainBase, metaclass=Singleton):
                     return storagechain.get_file_item(storage=_storage, path=p.parent)
             return None
 
-        latest_fileitem = storagechain.get_item(fileitem)
-        if not latest_fileitem:
-            logger.warn(f"目录或文件不存在：{fileitem.path}")
-            return []
-        # 确保从历史记录重新整理时 能获得最新的源文件大小、修改日期等
-        fileitem = latest_fileitem
+        if check:
+            latest_fileitem = storagechain.get_item(fileitem)
+            if not latest_fileitem:
+                logger.warn(f"目录或文件不存在：{fileitem.path}")
+                return []
+            # 确保从历史记录重新整理时 能获得最新的源文件大小、修改日期等
+            fileitem = latest_fileitem
 
-        # 蓝光原盘子目录或文件
+        # 是否蓝光原盘子目录或文件
         if __is_bluray_sub(fileitem.path):
-            dir_item = __get_bluray_dir(fileitem.storage, Path(fileitem.path))
-            if dir_item:
+            if dir_item := __get_bluray_dir(fileitem.storage, Path(fileitem.path)):
+                # 返回该文件所在的原盘根目录
                 return [(dir_item, True)]
 
         # 单文件
         if fileitem.type == "file":
             return [(fileitem, False)]
 
-        # 蓝光原盘根目录
-        sub_items = storagechain.list_files(fileitem) or []
+        # 是否蓝光原盘根目录
+        sub_items = storagechain.list_files(fileitem, recursion=False) or []
         if storagechain.contains_bluray_subdirectories(sub_items):
+            # 当前目录是原盘根目录，不需要递归
             return [(fileitem, True)]
 
-        # 需要整理的文件项列表
-        trans_items = []
-        # 先检查当前目录的下级目录，以支持合集的情况
-        for sub_dir in sub_items if depth >= 1 else []:
-            if sub_dir.type == "dir":
-                trans_items.extend(self.__get_trans_fileitems(sub_dir, depth=depth - 1))
-
-        if not trans_items:
-            # 没有有效子目录，直接整理当前目录
-            trans_items.append((fileitem, False))
-        else:
-            # 有子目录时，把当前目录的文件添加到整理任务中
-            if sub_items:
-                trans_items.extend([(f, False) for f in sub_items if f.type == "file"])
-
-        return trans_items
+        # 不是原盘根目录 递归获取目录内需要整理的文件项列表
+        return [
+            item
+            for sub_item in sub_items
+            for item in (
+                self.__get_trans_fileitems(sub_item, check=False)
+                if sub_item.type == "dir"
+                else [(sub_item, False)]
+            )
+        ]
 
     def do_transfer(self, fileitem: FileItem,
                     meta: MetaBase = None, mediainfo: MediaInfo = None,
@@ -990,13 +989,19 @@ class TransferChain(ChainBase, metaclass=Singleton):
         返回：成功标识，错误信息
         """
 
-        def __is_allow_extensions(_ext: str) -> bool:
+        def __is_allowed_file(_ext: str) -> bool:
             """
             判断是否允许的扩展名
             """
-            return True if not self.all_exts or f".{_ext.lower()}" in self.all_exts else False
+            return True if f".{_ext.lower()}" in self._allowed_exts else False
 
-        def __is_allow_filesize(_size: int, _min_filesize: int) -> bool:
+        def __is_extra_file(_ext: str) -> bool:
+            """
+            判断是否额外的扩展名
+            """
+            return True if f".{_ext.lower()}" in self._extra_exts else False
+
+        def __is_allow_filesize(_ext: str, _size: int, _min_filesize: int) -> bool:
             """
             判断是否满足最小文件大小
             """
@@ -1015,34 +1020,24 @@ class TransferChain(ChainBase, metaclass=Singleton):
         transfer_exclude_words = SystemConfigOper().get(SystemConfigKey.TransferExcludeWords)
         # 汇总错误信息
         err_msgs: List[str] = []
-        # 待整理目录或文件项
-        trans_items = self.__get_trans_fileitems(
-            fileitem, depth=2  # 为解决 issue#4371 深度至少需要>=2
-        )
-        # 待整理的文件列表
-        file_items: List[Tuple[FileItem, bool]] = []
+        # 递归获取待整理的文件/目录列表
+        file_items = self.__get_trans_fileitems(fileitem)
 
-        if not trans_items:
+        if not file_items:
             logger.warn(f"{fileitem.path} 没有找到可整理的媒体文件")
             return False, f"{fileitem.name} 没有找到可整理的媒体文件"
-
-        # 转换为所有待处理的文件清单
-        for trans_item, bluray_dir in trans_items:
-            # 如果是目录且不是⼀蓝光原盘，获取所有文件并整理
-            if trans_item.type == "dir" and not bluray_dir:
-                # 遍历获取下载目录所有文件（递归）
-                if files := StorageChain().list_files(trans_item, recursion=True):
-                    file_items.extend([(file, False) for file in files])
-            else:
-                file_items.append((trans_item, bluray_dir))
 
         # 有集自定义格式，过滤文件
         if formaterHandler:
             file_items = [f for f in file_items if formaterHandler.match(f[0].name)]
 
-        # 过滤后缀和大小
-        file_items = [f for f in file_items if f[1]  # 蓝光目录不过滤
-                      or __is_allow_extensions(f[0].extension) and __is_allow_filesize(f[0].size, min_filesize)]
+        # 过滤后缀和大小（蓝光目录、附加文件不过滤大小）
+        file_items = [f for f in file_items if f[1] or
+                      __is_extra_file(f[0].extension) or
+                      (__is_allowed_file(f[0].extension) and __is_allow_filesize(_ext=f[0].extension,
+                                                                                     _size=f[0].size or 0,
+                                                                                     _min_filesize=min_filesize))]
+
         if not file_items:
             logger.warn(f"{fileitem.path} 没有找到可整理的媒体文件")
             return False, f"{fileitem.name} 没有找到可整理的媒体文件"
@@ -1469,7 +1464,7 @@ class TransferChain(ChainBase, metaclass=Singleton):
             for file in torrent_files:
                 file_path = save_path / file.name
                 # 如果存在未被屏蔽的媒体文件，则不删除种子
-                if (file_path.suffix in self.all_exts
+                if (file_path.suffix in self._allowed_exts
                         and not self._is_blocked_by_exclude_words(file_path.as_posix(), transfer_exclude_words)
                         and file_path.exists()):
                     return False
