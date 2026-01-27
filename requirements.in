@@ -46,7 +46,7 @@ slack-bolt~=1.23.0
 slack-sdk~=3.35.0
 discord.py==2.6.4
 chardet~=5.2.0
-starlette~=0.46.2
+starlette<0.47.0,>=0.46.2
 PyVirtualDisplay~=3.0
 psutil~=7.0.0
 python-dotenv~=1.1.1
