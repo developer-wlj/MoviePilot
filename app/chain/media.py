@@ -147,8 +147,10 @@ class MediaChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
         'thumb': ScrapingMetadata.THUMB,
     }
 
-    scraping_policies = ScrapingConfig.from_system_config()
-    storagechain = StorageChain()
+    def __init__(self):
+        super().__init__()
+        self.storagechain = StorageChain()
+        self.scraping_policies = ScrapingConfig.from_system_config()
 
     def on_config_changed(self):
         self.scraping_policies = ScrapingConfig.from_system_config()
@@ -733,12 +735,17 @@ class MediaChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
                                item_type: ScrapingTarget,
                                parent_fileitem: Optional[schemas.FileItem] = None,
                                overwrite: bool = False,
-                               season_number: Optional[int] = None):
+                               season_number: Optional[int] = None,
+                               episode_number: Optional[int] = None):
         """
         图片刮削
         """
         # 获取图片 URL
-        if item_type == ScrapingTarget.SEASON and season_number is not None:
+        if item_type == ScrapingTarget.EPISODE:
+            image_dict = self.metadata_img(
+                mediainfo=mediainfo, season=season_number, episode=episode_number
+            )
+        elif item_type == ScrapingTarget.SEASON:
             image_dict = self.metadata_img(mediainfo=mediainfo, season=season_number)
         else:
             image_dict = self.metadata_img(mediainfo=mediainfo)
@@ -995,7 +1002,8 @@ class MediaChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
             item_type=ScrapingTarget.EPISODE,
             parent_fileitem=parent,
             overwrite=overwrite,
-            season_number=file_meta.begin_season
+            season_number=file_meta.begin_season,
+            episode_number=file_meta.begin_episode
         )
 
     def _handle_tv_directory(self, fileitem: schemas.FileItem,
