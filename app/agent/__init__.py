@@ -90,18 +90,28 @@ class MoviePilotAgent:
             tools = self._initialize_tools()
 
             # 中间件
-            middlewares = [
-                # 工具选择
-                LLMToolSelectorMiddleware(model=llm, max_tools=20),
-                # 记忆管理
-                MemoryMiddleware(
-                    sources=[str(settings.CONFIG_PATH / "agent" / "MEMORY.md")]
-                ),
-                # 上下文压缩
-                SummarizationMiddleware(model=llm, trigger=("fraction", 0.85)),
-                # 错误工具调用修复
-                PatchToolCallsMiddleware(),
-            ]
+            middlewares = []
+
+            # 工具选择（LLM_MAX_TOOLS > 0 时启用）
+            if settings.LLM_MAX_TOOLS > 0:
+                middlewares.append(
+                    LLMToolSelectorMiddleware(
+                        model=llm, max_tools=settings.LLM_MAX_TOOLS
+                    )
+                )
+
+            middlewares.extend(
+                [
+                    # 记忆管理
+                    MemoryMiddleware(
+                        sources=[str(settings.CONFIG_PATH / "agent" / "MEMORY.md")]
+                    ),
+                    # 上下文压缩
+                    SummarizationMiddleware(model=llm, trigger=("fraction", 0.85)),
+                    # 错误工具调用修复
+                    PatchToolCallsMiddleware(),
+                ]
+            )
 
             return create_agent(
                 model=llm,
@@ -210,7 +220,7 @@ class MoviePilotAgent:
             logger.error(f"Agent执行失败: {e} - {traceback.format_exc()}")
             return str(e), {}
 
-    async def send_agent_message(self, message: str, title: str = "MoviePilot助手"):
+    async def send_agent_message(self, message: str, title: str = ""):
         """
         通过原渠道发送消息给用户
         """
@@ -245,7 +255,7 @@ class AgentManager:
         """
         初始化管理器
         """
-        await memory_manager.initialize()
+        memory_manager.initialize()
 
     async def close(self):
         """
@@ -300,7 +310,7 @@ class AgentManager:
             agent = self.active_agents[session_id]
             await agent.cleanup()
             del self.active_agents[session_id]
-            await memory_manager.clear_memory(session_id, user_id)
+            memory_manager.clear_memory(session_id, user_id)
             logger.info(f"会话 {session_id} 的记忆已清空")
 
 
