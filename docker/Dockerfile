@@ -27,7 +27,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     wget \
     busybox \
-    dumb-init \
+    tini \
     jq \
     fuse3 \
     rsync \
@@ -131,4 +131,4 @@ RUN cp -f /app/docker/nginx.common.conf /etc/nginx/common.conf \
 
 EXPOSE 3000
 VOLUME [ "${CONFIG_DIR}" ]
-ENTRYPOINT [ "/entrypoint.sh" ]
+ENTRYPOINT [ "/usr/bin/tini", "-g", "--", "/entrypoint.sh" ]
