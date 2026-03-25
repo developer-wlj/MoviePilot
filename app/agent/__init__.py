@@ -2,7 +2,7 @@ import asyncio
 import traceback
 import uuid
 from time import strftime
-from typing import Dict, List
+from typing import Callable, Dict, List
 
 from langchain.agents import create_agent
 from langchain.agents.middleware import (
@@ -55,6 +55,13 @@ class MoviePilotAgent:
 
         # 流式token管理
         self.stream_handler = StreamingHandler()
+
+    @property
+    def is_background(self) -> bool:
+        """
+        是否为后台任务模式（无渠道信息，如定时唤醒）
+        """
+        return not self.channel and not self.source
 
     @staticmethod
     def _initialize_llm():
@@ -155,11 +162,39 @@ class MoviePilotAgent:
             await self.send_agent_message(error_message)
             return error_message
 
+    @staticmethod
+    async def _stream_agent_tokens(
+        agent, messages: dict, config: dict, on_token: Callable[[str], None]
+    ):
+        """
+        流式运行智能体，过滤工具调用token，将模型生成的内容通过回调输出。
+        :param agent: LangGraph Agent 实例
+        :param messages: Agent 输入消息
+        :param config: Agent 运行配置
+        :param on_token: 收到有效 token 时的回调
+        """
+        async for chunk in agent.astream(
+            messages,
+            stream_mode="messages",
+            config=config,
+            subgraphs=False,
+            version="v2",
+        ):
+            if chunk["type"] == "messages":
+                token, metadata = chunk["data"]
+                if (
+                    token
+                    and hasattr(token, "tool_call_chunks")
+                    and not token.tool_call_chunks
+                ):
+                    if token.content:
+                        on_token(token.content)
+
     async def _execute_agent(self, messages: List[BaseMessage]):
         """
-        调用 LangGraph Agent，通过 astream_events 流式获取 token，
-        同时用 UsageMetadataCallbackHandler 统计 token 用量。
+        调用 LangGraph Agent，通过 astream 流式获取 token。
         支持流式输出：在支持消息编辑的渠道上实时推送 token。
+        后台任务模式（无渠道信息）：不进行流式输出，仅广播最终结果。
         """
         try:
             # Agent运行配置
@@ -172,48 +207,59 @@ class MoviePilotAgent:
             # 创建智能体
             agent = self._create_agent()
 
-            # 启动流式输出（内部会检查渠道是否支持消息编辑）
-            await self.stream_handler.start_streaming(
-                channel=self.channel,
-                source=self.source,
-                user_id=self.user_id,
-                username=self.username,
-            )
+            if self.is_background:
+                # 后台任务模式：非流式执行，等待完成后只取最后一条AI回复
+                await agent.ainvoke(
+                    {"messages": messages},
+                    config=agent_config,
+                )
 
-            # 流式运行智能体
-            async for chunk in agent.astream(
-                {"messages": messages},
-                stream_mode="messages",
-                config=agent_config,
-                subgraphs=False,
-                version="v2",
-            ):
-                # 处理流式token（过滤工具调用token，只保留模型生成的内容）
-                if chunk["type"] == "messages":
-                    token, metadata = chunk["data"]
-                    if (
-                        token
-                        and hasattr(token, "tool_call_chunks")
-                        and not token.tool_call_chunks
-                    ):
-                        if token.content:
-                            self.stream_handler.emit(token.content)
+                # 从最终状态中提取最后一条AI回复内容
+                final_messages = agent.get_state(agent_config).values.get(
+                    "messages", []
+                )
+                final_text = ""
+                for msg in reversed(final_messages):
+                    if hasattr(msg, "type") and msg.type == "ai" and msg.content:
+                        final_text = msg.content
+                        break
 
-            # 停止流式输出，返回是否已通过流式编辑发送了所有内容及最终文本
-            (
-                all_sent_via_stream,
-                streamed_text,
-            ) = await self.stream_handler.stop_streaming()
+                # 后台任务仅广播最终回复，带标题
+                if final_text:
+                    await self.send_agent_message(final_text, title="MoviePilot助手")
 
-            if not all_sent_via_stream:
-                # 流式输出未能发送全部内容（渠道不支持编辑，或发送失败）
-                # 通过常规方式发送剩余内容
-                remaining_text = await self.stream_handler.take()
-                if remaining_text:
-                    await self.send_agent_message(remaining_text)
-            elif streamed_text:
-                # 流式输出已发送全部内容，但未记录到数据库，补充保存消息记录
-                await self._save_agent_message_to_db(streamed_text)
+            else:
+                # 正常渠道模式：启动流式输出
+                await self.stream_handler.start_streaming(
+                    channel=self.channel,
+                    source=self.source,
+                    user_id=self.user_id,
+                    username=self.username,
+                )
+
+                # 流式运行智能体，token 直接推送到 stream_handler
+                await self._stream_agent_tokens(
+                    agent=agent,
+                    messages={"messages": messages},
+                    config=agent_config,
+                    on_token=self.stream_handler.emit,
+                )
+
+                # 停止流式输出，返回是否已通过流式编辑发送了所有内容及最终文本
+                (
+                    all_sent_via_stream,
+                    streamed_text,
+                ) = await self.stream_handler.stop_streaming()
+
+                if not all_sent_via_stream:
+                    # 流式输出未能发送全部内容（渠道不支持编辑，或发送失败）
+                    # 通过常规方式发送剩余内容
+                    remaining_text = await self.stream_handler.take()
+                    if remaining_text:
+                        await self.send_agent_message(remaining_text)
+                elif streamed_text:
+                    # 流式输出已发送全部内容，但未记录到数据库，补充保存消息记录
+                    await self._save_agent_message_to_db(streamed_text)
 
             # 保存消息
             memory_manager.save_agent_messages(
@@ -223,15 +269,15 @@ class MoviePilotAgent:
             )
 
         except asyncio.CancelledError:
-            # 确保取消时也停止流式输出
-            await self.stream_handler.stop_streaming()
             logger.info(f"Agent执行被取消: session_id={self.session_id}")
             return "任务已取消", {}
         except Exception as e:
-            # 确保异常时也停止流式输出
-            await self.stream_handler.stop_streaming()
             logger.error(f"Agent执行失败: {e} - {traceback.format_exc()}")
             return str(e), {}
+        finally:
+            # 确保停止流式输出
+            if not self.is_background:
+                await self.stream_handler.stop_streaming()
 
     async def send_agent_message(self, message: str, title: str = ""):
         """
@@ -360,13 +406,18 @@ class AgentManager:
 
             # 英文提示词，便于大模型理解
             heartbeat_message = (
-                "[System Heartbeat Wake-up] Please check all jobs in your jobs directory and process pending tasks:\n"
+                "[System Heartbeat] Check all jobs in your jobs directory and process pending tasks:\n"
                 "1. List all jobs with status 'pending' or 'in_progress'\n"
-                "2. For 'recurring' jobs, check the 'last_run' timestamp to determine if it's time to run again\n"
+                "2. For 'recurring' jobs, check 'last_run' to determine if it's time to run again\n"
                 "3. For 'once' jobs with status 'pending', execute them now\n"
                 "4. After executing each job, update its status, 'last_run' time, and execution log in the JOB.md file\n"
-                "5. If there are no pending jobs, simply respond with a brief summary\n"
-                "IMPORTANT: Respond in Chinese (中文). Begin checking and processing jobs now."
+                "5. If there are no pending jobs, do NOT generate any response\n\n"
+                "IMPORTANT: This is a background system task, NOT a user conversation. "
+                "Your final response will be broadcast as a notification. "
+                "Only output a brief completion summary listing each executed job and its result. "
+                "Do NOT include greetings, explanations, or conversational text. "
+                "If no jobs were executed, output nothing. "
+                "Respond in Chinese (中文)."
             )
 
             await self.process_message(
