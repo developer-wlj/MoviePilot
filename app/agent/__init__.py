@@ -1,5 +1,6 @@
 import asyncio
 import traceback
+import uuid
 from time import strftime
 from typing import Dict, List
 
@@ -16,6 +17,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from app.agent.callback import StreamingHandler
 from app.agent.memory import memory_manager
+from app.agent.middleware.jobs import JobsMiddleware
 from app.agent.middleware.memory import MemoryMiddleware
 from app.agent.middleware.patch_tool_calls import PatchToolCallsMiddleware
 from app.agent.middleware.skills import SkillsMiddleware
@@ -38,12 +40,12 @@ class MoviePilotAgent:
     """
 
     def __init__(
-            self,
-            session_id: str,
-            user_id: str = None,
-            channel: str = None,
-            source: str = None,
-            username: str = None,
+        self,
+        session_id: str,
+        user_id: str = None,
+        channel: str = None,
+        source: str = None,
+        username: str = None,
     ):
         self.session_id = session_id
         self.user_id = user_id
@@ -95,6 +97,10 @@ class MoviePilotAgent:
                 # Skills
                 SkillsMiddleware(
                     sources=[str(settings.CONFIG_PATH / "agent" / "skills")],
+                ),
+                # Jobs 任务管理
+                JobsMiddleware(
+                    sources=[str(settings.CONFIG_PATH / "agent" / "jobs")],
                 ),
                 # 记忆管理
                 MemoryMiddleware(
@@ -176,25 +182,28 @@ class MoviePilotAgent:
 
             # 流式运行智能体
             async for chunk in agent.astream(
-                    {"messages": messages},
-                    stream_mode="messages",
-                    config=agent_config,
-                    subgraphs=False,
-                    version="v2",
+                {"messages": messages},
+                stream_mode="messages",
+                config=agent_config,
+                subgraphs=False,
+                version="v2",
             ):
                 # 处理流式token（过滤工具调用token，只保留模型生成的内容）
                 if chunk["type"] == "messages":
                     token, metadata = chunk["data"]
                     if (
-                            token
-                            and hasattr(token, "tool_call_chunks")
-                            and not token.tool_call_chunks
+                        token
+                        and hasattr(token, "tool_call_chunks")
+                        and not token.tool_call_chunks
                     ):
                         if token.content:
                             self.stream_handler.emit(token.content)
 
-            # 停止流式输出，返回是否已通过流式编辑发送了所有内容
-            all_sent_via_stream = await self.stream_handler.stop_streaming()
+            # 停止流式输出，返回是否已通过流式编辑发送了所有内容及最终文本
+            (
+                all_sent_via_stream,
+                streamed_text,
+            ) = await self.stream_handler.stop_streaming()
 
             if not all_sent_via_stream:
                 # 流式输出未能发送全部内容（渠道不支持编辑，或发送失败）
@@ -202,6 +211,9 @@ class MoviePilotAgent:
                 remaining_text = await self.stream_handler.take()
                 if remaining_text:
                     await self.send_agent_message(remaining_text)
+            elif streamed_text:
+                # 流式输出已发送全部内容，但未记录到数据库，补充保存消息记录
+                await self._save_agent_message_to_db(streamed_text)
 
             # 保存消息
             memory_manager.save_agent_messages(
@@ -236,6 +248,26 @@ class MoviePilotAgent:
             )
         )
 
+    async def _save_agent_message_to_db(self, message: str, title: str = ""):
+        """
+        仅保存Agent回复消息到数据库和SSE队列（不重新发送到渠道）
+        用于流式输出场景：消息已通过 send_direct_message/edit_message 发送给用户，
+        但未记录到数据库中，此方法补充保存消息历史记录。
+        """
+        chain = AgentChain()
+        notification = Notification(
+            channel=self.channel,
+            source=self.source,
+            userid=self.user_id,
+            username=self.username,
+            title=title,
+            text=message,
+        )
+        # 保存到SSE消息队列（供前端展示）
+        chain.messagehelper.put(notification, role="user", title=title)
+        # 保存到数据库
+        await chain.messageoper.async_add(**notification.model_dump())
+
     async def cleanup(self):
         """
         清理智能体资源
@@ -268,13 +300,13 @@ class AgentManager:
         self.active_agents.clear()
 
     async def process_message(
-            self,
-            session_id: str,
-            user_id: str,
-            message: str,
-            channel: str = None,
-            source: str = None,
-            username: str = None,
+        self,
+        session_id: str,
+        user_id: str,
+        message: str,
+        channel: str = None,
+        source: str = None,
+        username: str = None,
     ) -> str:
         """
         处理用户消息
@@ -313,6 +345,46 @@ class AgentManager:
             del self.active_agents[session_id]
             memory_manager.clear_memory(session_id, user_id)
             logger.info(f"会话 {session_id} 的记忆已清空")
+
+    async def heartbeat_check_jobs(self):
+        """
+        心跳唤醒：检查并执行待处理的定时任务（Jobs）。
+        由定时调度器周期性调用，每次使用独立的会话避免上下文干扰。
+        """
+        try:
+            # 每次使用唯一的 session_id，避免共享上下文
+            session_id = f"__agent_heartbeat_{uuid.uuid4().hex[:12]}__"
+            user_id = settings.SUPERUSER
+
+            logger.info("智能体心跳唤醒：开始检查待处理任务...")
+
+            # 英文提示词，便于大模型理解
+            heartbeat_message = (
+                "[System Heartbeat Wake-up] Please check all jobs in your jobs directory and process pending tasks:\n"
+                "1. List all jobs with status 'pending' or 'in_progress'\n"
+                "2. For 'recurring' jobs, check the 'last_run' timestamp to determine if it's time to run again\n"
+                "3. For 'once' jobs with status 'pending', execute them now\n"
+                "4. After executing each job, update its status, 'last_run' time, and execution log in the JOB.md file\n"
+                "5. If there are no pending jobs, simply respond with a brief summary\n"
+                "IMPORTANT: Respond in Chinese (中文). Begin checking and processing jobs now."
+            )
+
+            await self.process_message(
+                session_id=session_id,
+                user_id=user_id,
+                message=heartbeat_message,
+                channel=None,
+                source=None,
+                username=settings.SUPERUSER,
+            )
+
+            logger.info("智能体心跳唤醒：任务检查完成")
+
+            # 心跳会话用完即弃，清理资源
+            await self.clear_session(session_id, user_id)
+
+        except Exception as e:
+            logger.error(f"智能体心跳唤醒失败: {e}")
 
 
 # 全局智能体管理器实例
