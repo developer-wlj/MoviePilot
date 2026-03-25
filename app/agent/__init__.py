@@ -18,6 +18,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from app.agent.callback import StreamingHandler
 from app.agent.memory import memory_manager
+from app.agent.middleware.activity_log import ActivityLogMiddleware
 from app.agent.middleware.jobs import JobsMiddleware
 from app.agent.middleware.memory import MemoryMiddleware
 from app.agent.middleware.patch_tool_calls import PatchToolCallsMiddleware
@@ -105,6 +106,7 @@ class MoviePilotAgent:
                 # Skills
                 SkillsMiddleware(
                     sources=[str(settings.CONFIG_PATH / "agent" / "skills")],
+                    bundled_skills_dir=str(settings.ROOT_PATH / "skills"),
                 ),
                 # Jobs 任务管理
                 JobsMiddleware(
@@ -113,6 +115,10 @@ class MoviePilotAgent:
                 # 记忆管理
                 MemoryMiddleware(
                     sources=[str(settings.CONFIG_PATH / "agent" / "MEMORY.md")]
+                ),
+                # 活动日志
+                ActivityLogMiddleware(
+                    activity_dir=str(settings.CONFIG_PATH / "agent" / "activity"),
                 ),
                 # 上下文压缩
                 SummarizationMiddleware(model=llm, trigger=("fraction", 0.85)),
