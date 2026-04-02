@@ -611,6 +611,7 @@ class SystemUtils:
                     local_fs = [
                         "fuse.shfs",  # Unraid
                         "zfuse.zfsv",  # 极空间(zfuse.zfsv2、zfuse.zfsv3、...)
+                        "fuseblk",
                         # TBD
                     ]
                     if any(fs in output for fs in local_fs):
