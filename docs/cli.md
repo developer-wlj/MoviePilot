@@ -11,7 +11,7 @@ curl -fsSL https://raw.githubusercontent.com/jxxghp/MoviePilot/v2/scripts/bootst
 脚本会自动：
 
 - 检测操作系统
-- 自动检查并尽量安装 `git`、`curl`、`Python 3.12+`
+- 自动检查并尽量安装 `git`、`curl`、`Python 3.11+`
 - 克隆 `MoviePilot`
 - 安装后端依赖
 - 下载 `MoviePilot-Frontend` 最新 release 的 `dist.zip`
@@ -24,7 +24,8 @@ curl -fsSL https://raw.githubusercontent.com/jxxghp/MoviePilot/v2/scripts/bootst
 
 说明：
 
-- 如果系统里没有可用的 `Python 3.12+`，脚本会优先尝试自动补齐运行环境，再继续安装
+- 如果系统里已经有可用的 `Python 3.11+`，脚本会优先直接复用本地解释器
+- 如果系统里没有可用的 `Python 3.11+`，脚本会再尝试自动补齐运行环境
 - Linux 下安装系统依赖时通常需要 `sudo`
 - 复用已有仓库时，脚本现在只会因为已跟踪源码改动而阻止自动更新，不会再被 `.DS_Store` 之类未跟踪文件卡住
 
@@ -141,11 +142,15 @@ moviepilot commands
 
 ```shell
 moviepilot install deps
-moviepilot install deps --python python3.12
+moviepilot install deps --python python3.11
 moviepilot install deps --venv /path/to/venv
 moviepilot install deps --recreate
 moviepilot install deps --config-dir /path/to/moviepilot-config
 ```
+
+说明：
+
+- 默认会自动选择本地已安装的 `Python 3.11+` 解释器
 
 安装前端 release：
 
@@ -187,6 +192,7 @@ moviepilot init
 moviepilot init --wizard
 moviepilot init --skip-resources
 moviepilot init --force-token
+moviepilot init --superuser admin --superuser-password 'ChangeMe123!'
 moviepilot init --config-dir /path/to/moviepilot-config
 ```
 
@@ -199,6 +205,7 @@ moviepilot setup --frontend-version latest
 moviepilot setup --node-version 20.12.1
 moviepilot setup --skip-resources
 moviepilot setup --recreate
+moviepilot setup --superuser admin --superuser-password 'ChangeMe123!'
 moviepilot setup --config-dir /path/to/moviepilot-config
 ```
 
@@ -212,6 +219,7 @@ moviepilot setup --config-dir /path/to/moviepilot-config
 `--wizard` 会进入交互式初始化向导，支持配置：
 
 - `API_TOKEN`
+- 超级管理员用户名与密码
 - 数据库类型
   默认 `SQLite`
   可切换为 `PostgreSQL`，并填写主机、端口、数据库名、用户名、密码
@@ -223,6 +231,18 @@ moviepilot setup --config-dir /path/to/moviepilot-config
 - 下载器
 - 媒体服务器
 - 消息通知渠道
+
+如果希望在自动化安装时直接预设超级管理员，也可以在一键安装脚本中透传：
+
+```shell
+curl -fsSL https://raw.githubusercontent.com/jxxghp/MoviePilot/v2/scripts/bootstrap-local.sh | \
+  bash -s -- --superuser admin --superuser-password 'ChangeMe123!'
+```
+
+说明：
+
+- `--superuser-password` 更适合自动化场景，命令可能会出现在 shell 历史中
+- 交互式 `--wizard` 会在初始化过程中提示输入超级管理员用户名和密码
 
 ## 更新命令
 
