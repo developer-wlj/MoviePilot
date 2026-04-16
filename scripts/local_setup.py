@@ -40,6 +40,20 @@ DEFAULT_NODE_VERSION = "20.12.1"
 FRONTEND_LATEST_API = "https://api.github.com/repos/jxxghp/MoviePilot-Frontend/releases/latest"
 FRONTEND_TAG_API = "https://api.github.com/repos/jxxghp/MoviePilot-Frontend/releases/tags/{tag}"
 RESOURCES_MAIN_ZIP = "https://github.com/jxxghp/MoviePilot-Resources/archive/refs/heads/main.zip"
+LLM_PROVIDER_DEFAULTS = {
+    "deepseek": {
+        "model": "deepseek-chat",
+        "base_url": "https://api.deepseek.com",
+    },
+    "openai": {
+        "model": "gpt-4o-mini",
+        "base_url": "https://api.openai.com/v1",
+    },
+    "google": {
+        "model": "gemini-2.5-flash",
+        "base_url": "",
+    },
+}
 RUNTIME_PACKAGE = {
     "name": "moviepilot-frontend-runtime",
     "private": True,
@@ -218,6 +232,14 @@ def _load_env_lines() -> list[str]:
     return ENV_FILE.read_text(encoding="utf-8").splitlines(keepends=True)
 
 
+def _serialize_env_value(value: Any) -> str:
+    if isinstance(value, Path):
+        value = str(value)
+    if value is None:
+        return '""'
+    return json.dumps(value, ensure_ascii=False)
+
+
 def read_env_value(key: str) -> Optional[str]:
     for line in _load_env_lines():
         stripped = line.strip()
@@ -232,7 +254,7 @@ def read_env_value(key: str) -> Optional[str]:
 def write_env_value(key: str, value: str) -> None:
     ensure_local_dirs()
     lines = _load_env_lines()
-    new_line = f"{key}={json.dumps(str(value), ensure_ascii=False)}\n"
+    new_line = f"{key}={_serialize_env_value(value)}\n"
 
     for index, line in enumerate(lines):
         stripped = line.strip()
@@ -248,6 +270,11 @@ def write_env_value(key: str, value: str) -> None:
         lines.append(new_line)
 
     ENV_FILE.write_text("".join(lines), encoding="utf-8")
+
+
+def write_env_values(values: dict[str, Any]) -> None:
+    for key, value in values.items():
+        write_env_value(key, value)
 
 
 def ensure_api_token(force_token: bool = False, token: Optional[str] = None) -> str:
@@ -546,6 +573,30 @@ def _normalize_choice(value: str) -> str:
     return value.strip().lower().replace("_", "").replace("-", "")
 
 
+def _env_default(key: str, default: str = "") -> str:
+    value = read_env_value(key)
+    if value is None or value == "":
+        return default
+    return value
+
+
+def _env_bool(key: str, default: bool) -> bool:
+    value = read_env_value(key)
+    if value is None or value == "":
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _env_int(key: str, default: int) -> int:
+    value = read_env_value(key)
+    if value is None or value == "":
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def _prompt_text(
     label: str,
     *,
@@ -566,6 +617,29 @@ def _prompt_text(
         if allow_empty:
             return ""
         print("请输入有效内容，或使用回车接受默认值。")
+
+
+def _prompt_secret_text(
+    label: str,
+    *,
+    current_value: Optional[str] = None,
+    allow_empty: bool = False,
+    required: bool = False,
+) -> str:
+    while True:
+        suffix = " [留空保持现有值]" if current_value not in (None, "") else ""
+        prompt = f"{label}{suffix}: "
+        value = getpass.getpass(prompt).strip()
+
+        if value:
+            return value
+        if current_value is not None and current_value != "":
+            return current_value
+        if allow_empty and not required:
+            return ""
+        if not required:
+            return ""
+        print("请输入有效内容。")
 
 
 def _prompt_yes_no(label: str, default: bool = True) -> bool:
@@ -650,6 +724,55 @@ def _collect_directory_config() -> dict[str, Any]:
         "library_type_folder": True,
         "library_category_folder": False,
     }
+
+
+def _collect_database_config() -> dict[str, Any]:
+    print_step("数据库配置")
+    current_db_type = _env_default("DB_TYPE", "sqlite").lower()
+    if current_db_type not in {"sqlite", "postgresql"}:
+        current_db_type = "sqlite"
+
+    db_type = _prompt_choice(
+        "选择数据库类型",
+        {
+            "sqlite": "SQLite",
+            "postgresql": "PostgreSQL",
+        },
+        default=current_db_type,
+    )
+
+    config: dict[str, Any] = {
+        "DB_TYPE": db_type,
+    }
+    if db_type == "sqlite":
+        return config
+
+    config.update(
+        {
+            "DB_POSTGRESQL_HOST": _prompt_text(
+                "PostgreSQL 主机地址",
+                default=_env_default("DB_POSTGRESQL_HOST", "localhost"),
+            ),
+            "DB_POSTGRESQL_PORT": _prompt_text(
+                "PostgreSQL 端口",
+                default=str(_env_int("DB_POSTGRESQL_PORT", 5432)),
+            ),
+            "DB_POSTGRESQL_DATABASE": _prompt_text(
+                "PostgreSQL 数据库名（需已创建）",
+                default=_env_default("DB_POSTGRESQL_DATABASE", "moviepilot"),
+            ),
+            "DB_POSTGRESQL_USERNAME": _prompt_text(
+                "PostgreSQL 用户名",
+                default=_env_default("DB_POSTGRESQL_USERNAME", "moviepilot"),
+            ),
+            "DB_POSTGRESQL_PASSWORD": _prompt_secret_text(
+                "PostgreSQL 密码",
+                current_value=read_env_value("DB_POSTGRESQL_PASSWORD"),
+                allow_empty=True,
+            ),
+        }
+    )
+    return config
 
 
 def _collect_downloader_config() -> Optional[dict[str, Any]]:
@@ -808,7 +931,198 @@ def _collect_notification_config() -> Optional[dict[str, Any]]:
     }
 
 
-def run_setup_wizard(force_token: bool) -> dict[str, Any]:
+def _collect_agent_config() -> dict[str, Any]:
+    print_step("AI Agent 配置")
+    enabled = _prompt_yes_no(
+        "是否启用 AI 智能体",
+        default=_env_bool("AI_AGENT_ENABLE", False),
+    )
+    if not enabled:
+        return {
+            "AI_AGENT_ENABLE": False,
+            "AI_AGENT_GLOBAL": False,
+        }
+
+    current_provider = _env_default("LLM_PROVIDER", "deepseek").lower()
+    if current_provider not in LLM_PROVIDER_DEFAULTS:
+        current_provider = "deepseek"
+
+    provider = _prompt_choice(
+        "选择 LLM 提供商",
+        {
+            "deepseek": "DeepSeek",
+            "openai": "OpenAI",
+            "google": "Google",
+        },
+        default=current_provider,
+    )
+    defaults = LLM_PROVIDER_DEFAULTS[provider]
+    current_model = _env_default("LLM_MODEL", defaults["model"])
+    current_base_url = _env_default("LLM_BASE_URL", defaults["base_url"])
+
+    config: dict[str, Any] = {
+        "AI_AGENT_ENABLE": True,
+        "AI_AGENT_GLOBAL": _prompt_yes_no(
+            "是否启用全局 AI 智能体",
+            default=_env_bool("AI_AGENT_GLOBAL", False),
+        ),
+        "LLM_PROVIDER": provider,
+        "LLM_MODEL": _prompt_text(
+            "LLM 模型名称",
+            default=current_model,
+        ),
+        "LLM_API_KEY": _prompt_secret_text(
+            "LLM API Key",
+            current_value=read_env_value("LLM_API_KEY"),
+            required=True,
+        ),
+        "LLM_SUPPORT_IMAGE_INPUT": _prompt_yes_no(
+            "是否启用图片输入支持",
+            default=_env_bool("LLM_SUPPORT_IMAGE_INPUT", True),
+        ),
+    }
+
+    if provider == "google":
+        config["LLM_BASE_URL"] = _prompt_text(
+            "自定义 Google API Base URL（可选）",
+            default=current_base_url,
+            allow_empty=True,
+        )
+    else:
+        config["LLM_BASE_URL"] = _prompt_text(
+            "LLM Base URL",
+            default=current_base_url,
+            allow_empty=True,
+        )
+
+    return config
+
+
+def _load_auth_site_definitions_inner() -> dict[str, Any]:
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
+
+    from app.helper.sites import SitesHelper
+
+    auth_sites = SitesHelper().get_authsites() or {}
+    definitions: dict[str, Any] = {}
+    for site_key, site_conf in auth_sites.items():
+        site_name = str(site_conf.get("name") or site_key).strip()
+        params: dict[str, Any] = {}
+        for param_key, param_conf in (site_conf.get("params") or {}).items():
+            params[param_key] = {
+                "name": str(param_conf.get("name") or param_key).strip(),
+                "type": str(param_conf.get("type") or "text").strip().lower(),
+                "placeholder": str(param_conf.get("placeholder") or "").strip(),
+                "tooltip": str(param_conf.get("tooltip") or "").strip(),
+                "convert": str(param_conf.get("convert") or "").strip().lower(),
+            }
+        if params:
+            definitions[site_key] = {
+                "name": site_name,
+                "params": params,
+            }
+    return definitions
+
+
+def _load_auth_site_definitions(runtime_python: Optional[Path] = None) -> dict[str, Any]:
+    try:
+        return _load_auth_site_definitions_inner()
+    except Exception as exc:
+        if runtime_python and not _current_python_matches(runtime_python):
+            try:
+                with TemporaryDirectory() as temp_dir:
+                    output_path = Path(temp_dir) / "auth-sites.json"
+                    subprocess.run(
+                        [
+                            str(runtime_python),
+                            str(Path(__file__).resolve()),
+                            "query-auth-sites",
+                            "--output-json-file",
+                            str(output_path),
+                        ],
+                        cwd=str(ROOT),
+                        check=True,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+                    data = json.loads(output_path.read_text(encoding="utf-8"))
+                    if isinstance(data, dict):
+                        return data
+            except Exception as runtime_exc:
+                print_step(f"当前环境暂时无法读取站点认证资源，已跳过站点认证配置：{runtime_exc}")
+                return {}
+
+        print_step(f"当前环境暂时无法读取站点认证资源，已跳过站点认证配置：{exc}")
+        return {}
+
+
+def _print_auth_sites(auth_sites: dict[str, Any]) -> None:
+    print("可用认证站点：")
+    items = [f"{site_key}({site_conf.get('name') or site_key})" for site_key, site_conf in sorted(auth_sites.items())]
+    line: list[str] = []
+    for item in items:
+        line.append(item)
+        if len(line) >= 4:
+            print(f"  {'  '.join(line)}")
+            line = []
+    if line:
+        print(f"  {'  '.join(line)}")
+
+
+def _prompt_auth_param(param_key: str, param_meta: dict[str, Any]) -> Any:
+    label = str(param_meta.get("name") or param_key).strip()
+    placeholder = str(param_meta.get("placeholder") or "").strip()
+    tooltip = str(param_meta.get("tooltip") or "").strip()
+    prompt_label = label if not placeholder else f"{label} ({placeholder})"
+    if tooltip:
+        print(f"{prompt_label}：{tooltip}")
+
+    while True:
+        if str(param_meta.get("type") or "text").strip().lower() == "password":
+            value = _prompt_secret_text(prompt_label, required=True)
+        else:
+            value = _prompt_text(prompt_label)
+
+        if str(param_meta.get("convert") or "").strip().lower() != "int":
+            return value
+
+        try:
+            return int(value)
+        except ValueError:
+            print("请输入有效数字。")
+
+
+def _collect_site_auth_config(runtime_python: Optional[Path] = None) -> Optional[dict[str, Any]]:
+    print_step("用户站点认证配置")
+    if not _prompt_yes_no("是否配置用户站点认证", default=False):
+        return None
+
+    auth_sites = _load_auth_site_definitions(runtime_python=runtime_python)
+    if not auth_sites:
+        print_step("未能读取可用站点认证清单，已跳过用户站点认证配置")
+        return None
+
+    _print_auth_sites(auth_sites)
+    while True:
+        selected_site = _prompt_text("请输入认证站点代号").strip().lower()
+        if selected_site in auth_sites:
+            break
+        print("请输入上面列表中的站点代号。")
+
+    site_conf = auth_sites[selected_site]
+    print_step(f"正在配置站点认证：{site_conf.get('name') or selected_site}")
+    params = {
+        param_key: _prompt_auth_param(param_key, param_meta)
+        for param_key, param_meta in (site_conf.get("params") or {}).items()
+    }
+    return {
+        "site": selected_site,
+        "params": params,
+    }
+
+
+def run_setup_wizard(force_token: bool, runtime_python: Optional[Path] = None) -> dict[str, Any]:
     if not _is_interactive():
         raise RuntimeError("交互式向导需要在终端中运行，请直接执行 moviepilot setup --wizard 或 moviepilot init --wizard")
 
@@ -841,10 +1155,15 @@ def run_setup_wizard(force_token: bool) -> dict[str, Any]:
 
     return {
         "api_token": api_token,
+        "env_settings": {
+            **_collect_database_config(),
+            **_collect_agent_config(),
+        },
         "directories": [_collect_directory_config()],
         "downloader": _collect_downloader_config(),
         "mediaserver": _collect_media_server_config(),
         "notification": _collect_notification_config(),
+        "site_auth": _collect_site_auth_config(runtime_python=runtime_python),
     }
 
 
@@ -949,6 +1268,20 @@ def _apply_local_system_config_inner(config_payload: dict[str, Any]) -> None:
         current_switches = system_config.get(SystemConfigKey.NotificationSwitchs) or []
         system_config.set(SystemConfigKey.NotificationSwitchs, _merge_notification_switches(current_switches))
 
+    site_auth_item = config_payload.get("site_auth")
+    if isinstance(site_auth_item, dict) and site_auth_item.get("site") and site_auth_item.get("params"):
+        system_config.set(SystemConfigKey.UserSiteAuthParams, site_auth_item)
+        try:
+            from app.helper.sites import SitesHelper
+
+            status, msg = SitesHelper().check_user(site_auth_item.get("site"), site_auth_item.get("params"))
+            if status:
+                print_step(f"站点认证校验成功：{msg}")
+            else:
+                print_step(f"已保存站点认证配置，当前校验未通过：{msg}")
+        except Exception as exc:
+            print_step(f"已保存站点认证配置，当前未完成校验：{exc}")
+
     system_config.set(SystemConfigKey.SetupWizardState, True)
     print_step("已写入本地系统配置")
 
@@ -1002,9 +1335,13 @@ def init_local(
 
     wizard_payload: Optional[dict[str, Any]] = None
     if wizard:
-        wizard_payload = run_setup_wizard(force_token=force_token)
+        wizard_payload = run_setup_wizard(force_token=force_token, runtime_python=runtime_python)
     else:
         ensure_api_token(force_token=force_token)
+
+    if wizard_payload and wizard_payload.get("env_settings"):
+        write_env_values(wizard_payload["env_settings"])
+        print_step(f"已写入环境配置到 {ENV_FILE}")
 
     if skip_resources:
         if resources_ready:
@@ -1088,9 +1425,24 @@ def _git_output(*args: str) -> str:
 
 
 def _ensure_git_clean() -> None:
-    status = _git_output("status", "--porcelain")
-    if status.strip():
-        raise RuntimeError("检测到当前仓库有未提交改动，请先提交或清理后再执行更新。")
+    status = _git_output("status", "--porcelain", "--untracked-files=no")
+    if not status.strip():
+        return
+
+    changed_files: list[str] = []
+    for line in status.splitlines():
+        if len(line) < 4:
+            continue
+        changed_files.append(line[3:].strip())
+
+    detail = ""
+    if changed_files:
+        preview = "、".join(changed_files[:5])
+        if len(changed_files) > 5:
+            preview += " 等"
+        detail = f"：{preview}"
+
+    raise RuntimeError(f"检测到当前仓库有未提交的源码改动{detail}，请先提交或清理后再执行更新。")
 
 
 def _update_backend_ref(ref: str) -> str:
@@ -1217,6 +1569,9 @@ def build_parser() -> argparse.ArgumentParser:
     apply_config_parser = subparsers.add_parser("apply-config", help=argparse.SUPPRESS)
     apply_config_parser.add_argument("--config-json-file", required=True, help=argparse.SUPPRESS)
 
+    query_auth_sites_parser = subparsers.add_parser("query-auth-sites", help=argparse.SUPPRESS)
+    query_auth_sites_parser.add_argument("--output-json-file", required=True, help=argparse.SUPPRESS)
+
     return parser
 
 
@@ -1329,6 +1684,14 @@ def main() -> int:
             if not isinstance(payload, dict):
                 raise RuntimeError("配置负载格式错误")
             _apply_local_system_config_inner(payload)
+            return 0
+
+        if args.command == "query-auth-sites":
+            payload = _load_auth_site_definitions_inner()
+            Path(args.output_json_file).write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
             return 0
     except subprocess.CalledProcessError as exc:
         print(f"命令执行失败，退出码：{exc.returncode}", file=sys.stderr)
