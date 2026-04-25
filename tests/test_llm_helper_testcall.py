@@ -39,8 +39,6 @@ _stub_module(
         LLM_API_KEY="global-key",
         LLM_BASE_URL="https://global.example.com",
         LLM_THINKING_LEVEL=None,
-        LLM_DISABLE_THINKING=False,
-        LLM_REASONING_EFFORT=None,
         LLM_TEMPERATURE=0.1,
         LLM_MAX_CONTEXT_TOKENS=64,
         PROXY_HOST=None,
@@ -144,6 +142,7 @@ class LlmHelperTestCallTest(unittest.TestCase):
 
     def test_get_llm_uses_deepseek_thinking_level_controls(self):
         calls = []
+        patch_calls = []
 
         class _FakeChatDeepSeek:
             def __init__(self, **kwargs):
@@ -154,6 +153,10 @@ class LlmHelperTestCallTest(unittest.TestCase):
         with patch.dict(
             sys.modules,
             {"langchain_deepseek": SimpleNamespace(ChatDeepSeek=_FakeChatDeepSeek)},
+        ), patch.object(
+            llm_module,
+            "_patch_deepseek_reasoning_content_support",
+            side_effect=lambda: patch_calls.append(True),
         ):
             llm_module.LLMHelper.get_llm(
                 provider="deepseek",
@@ -168,11 +171,13 @@ class LlmHelperTestCallTest(unittest.TestCase):
             calls[0].get("extra_body"),
             {"thinking": {"type": "enabled"}},
         )
+        self.assertEqual(patch_calls, [True])
         self.assertEqual(calls[0].get("reasoning_effort"), "max")
         self.assertEqual(calls[0].get("api_base"), "https://api.deepseek.com")
 
     def test_get_llm_disables_deepseek_thinking_via_thinking_level(self):
         calls = []
+        patch_calls = []
 
         class _FakeChatDeepSeek:
             def __init__(self, **kwargs):
@@ -183,6 +188,10 @@ class LlmHelperTestCallTest(unittest.TestCase):
         with patch.dict(
             sys.modules,
             {"langchain_deepseek": SimpleNamespace(ChatDeepSeek=_FakeChatDeepSeek)},
+        ), patch.object(
+            llm_module,
+            "_patch_deepseek_reasoning_content_support",
+            side_effect=lambda: patch_calls.append(True),
         ):
             llm_module.LLMHelper.get_llm(
                 provider="deepseek",
@@ -197,6 +206,7 @@ class LlmHelperTestCallTest(unittest.TestCase):
             calls[0].get("extra_body"),
             {"thinking": {"type": "disabled"}},
         )
+        self.assertEqual(patch_calls, [True])
         self.assertIsNone(calls[0].get("reasoning_effort"))
         self.assertEqual(calls[0].get("api_base"), "https://proxy.example.com")
 
