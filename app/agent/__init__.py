@@ -474,6 +474,7 @@ class MoviePilotAgent:
             self._tool_context = {
                 "user_reply_sent": False,
                 "reply_mode": None,
+                "should_dispatch_reply": self.should_dispatch_reply,
             }
             self._streamed_output = ""
 
@@ -579,6 +580,9 @@ class MoviePilotAgent:
             agent = self._create_agent(streaming=use_streaming)
 
             if use_streaming:
+                self.stream_handler.set_dispatch_policy(
+                    allow_dispatch_without_context=self.should_dispatch_reply
+                )
                 # 流式模式：渠道支持消息编辑，启动流式输出实时推送 token
                 await self.stream_handler.start_streaming(
                     channel=self.channel,
@@ -1029,7 +1033,7 @@ class AgentManager:
         output_callback: Optional[Callable[[str], None]] = None,
         reply_mode: ReplyMode = ReplyMode.CAPTURE_ONLY,
         persist_output_message: bool = True,
-        allow_message_tools: bool = True,
+        allow_message_tools: Optional[bool] = None,
     ) -> None:
         """
         以独立后台会话执行一段 prompt。
@@ -1047,6 +1051,10 @@ class AgentManager:
         agent.force_streaming = bool(output_callback)
         agent.reply_mode = reply_mode
         agent.persist_output_message = persist_output_message
+        if reply_mode == ReplyMode.CAPTURE_ONLY:
+            allow_message_tools = False
+        elif allow_message_tools is None:
+            allow_message_tools = True
         agent.allow_message_tools = allow_message_tools
 
         try:
