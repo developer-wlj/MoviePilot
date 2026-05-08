@@ -71,6 +71,10 @@ LLM_PROVIDER_DEFAULTS = {
         "model": "claude-sonnet-4-0",
         "base_url": "https://api.anthropic.com/v1",
     },
+    "baidu-qianfan-coding-plan": {
+        "model": "",
+        "base_url": "https://qianfan.baidubce.com/v2",
+    },
     "openrouter": {
         "model": "openai/gpt-4.1-mini",
         "base_url": "https://openrouter.ai/api/v1",
@@ -79,14 +83,20 @@ LLM_PROVIDER_DEFAULTS = {
         "model": "llama-3.3-70b-versatile",
         "base_url": "https://api.groq.com/openai/v1",
     },
+    "jdcloud": {
+        "model": "",
+        "base_url": "https://modelservice.jdcloud.com/v1",
+    },
 }
 LLM_PROVIDER_FALLBACK_CHOICES = {
     "deepseek": "DeepSeek",
     "openai": "OpenAI Compatible",
     "google": "Google",
     "anthropic": "Anthropic",
+    "baidu-qianfan-coding-plan": "百度千帆",
     "openrouter": "OpenRouter",
     "groq": "Groq",
+    "jdcloud": "京东云",
 }
 RUNTIME_PACKAGE = {
     "name": "moviepilot-frontend-runtime",
@@ -1190,6 +1200,8 @@ def _llm_provider_defaults(
     provider_definitions: list[dict[str, Any]],
 ) -> dict[str, str]:
     normalized_provider = str(provider or "").strip().lower()
+    if normalized_provider == "kimi-coding":
+        normalized_provider = "moonshot"
     defaults = dict(LLM_PROVIDER_DEFAULTS.get(normalized_provider) or {})
     provider_meta = next(
         (
@@ -1204,9 +1216,15 @@ def _llm_provider_defaults(
         default_base_url = str(provider_meta.get("default_base_url") or "").strip()
         if default_base_url:
             defaults["base_url"] = default_base_url
+        base_url_presets = provider_meta.get("base_url_presets") or []
+        if isinstance(base_url_presets, list) and base_url_presets:
+            preset_id = str((base_url_presets[0] or {}).get("id") or "").strip()
+            if preset_id:
+                defaults["base_url_preset"] = preset_id
 
     defaults.setdefault("model", _env_default("LLM_MODEL", ""))
     defaults.setdefault("base_url", _env_default("LLM_BASE_URL", ""))
+    defaults.setdefault("base_url_preset", _env_default("LLM_BASE_URL_PRESET", ""))
     return defaults
 
 
@@ -1215,6 +1233,8 @@ def _llm_provider_meta(
     provider_definitions: list[dict[str, Any]],
 ) -> dict[str, Any]:
     normalized_provider = str(provider or "").strip().lower()
+    if normalized_provider == "kimi-coding":
+        normalized_provider = "moonshot"
     provider_meta = next(
         (
             item
@@ -1235,11 +1255,13 @@ def _load_llm_models_inner(payload: dict[str, Any]) -> list[dict[str, Any]]:
     provider_module = _load_llm_provider_module()
     api_key = str(payload.get("api_key") or "").strip() or None
     base_url = str(payload.get("base_url") or "").strip() or None
+    base_url_preset = str(payload.get("base_url_preset") or "").strip() or None
     models = asyncio.run(
         provider_module.LLMProviderManager().list_models(
             provider_id=provider,
             api_key=api_key,
             base_url=base_url,
+            base_url_preset_id=base_url_preset,
             force_refresh=False,
         )
     )
@@ -1251,12 +1273,14 @@ def _load_llm_models(
     provider: str,
     api_key: Optional[str],
     base_url: Optional[str],
+    base_url_preset: Optional[str],
     runtime_python: Optional[Path] = None,
 ) -> list[dict[str, Any]]:
     payload = {
         "provider": str(provider or "").strip().lower(),
         "api_key": str(api_key or "").strip(),
         "base_url": str(base_url or "").strip(),
+        "base_url_preset": str(base_url_preset or "").strip(),
     }
     try:
         return _load_llm_models_inner(payload)
@@ -1764,6 +1788,8 @@ def _collect_agent_config(
     provider_definitions = _load_llm_provider_definitions(runtime_python=runtime_python)
     provider_choices = _llm_provider_choice_map(provider_definitions)
     current_provider = _env_default("LLM_PROVIDER", "deepseek").lower()
+    if current_provider == "kimi-coding":
+        current_provider = "moonshot"
     if current_provider not in provider_choices:
         current_provider = "deepseek"
 
@@ -1785,6 +1811,9 @@ def _collect_agent_config(
     defaults = _llm_provider_defaults(provider, provider_definitions)
     current_model = _env_default("LLM_MODEL", defaults["model"])
     current_base_url = _env_default("LLM_BASE_URL", defaults["base_url"])
+    current_base_url_preset = _env_default(
+        "LLM_BASE_URL_PRESET", defaults.get("base_url_preset", "")
+    )
     api_key_label = str(provider_meta.get("api_key_label") or "API Key").strip() or "API Key"
     api_key_hint = str(provider_meta.get("api_key_hint") or "").strip()
     requires_base_url = bool(provider_meta.get("requires_base_url"))
@@ -1828,7 +1857,40 @@ def _collect_agent_config(
             "是否启用图片输入支持",
             default=_env_bool("LLM_SUPPORT_IMAGE_INPUT", True),
         ),
+        "LLM_BASE_URL_PRESET": current_base_url_preset,
     }
+
+    base_url_presets = provider_meta.get("base_url_presets") or []
+    if isinstance(base_url_presets, list):
+        duplicate_value_presets = []
+        normalized_current_base_url = current_base_url.strip()
+        for item in base_url_presets:
+            if not isinstance(item, dict):
+                continue
+            preset_value = str(item.get("value") or "").strip()
+            preset_id = str(item.get("id") or "").strip()
+            if not preset_id or preset_value != normalized_current_base_url:
+                continue
+            duplicate_value_presets.append(item)
+
+        if len(duplicate_value_presets) > 1:
+            choices: dict[str, str] = {}
+            default_preset = current_base_url_preset
+            if not default_preset or default_preset not in {
+                str(item.get("id") or "").strip() for item in duplicate_value_presets
+            }:
+                default_preset = str((duplicate_value_presets[0] or {}).get("id") or "").strip()
+            for item in duplicate_value_presets:
+                preset_id = str(item.get("id") or "").strip()
+                preset_label = str(item.get("label") or preset_id).strip()
+                if preset_id:
+                    choices[preset_id] = preset_label
+            if choices:
+                config["LLM_BASE_URL_PRESET"] = _prompt_choice(
+                    "LLM Base URL 预设",
+                    choices=choices,
+                    default=default_preset,
+                )
 
     config["LLM_BASE_URL"] = _prompt_text(
         base_url_label,
@@ -1839,6 +1901,7 @@ def _collect_agent_config(
         provider=provider,
         api_key=config["LLM_API_KEY"],
         base_url=config["LLM_BASE_URL"],
+        base_url_preset=config["LLM_BASE_URL_PRESET"],
         runtime_python=runtime_python,
     )
     config["LLM_MODEL"] = _prompt_model_choice(models, default=current_model)
