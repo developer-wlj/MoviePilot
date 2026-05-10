@@ -1269,6 +1269,7 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
             transferhis = TransferHistoryOper()
             mediainfo = task.mediainfo
             mediainfo_changed = False
+            need_obtain_images = False
             if not mediainfo:
                 download_history = task.download_history
                 # 下载用户
@@ -1283,16 +1284,20 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
                             doubanid=download_history.doubanid,
                             episode_group=download_history.episode_group,
                         )
+                        need_obtain_images = True
                         if mediainfo:
                             # 更新自定义媒体类别
                             if download_history.media_category:
                                 mediainfo.category = download_history.media_category
                 else:
                     # 识别媒体信息
-                    mediainfo = MediaChain().recognize_by_meta(task.meta)
+                    mediainfo = MediaChain().recognize_by_meta(
+                        task.meta,
+                        obtain_images=True,
+                    )
 
-                # 更新媒体图片
-                if mediainfo:
+                # 按名称识别时已在识别链路补图，这里只补齐显式ID识别的场景。
+                if mediainfo and need_obtain_images:
                     self.obtain_images(mediainfo=mediainfo)
 
                 if not mediainfo:
@@ -2269,9 +2274,12 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
                 # 更新媒体图片
                 self.obtain_images(mediainfo=mediainfo)
         else:
-            mediainfo = MediaChain().recognize_by_path(
-                str(src_path), episode_group=history.episode_group
+            recognize_context = MediaChain().recognize_by_path(
+                str(src_path),
+                episode_group=history.episode_group,
+                obtain_images=True,
             )
+            mediainfo = recognize_context.media_info if recognize_context else None
         if not mediainfo:
             return False, f"未识别到媒体信息，类型：{mtype.value}，id：{mediaid}"
         # 重新执行整理
