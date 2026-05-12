@@ -20,6 +20,8 @@ class MessageResponse(BaseModel):
     channel: Optional[MessageChannel] = None
     # 消息来源
     source: Optional[str] = None
+    # 渠道自定义上下文（如飞书流式卡片 card_id/element_id/sequence）
+    metadata: Optional[Dict[str, Any]] = None
     # 是否发送成功
     success: bool = False
 
@@ -211,6 +213,8 @@ class NotificationSwitch(BaseModel):
     mtype: Optional[str] = None
     # 微信开关
     wechat: Optional[bool] = False
+    # 飞书开关
+    feishu: Optional[bool] = False
     # TG开关
     telegram: Optional[bool] = False
     # Slack开关
@@ -322,6 +326,24 @@ class ChannelCapabilityManager:
                 ChannelCapability.LINKS,
                 ChannelCapability.MENU_COMMANDS,
             },
+            fallback_enabled=True,
+        ),
+        MessageChannel.Feishu: ChannelCapabilities(
+            channel=MessageChannel.Feishu,
+            capabilities={
+                ChannelCapability.INLINE_BUTTONS,
+                ChannelCapability.MESSAGE_EDITING,
+                ChannelCapability.CALLBACK_QUERIES,
+                ChannelCapability.MARKDOWN,
+                ChannelCapability.RICH_TEXT,
+                ChannelCapability.IMAGES,
+                ChannelCapability.LINKS,
+                ChannelCapability.FILE_SENDING,
+            },
+            max_buttons_per_row=3,
+            max_button_rows=8,
+            max_button_text_length=20,
+            max_message_length=30000,
             fallback_enabled=True,
         ),
         MessageChannel.WechatClawBot: ChannelCapabilities(
