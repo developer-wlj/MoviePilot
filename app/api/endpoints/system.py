@@ -66,7 +66,9 @@ def _match_nettest_prefix(url: str, prefix: str) -> bool:
     if (parsed_url.hostname or "").lower() != (parsed_prefix.hostname or "").lower():
         return False
     url_port = parsed_url.port or (443 if parsed_url.scheme.lower() == "https" else 80)
-    prefix_port = parsed_prefix.port or (443 if parsed_prefix.scheme.lower() == "https" else 80)
+    prefix_port = parsed_prefix.port or (
+        443 if parsed_prefix.scheme.lower() == "https" else 80
+    )
     if url_port != prefix_port:
         return False
     return parsed_url.path.startswith(parsed_prefix.path or "/")
@@ -194,14 +196,18 @@ def _build_nettest_rules() -> list[dict[str, Any]]:
             "id": "github_proxy_web",
             "name": "github.com",
             "icon": "github",
-            "url": f"{github_proxy}{github_readme_url}" if github_proxy else github_readme_url,
+            "url": f"{github_proxy}{github_readme_url}"
+            if github_proxy
+            else github_readme_url,
             "proxy": True,
             "allowed_redirect_prefixes": [
                 "https://github.com/",
                 *((f"{github_proxy}https://github.com/",) if github_proxy else ()),
             ],
             "expected_text": "MoviePilot",
-            "invalid_message": "Github加速代理已失效，请检查配置" if github_proxy else "无效响应",
+            "invalid_message": "Github加速代理已失效，请检查配置"
+            if github_proxy
+            else "无效响应",
             "proxy_name": "Github加速代理" if github_proxy else "",
             "headers": settings.GITHUB_HEADERS,
         },
@@ -230,14 +236,22 @@ def _build_nettest_rules() -> list[dict[str, Any]]:
             "id": "github_proxy_raw",
             "name": "raw.githubusercontent.com",
             "icon": "github",
-            "url": f"{github_proxy}{raw_readme_url}" if github_proxy else raw_readme_url,
+            "url": f"{github_proxy}{raw_readme_url}"
+            if github_proxy
+            else raw_readme_url,
             "proxy": True,
             "allowed_redirect_prefixes": [
                 "https://raw.githubusercontent.com/",
-                *((f"{github_proxy}https://raw.githubusercontent.com/",) if github_proxy else ()),
+                *(
+                    (f"{github_proxy}https://raw.githubusercontent.com/",)
+                    if github_proxy
+                    else ()
+                ),
             ],
             "expected_text": "MoviePilot",
-            "invalid_message": "Github加速代理已失效，请检查配置" if github_proxy else "无效响应",
+            "invalid_message": "Github加速代理已失效，请检查配置"
+            if github_proxy
+            else "无效响应",
             "proxy_name": "Github加速代理" if github_proxy else "",
             "headers": settings.GITHUB_HEADERS,
         },
@@ -258,6 +272,7 @@ def _build_nettest_rules() -> list[dict[str, Any]]:
         )
     return rules
 
+
 def _validate_nettest_url(url: str) -> Optional[str]:
     """
     对实际请求地址做基础安全校验。
@@ -277,7 +292,9 @@ def _validate_nettest_url(url: str) -> Optional[str]:
     return None
 
 
-def _get_nettest_rule(url: Optional[str] = None, target_id: Optional[str] = None) -> Optional[dict[str, Any]]:
+def _get_nettest_rule(
+    url: Optional[str] = None, target_id: Optional[str] = None
+) -> Optional[dict[str, Any]]:
     """
     根据 target_id 或历史兼容参数匹配网络测试规则。
 
@@ -326,12 +343,12 @@ async def _close_nettest_response(response: Any) -> None:
 
 
 async def fetch_image(
-        url: str,
-        proxy: Optional[bool] = None,
-        use_cache: bool = False,
-        if_none_match: Optional[str] = None,
-        cookies: Optional[str | dict] = None,
-        allowed_domains: Optional[set[str]] = None,
+    url: str,
+    proxy: Optional[bool] = None,
+    use_cache: bool = False,
+    if_none_match: Optional[str] = None,
+    cookies: Optional[str | dict] = None,
+    allowed_domains: Optional[set[str]] = None,
 ) -> Optional[Response]:
     """
     处理图片缓存逻辑，支持HTTP缓存和磁盘缓存
@@ -371,12 +388,12 @@ async def fetch_image(
 
 @router.get("/img/{proxy}", summary="图片代理")
 async def proxy_img(
-        imgurl: str,
-        proxy: bool = False,
-        cache: bool = False,
-        use_cookies: bool = False,
-        if_none_match: Annotated[str | None, Header()] = None,
-        _: schemas.TokenPayload = Depends(verify_resource_token),
+    imgurl: str,
+    proxy: bool = False,
+    cache: bool = False,
+    use_cookies: bool = False,
+    if_none_match: Annotated[str | None, Header()] = None,
+    _: schemas.TokenPayload = Depends(verify_resource_token),
 ) -> Response:
     """
     图片代理，可选是否使用代理服务器，支持 HTTP 缓存
@@ -405,9 +422,9 @@ async def proxy_img(
 
 @router.get("/cache/image", summary="图片缓存")
 async def cache_img(
-        url: str,
-        if_none_match: Annotated[str | None, Header()] = None,
-        _: schemas.TokenPayload = Depends(verify_resource_token),
+    url: str,
+    if_none_match: Annotated[str | None, Header()] = None,
+    _: schemas.TokenPayload = Depends(verify_resource_token),
 ) -> Response:
     """
     本地缓存图片文件，支持 HTTP 缓存，如果启用全局图片缓存，则使用磁盘缓存
@@ -503,7 +520,7 @@ async def get_env_setting(_: User = Depends(get_current_active_user_async)):
 
 @router.post("/env", summary="更新系统配置", response_model=schemas.Response)
 async def set_env_setting(
-        env: dict, _: User = Depends(get_current_active_superuser_async)
+    env: dict, _: User = Depends(get_current_active_superuser_async)
 ):
     """
     更新系统环境变量（仅管理员）
@@ -538,9 +555,9 @@ async def set_env_setting(
 
 @router.get("/progress/{process_type}", summary="实时进度")
 async def get_progress(
-        request: Request,
-        process_type: str,
-        _: schemas.TokenPayload = Depends(verify_resource_token),
+    request: Request,
+    process_type: str,
+    _: schemas.TokenPayload = Depends(verify_resource_token),
 ):
     """
     实时获取处理进度，返回格式为SSE
@@ -575,9 +592,9 @@ async def get_setting(key: str, _: User = Depends(get_current_active_user_async)
 
 @router.post("/setting/{key}", summary="更新系统设置", response_model=schemas.Response)
 async def set_setting(
-        key: str,
-        value: Annotated[Union[list, dict, bool, int, str] | None, Body()] = None,
-        _: User = Depends(get_current_active_superuser_async),
+    key: str,
+    value: Annotated[Union[list, dict, bool, int, str] | None, Body()] = None,
+    _: User = Depends(get_current_active_superuser_async),
 ):
     """
     更新系统设置（仅管理员）
@@ -611,9 +628,9 @@ async def set_setting(
 
 @router.get("/message", summary="实时消息")
 async def get_message(
-        request: Request,
-        role: Optional[str] = "system",
-        _: schemas.TokenPayload = Depends(verify_resource_token),
+    request: Request,
+    role: Optional[str] = "system",
+    _: schemas.TokenPayload = Depends(verify_resource_token),
 ):
     """
     实时获取系统消息，返回格式为SSE
@@ -636,10 +653,10 @@ async def get_message(
 
 @router.get("/logging", summary="实时日志")
 async def get_logging(
-        request: Request,
-        length: Optional[int] = 50,
-        logfile: Optional[str] = "moviepilot.log",
-        _: schemas.TokenPayload = Depends(verify_resource_token),
+    request: Request,
+    length: Optional[int] = 50,
+    logfile: Optional[str] = "moviepilot.log",
+    _: schemas.TokenPayload = Depends(verify_resource_token),
 ):
     """
     实时获取系统日志
@@ -650,7 +667,7 @@ async def get_logging(
     log_path = base_path / logfile
 
     if not await SecurityUtils.async_is_safe_path(
-            base_path=base_path, user_path=log_path, allowed_suffixes={".log"}
+        base_path=base_path, user_path=log_path, allowed_suffixes={".log"}
     ):
         raise HTTPException(status_code=404, detail="Not Found")
 
@@ -667,7 +684,7 @@ async def get_logging(
 
             # 读取历史日志
             async with aiofiles.open(
-                    log_path, mode="r", encoding="utf-8", errors="ignore"
+                log_path, mode="r", encoding="utf-8", errors="ignore"
             ) as f:
                 # 优化大文件读取策略
                 if file_size > 100 * 1024:
@@ -679,7 +696,7 @@ async def get_logging(
                     # 找到第一个完整的行
                     first_newline = content.find("\n")
                     if first_newline != -1:
-                        content = content[first_newline + 1:]
+                        content = content[first_newline + 1 :]
                 else:
                     # 小文件直接读取全部内容
                     content = await f.read()
@@ -687,7 +704,7 @@ async def get_logging(
                 # 按行分割并添加到队列，只保留非空行
                 lines = [line.strip() for line in content.splitlines() if line.strip()]
                 # 只取最后N行
-                for line in lines[-max(length, 50):]:
+                for line in lines[-max(length, 50) :]:
                     lines_queue.append(line)
 
             # 输出历史日志
@@ -696,7 +713,7 @@ async def get_logging(
 
             # 实时监听新日志
             async with aiofiles.open(
-                    log_path, mode="r", encoding="utf-8", errors="ignore"
+                log_path, mode="r", encoding="utf-8", errors="ignore"
             ) as f:
                 # 移动文件指针到文件末尾，继续监听新增内容
                 await f.seek(0, 2)
@@ -735,7 +752,7 @@ async def get_logging(
         try:
             # 使用 aiofiles 异步读取文件
             async with aiofiles.open(
-                    log_path, mode="r", encoding="utf-8", errors="ignore"
+                log_path, mode="r", encoding="utf-8", errors="ignore"
             ) as file:
                 text = await file.read()
             # 倒序输出
@@ -767,10 +784,10 @@ async def latest_version(_: schemas.TokenPayload = Depends(verify_token)):
 
 @router.get("/ruletest", summary="过滤规则测试", response_model=schemas.Response)
 def ruletest(
-        title: str,
-        rulegroup_name: str,
-        subtitle: Optional[str] = None,
-        _: schemas.TokenPayload = Depends(verify_token),
+    title: str,
+    rulegroup_name: str,
+    subtitle: Optional[str] = None,
+    _: schemas.TokenPayload = Depends(verify_token),
 ):
     """
     过滤规则测试，规则类型 1-订阅，2-洗版，3-搜索
@@ -805,7 +822,9 @@ def ruletest(
     )
 
 
-@router.get("/nettest/targets", summary="获取网络测试目标", response_model=schemas.Response)
+@router.get(
+    "/nettest/targets", summary="获取网络测试目标", response_model=schemas.Response
+)
 async def nettest_targets(_: schemas.TokenPayload = Depends(verify_token)):
     """
     获取网络测试目标。
@@ -828,10 +847,10 @@ async def nettest_targets(_: schemas.TokenPayload = Depends(verify_token)):
 
 @router.get("/nettest", summary="测试网络连通性")
 async def nettest(
-        target_id: Optional[str] = None,
-        url: Optional[str] = None,
-        include: Optional[str] = None,
-        _: schemas.TokenPayload = Depends(verify_token),
+    target_id: Optional[str] = None,
+    url: Optional[str] = None,
+    include: Optional[str] = None,
+    _: schemas.TokenPayload = Depends(verify_token),
 ):
     """
     测试内置目标的网络连通性。
@@ -960,8 +979,8 @@ def restart_system(_: User = Depends(get_current_active_superuser)):
 
 @router.post("/upgrade", summary="升级并重启系统", response_model=schemas.Response)
 def upgrade_system(
-        mode: Annotated[str | None, Body()] = None,
-        _: User = Depends(get_current_active_superuser),
+    mode: Annotated[str | None, Body()] = None,
+    _: User = Depends(get_current_active_superuser),
 ):
     """
     触发系统升级并重启（仅管理员）
