@@ -144,6 +144,36 @@ class TestFeishu(unittest.TestCase):
         self.assertTrue(result.is_callback)
         self.assertEqual(result.chat_id, "oc_123")
 
+    def test_build_event_handler_registers_common_im_events(self):
+        registered = []
+
+        class _Builder:
+            def __getattr__(self, name):
+                if name.startswith("register_"):
+                    def _register(handler):
+                        registered.append(name)
+                        return self
+                    return _register
+                raise AttributeError(name)
+
+            def build(self):
+                return "handler"
+
+        client = self._build_client()
+        fake_builder = _Builder()
+
+        with patch("app.modules.feishu.feishu.lark.EventDispatcherHandler.builder", return_value=fake_builder):
+            handler = client._build_event_handler()
+
+        self.assertEqual(handler, "handler")
+        self.assertIn("register_p2_im_message_receive_v1", registered)
+        self.assertIn("register_p2_im_message_message_read_v1", registered)
+        self.assertIn("register_p2_im_message_reaction_created_v1", registered)
+        self.assertIn("register_p2_im_message_reaction_deleted_v1", registered)
+        self.assertIn("register_p2_im_message_recalled_v1", registered)
+        self.assertIn("register_p2_im_chat_access_event_bot_p2p_chat_entered_v1", registered)
+        self.assertIn("register_p2_card_action_trigger", registered)
+
     def test_parse_message_blocks_non_admin_command(self):
         client = self._build_client(FEISHU_ADMINS="ou_admin")
 
@@ -292,6 +322,7 @@ class TestFeishu(unittest.TestCase):
 
         self.assertTrue(result["success"])
         self.assertEqual(result["metadata"]["feishu_streaming"]["card_id"], "card_stream")
+        self.assertEqual(result["metadata"]["feishu_streaming"]["sequence"], 0)
         card_request = client._api_client.cardkit.v1.card.create.call_args.args[0]
         self.assertEqual(card_request.request_body.type, "card_json")
         card_payload = json.loads(card_request.request_body.data)
@@ -300,6 +331,55 @@ class TestFeishu(unittest.TestCase):
         message_request = message_api.create.call_args.args[0]
         self.assertEqual(message_request.request_body.msg_type, "interactive")
         self.assertEqual(json.loads(message_request.request_body.content)["data"]["card_id"], "card_stream")
+
+    def test_send_notification_replies_with_streaming_card_for_agent_text(self):
+        client = self._build_client()
+        client._api_client, message_api = self._build_message_api(
+            reply_response=self._success_response(message_id="om_reply", chat_id="oc_stream"),
+            card_create_response=self._card_create_success_response("card_stream"),
+        )
+
+        result = client.send_notification(
+            Notification(
+                mtype=NotificationType.Agent,
+                title="MoviePilot助手",
+                text="第一帧内容",
+            ),
+            userid="ou_user_stream",
+            original_message_id="om_origin",
+        )
+
+        self.assertTrue(result["success"])
+        message_api.create.assert_not_called()
+        reply_request = message_api.reply.call_args.args[0]
+        self.assertEqual(reply_request.message_id, "om_origin")
+        self.assertEqual(reply_request.request_body.msg_type, "interactive")
+        self.assertEqual(json.loads(reply_request.request_body.content)["data"]["card_id"], "card_stream")
+        self.assertEqual(result["metadata"]["feishu_streaming"]["sequence"], 0)
+
+    def test_edit_replied_streaming_card_uses_first_increment_sequence(self):
+        client = self._build_client()
+        client._api_client, message_api = self._build_message_api(
+            patch_response=self._success_response(),
+            card_content_response=self._success_response(),
+        )
+
+        success = client.edit_message(
+            message_id="om_reply",
+            text="补充内容",
+            metadata={
+                "feishu_streaming": {
+                    "card_id": "card_stream",
+                    "element_id": Feishu.STREAM_CARD_BODY_ELEMENT_ID,
+                    "sequence": 0,
+                }
+            },
+        )
+
+        self.assertTrue(success)
+        message_api.patch.assert_not_called()
+        content_request = client._api_client.cardkit.v1.card_element.content.call_args.args[0]
+        self.assertEqual(content_request.request_body.sequence, 1)
 
     def test_edit_message_uses_cardkit_content_for_streaming_card(self):
         client = self._build_client()
@@ -315,7 +395,7 @@ class TestFeishu(unittest.TestCase):
                 "feishu_streaming": {
                     "card_id": "card_stream",
                     "element_id": Feishu.STREAM_CARD_BODY_ELEMENT_ID,
-                    "sequence": 1,
+                    "sequence": 0,
                 }
             },
         )
@@ -326,7 +406,7 @@ class TestFeishu(unittest.TestCase):
         content_request = client._api_client.cardkit.v1.card_element.content.call_args.args[0]
         self.assertEqual(content_request.card_id, "card_stream")
         self.assertEqual(content_request.element_id, Feishu.STREAM_CARD_BODY_ELEMENT_ID)
-        self.assertEqual(content_request.request_body.sequence, 2)
+        self.assertEqual(content_request.request_body.sequence, 1)
 
     def test_close_streaming_card_updates_card_settings(self):
         client = self._build_client()
@@ -463,9 +543,9 @@ class TestFeishu(unittest.TestCase):
             message_resource_response=self._resource_response(b"resource-bytes", file_name="voice.opus", content_type="audio/ogg"),
         )
 
-        image_download = client._download_image_bytes("img_v2_test")
-        file_download = client._download_file_bytes("file_test")
-        resource_download = client._download_message_resource_bytes("om_test", "file_test", "audio")
+        image_download = client.download_image_bytes("img_v2_test")
+        file_download = client.download_file_bytes("file_test")
+        resource_download = client.download_message_resource_bytes("om_test", "file_test", "audio")
 
         self.assertEqual(image_download[0], b"image-bytes")
         self.assertEqual(file_download[0], b"file-bytes")
@@ -553,9 +633,9 @@ class TestFeishu(unittest.TestCase):
     def test_module_download_helpers_delegate_to_client(self):
         module = FeishuModule()
         client = MagicMock()
-        client._download_image_bytes.return_value = (b"image", "poster.png", "image/png")
-        client._download_file_bytes.return_value = (b"file", "note.txt", "text/plain")
-        client._download_message_resource_bytes.return_value = (b"image", "poster.png", "image/png")
+        client.download_image_bytes.return_value = (b"image", "poster.png", "image/png")
+        client.download_file_bytes.return_value = (b"file", "note.txt", "text/plain")
+        client.download_message_resource_bytes.return_value = (b"image", "poster.png", "image/png")
 
         with patch.object(module, "get_config", return_value=SimpleNamespace(name="feishu-main")), patch.object(
             module, "get_instance", return_value=client
@@ -565,7 +645,7 @@ class TestFeishu(unittest.TestCase):
 
         self.assertTrue(data_url.startswith("data:image/png;base64,"))
         self.assertEqual(file_bytes, b"file")
-        client._download_message_resource_bytes.assert_called_once_with(
+        client.download_message_resource_bytes.assert_called_once_with(
             message_id="om_msg",
             file_key="img_v2_xxx",
             resource_type="image",
@@ -604,7 +684,7 @@ class TestFeishu(unittest.TestCase):
                     metadata={
                         "feishu_streaming": {
                             "card_id": "card_stream",
-                            "sequence": 3,
+                            "sequence": 2,
                         }
                     },
                     success=True,
@@ -612,7 +692,7 @@ class TestFeishu(unittest.TestCase):
             )
 
         self.assertTrue(success)
-        client.close_streaming_card.assert_called_once_with(card_id="card_stream", sequence=4)
+        client.close_streaming_card.assert_called_once_with(card_id="card_stream", sequence=3)
 
     def test_module_post_message_prefers_file_and_voice_paths(self):
         module = FeishuModule()
