@@ -1,8 +1,6 @@
 # -*- coding: utf-8 -*-
 
 import asyncio
-import gzip
-import json as jsonlib
 import logging
 import time
 from copy import deepcopy
@@ -21,7 +19,6 @@ logger = logging.getLogger(__name__)
 
 class TMDb(object):
     _RESPONSE_SNAPSHOT_MARKER = "__mp_tmdb_response_snapshot__"
-    _JSON_DECODE_FAILED = object()
 
     def __init__(self, session=None, language=None):
         self._api_key = settings.TMDB_API_KEY
@@ -166,41 +163,7 @@ class TMDb(object):
         try:
             return response.json()
         except (ValueError, UnicodeDecodeError) as err:
-            # httpx.Response.json() 在响应体是压缩字节或错误编码时会直接抛 UnicodeDecodeError，
-            # 先尝试兼容未被客户端解压的 gzip JSON，仍失败时再收敛成 TMDbException。
-            json_data = cls._decode_compressed_response_json(response)
-            if json_data is not cls._JSON_DECODE_FAILED:
-                return json_data
             raise TMDbException(cls._build_invalid_json_message(response, err)) from err
-
-    @classmethod
-    def _decode_compressed_response_json(cls, response):
-        """
-        尝试解析未被HTTP客户端自动解压的压缩JSON响应。
-        """
-        response_content = getattr(response, "content", b"") or b""
-        if isinstance(response_content, str):
-            response_content = response_content.encode("utf-8")
-        if not isinstance(response_content, (bytes, bytearray)):
-            return cls._JSON_DECODE_FAILED
-
-        content_bytes = bytes(response_content)
-        content_encoding = cls._get_header_value(
-            getattr(response, "headers", {}) or {},
-            "Content-Encoding",
-        ) or ""
-        encodings = {
-            encoding.strip().lower()
-            for encoding in str(content_encoding).split(",")
-            if encoding.strip()
-        }
-        if "gzip" not in encodings and not content_bytes.startswith(b"\x1f\x8b"):
-            return cls._JSON_DECODE_FAILED
-
-        try:
-            return jsonlib.loads(gzip.decompress(content_bytes))
-        except (OSError, EOFError, ValueError, UnicodeDecodeError):
-            return cls._JSON_DECODE_FAILED
 
     @staticmethod
     def _get_header_value(headers, name):
@@ -223,19 +186,20 @@ class TMDb(object):
             return None
         return None
 
-    @staticmethod
-    def _build_invalid_json_message(response, parse_error: Exception = None):
+    @classmethod
+    def _build_invalid_json_message(cls, response, parse_error: Exception = None):
         """
         生成非JSON响应的诊断信息，避免日志只保留JSONDecodeError文本。
         """
         status_code = getattr(response, "status_code", None)
         headers = getattr(response, "headers", {}) or {}
-        content_type = TMDb._get_header_value(headers, "Content-Type")
+        content_type = cls._get_header_value(headers, "Content-Type")
         is_encoding_error = isinstance(parse_error, UnicodeDecodeError)
 
-        # 编码错误时响应体通常是压缩字节或乱码，打印内容只会污染日志。
+        # 编码错误或压缩字节时响应体是乱码，打印内容只会污染日志。
+        content_encoding = cls._get_header_value(headers, "Content-Encoding")
         response_text = ""
-        if not is_encoding_error:
+        if not is_encoding_error and not content_encoding:
             try:
                 response_text = getattr(response, "text", "") or ""
             except Exception as err:  # pragma: no cover - 防御异常响应对象
@@ -251,11 +215,10 @@ class TMDb(object):
             message_parts.append(f"HTTP状态码：{status_code}")
         if content_type:
             message_parts.append(f"Content-Type：{content_type}")
-        content_encoding = TMDb._get_header_value(headers, "Content-Encoding")
         if content_encoding:
             message_parts.append(f"Content-Encoding：{content_encoding}")
-        if is_encoding_error:
-            message_parts.append("响应内容因编码错误已省略")
+        if is_encoding_error or content_encoding:
+            message_parts.append("响应内容编码异常，已省略原始内容")
         elif response_text:
             message_parts.append(f"响应内容：{response_text!r}")
         else:

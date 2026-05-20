@@ -5,6 +5,7 @@ from unittest.mock import patch, MagicMock
 
 from app.core.config import settings
 from app.chain.transfer import JobManager, TransferChain
+from app.modules.filemanager.transhandler import TransHandler
 from app.schemas import EpisodeFormat, FileItem, TransferInfo, TransferTask
 from app.schemas.types import EventType, MediaType
 
@@ -127,6 +128,54 @@ def migrate_to_media_job(jobview: JobManager, task: TransferTask):
 
 
 class TransferJobManagerTest(unittest.TestCase):
+    def test_same_storage_success_uses_target_path_when_metadata_is_delayed(self):
+        """
+        网盘操作已成功但目标元数据暂不可见时，整理结果应按成功路径落库。
+        """
+        source_item = FileItem(
+            storage="alist",
+            path="/downloads/Test.Show.S01E01.mkv",
+            type="file",
+            name="Test.Show.S01E01.mkv",
+            basename="Test.Show.S01E01",
+            extension="mkv",
+            size=1024,
+            modify_time=1715939275.0,
+        )
+        target_path = Path(
+            "/library/Test Show (2026)/Season 1/Test.Show.S01E01.mkv"
+        )
+        target_folder = FileItem(
+            storage="alist",
+            path=target_path.parent.as_posix(),
+            type="dir",
+            name=target_path.parent.name,
+        )
+        source_oper = SimpleNamespace(
+            is_support_transtype=lambda transfer_type: True,
+            move=lambda fileitem, path, name: True,
+        )
+        target_oper = SimpleNamespace(
+            get_folder=lambda path: target_folder,
+            get_item=lambda path: None,
+        )
+
+        new_item, errmsg = TransHandler._TransHandler__transfer_command(
+            fileitem=source_item,
+            target_storage="alist",
+            source_oper=source_oper,
+            target_oper=target_oper,
+            target_file=target_path,
+            transfer_type="move",
+        )
+
+        self.assertEqual("", errmsg)
+        self.assertIsNotNone(new_item)
+        self.assertEqual(target_path.as_posix(), new_item.path)
+        self.assertEqual("alist", new_item.storage)
+        self.assertEqual("file", new_item.type)
+        self.assertEqual(1024, new_item.size)
+
     def test_manual_episode_offset_applies_once(self):
         chain = make_transfer_chain()
         source_fileitem = make_fileitem("/downloads/Test.Show.2026.S01E14.mkv")
@@ -245,6 +294,23 @@ class TransferJobManagerTest(unittest.TestCase):
         jobs = jobview.list_jobs()
         self.assertEqual(1, len(jobs))
         self.assertEqual(task2.fileitem, jobs[0].tasks[0].fileitem)
+
+    def test_same_source_file_is_deduped_across_media_jobs(self):
+        """
+        同一个源文件即使识别到不同媒体作业，也不能重复加入整理视图。
+        """
+        jobview = JobManager()
+        task1 = make_task(1)
+        task2 = make_task(1)
+        task1.mediainfo = FakeMedia(100)
+        task2.mediainfo = FakeMedia(200)
+
+        self.assertTrue(jobview.add_task(task1))
+        self.assertFalse(jobview.add_task(task2))
+
+        jobs = jobview.list_jobs()
+        self.assertEqual(1, len(jobs))
+        self.assertEqual(task1.fileitem, jobs[0].tasks[0].fileitem)
 
     def test_pre_recognized_migrations_with_same_meta_do_not_link_jobs(self):
         jobview = JobManager()
