@@ -1,4 +1,5 @@
 import asyncio
+import ipaddress
 import sys
 import unittest
 from types import ModuleType, SimpleNamespace
@@ -37,7 +38,12 @@ _stub_module("app.chain.media", MediaChain=_Dummy)
 _stub_module("app.chain.mediaserver", MediaServerChain=_Dummy)
 _stub_module("app.chain.search", SearchChain=_Dummy)
 _stub_module("app.chain.system", SystemChain=_Dummy)
-_stub_module("app.core.event", eventmanager=_Dummy(), Event=_Dummy)
+_stub_module(
+    "app.core.event",
+    eventmanager=_Dummy(),
+    Event=_Dummy,
+    EventManager=_Dummy,
+)
 _stub_module("app.core.metainfo", MetaInfo=_Dummy)
 _stub_module("app.core.module", ModuleManager=_Dummy)
 _stub_module(
@@ -82,10 +88,12 @@ from app.api.endpoints import system as system_endpoint
 
 
 class NettestSecurityTest(unittest.TestCase):
-    def test_fetch_image_allows_private_media_server_image_path(self):
+    def test_fetch_image_allows_signed_private_url(self):
         """
-        已配置媒体服务器的内网图片接口需要继续允许代理，保证前端封面显示。
+        服务端签名过的私网图片 URL 可以继续代理，保证前端封面显示。
         """
+        image_url = "http://192.168.1.50:8096/System/Info/Public"
+        signed_url = system_endpoint.SecurityUtils.sign_url(image_url)
         image_helper = Mock()
         image_helper.async_fetch_image = AsyncMock(return_value=b"image-bytes")
 
@@ -96,14 +104,18 @@ class NettestSecurityTest(unittest.TestCase):
         ):
             resp = asyncio.run(
                 system_endpoint.fetch_image(
-                    url="http://192.168.1.50:8096/Items/abc/Images/Primary",
-                    allowed_domains={"http://192.168.1.50:8096"},
-                    media_server_domains={"http://192.168.1.50:8096"},
+                    url=signed_url,
+                    allowed_domains=set(),
                 )
             )
 
         self.assertEqual(resp.status_code, 200)
-        image_helper.async_fetch_image.assert_awaited_once()
+        image_helper.async_fetch_image.assert_awaited_once_with(
+            url=image_url,
+            proxy=None,
+            use_cache=False,
+            cookies=None,
+        )
 
     def test_fetch_image_blocks_private_allowed_url_before_request(self):
         """
@@ -123,39 +135,64 @@ class NettestSecurityTest(unittest.TestCase):
 
         self.assertIsNone(resp)
 
-    def test_fetch_image_blocks_private_media_server_non_image_path(self):
+    def test_fetch_image_allows_configured_private_range_after_domain_match(self):
         """
-        媒体服务器 host 只放行图片接口，不放行同 host 下的任意 API。
+        图片代理在域名白名单命中后，可按配置放行指定非公网解析网段。
         """
-        class FailIfCalled:
-            def __init__(self, *args, **kwargs):
-                raise AssertionError("fetch_image should block non-image media server paths")
+        image_helper = Mock()
+        image_helper.async_fetch_image = AsyncMock(return_value=b"image-bytes")
 
-        with patch.object(system_endpoint, "ImageHelper", FailIfCalled):
+        with patch.object(system_endpoint, "ImageHelper", return_value=image_helper), patch.object(
+            system_endpoint.HashUtils, "md5", return_value="etag", create=True
+        ), patch.object(
+            system_endpoint.RequestUtils, "generate_cache_headers", return_value={}, create=True
+        ), patch.object(
+            system_endpoint.SecurityUtils,
+            "_is_global_hostname",
+            return_value=False,
+        ), patch.object(
+            system_endpoint.SecurityUtils,
+            "_hostname_addresses",
+            return_value=[ipaddress.ip_address("198.18.16.96")],
+        ), patch.object(
+            system_endpoint.settings,
+            "IMAGE_PROXY_ALLOWED_PRIVATE_RANGES",
+            ["198.18.0.0/15"],
+        ), patch(
+            "app.utils.security.logger.debug",
+        ):
             resp = asyncio.run(
                 system_endpoint.fetch_image(
-                    url="http://192.168.1.50:8096/System/Info/Public",
-                    allowed_domains={"http://192.168.1.50:8096"},
-                    media_server_domains={"http://192.168.1.50:8096"},
+                    url="https://img1.doubanio.com/poster.webp",
+                    allowed_domains={"doubanio.com"},
                 )
             )
 
-        self.assertIsNone(resp)
+        self.assertEqual(resp.status_code, 200)
+        image_helper.async_fetch_image.assert_awaited_once_with(
+            url="https://img1.doubanio.com/poster.webp",
+            proxy=None,
+            use_cache=False,
+            cookies=None,
+        )
 
-    def test_fetch_image_blocks_traversal_in_media_server_image_path(self):
+    def test_fetch_image_blocks_tampered_signed_private_url(self):
         """
-        编码后的路径穿越不能借媒体图片前缀绕过私网 SSRF 防护。
+        私网签名绑定完整 URL，改动路径后不能继续代理。
         """
+        signed_url = system_endpoint.SecurityUtils.sign_url(
+            "http://192.168.1.50:8096/Items/abc/Images/Primary"
+        ).replace("/Items/abc/Images/Primary", "/System/Info/Public")
+
         class FailIfCalled:
             def __init__(self, *args, **kwargs):
-                raise AssertionError("fetch_image should block traversal image paths")
+                raise AssertionError("fetch_image should block tampered signed URLs")
 
         with patch.object(system_endpoint, "ImageHelper", FailIfCalled):
             resp = asyncio.run(
                 system_endpoint.fetch_image(
-                    url="http://192.168.1.50:5666/api/v1/sys/img/%2e%2e/manager/user/list",
-                    allowed_domains={"http://192.168.1.50:5666"},
-                    media_server_domains={"http://192.168.1.50:5666"},
+                    url=signed_url,
+                    allowed_domains=set(),
                 )
             )
 
