@@ -480,6 +480,8 @@ class ConfigModel(BaseModel):
     # ==================== 性能配置 ====================
     # 大内存模式
     BIG_MEMORY_MODE: bool = False
+    # Rust 加速总开关，关闭时所有 Rust 快路径回退到 Python 实现
+    RUST_ACCEL: bool = True
     # 是否启用编码探测的性能模式
     ENCODING_DETECTION_PERFORMANCE_MODE: bool = True
     # 编码探测的最低置信度阈值
@@ -598,7 +600,7 @@ class ConfigModel(BaseModel):
     # AI智能体自动重试整理失败记录开关
     AI_AGENT_RETRY_TRANSFER: bool = False
 
-    # 音频输入提供商：openai/openai_chat_audio/mimo
+    # 音频输入提供商：openai/openai_chat_audio/mimo/minimax
     AUDIO_INPUT_PROVIDER: str = "openai"
     # 音频输入 API 密钥
     AUDIO_INPUT_API_KEY: Optional[str] = None
@@ -608,7 +610,7 @@ class ConfigModel(BaseModel):
     AUDIO_INPUT_MODEL: str = "gpt-4o-mini-transcribe"
     # 音频输入识别语言
     AUDIO_INPUT_LANGUAGE: str = "zh"
-    # 音频输出提供商：openai/openai_chat_audio/mimo
+    # 音频输出提供商：openai/openai_chat_audio/mimo/minimax
     AUDIO_OUTPUT_PROVIDER: str = "openai"
     # 音频输出 API 密钥
     AUDIO_OUTPUT_API_KEY: Optional[str] = None
@@ -1128,6 +1130,8 @@ class GlobalVar(object):
     STOP_EVENT: threading.Event = threading.Event()
     # webpush订阅
     SUBSCRIPTIONS: List[dict] = []
+    # webpush订阅读写锁
+    SUBSCRIPTIONS_LOCK: threading.Lock = threading.Lock()
     # 需应急停止的工作流
     EMERGENCY_STOP_WORKFLOWS: List[int] = []
     # 需应急停止文件整理
@@ -1167,13 +1171,37 @@ class GlobalVar(object):
         """
         获取webpush订阅
         """
-        return self.SUBSCRIPTIONS
+        with self.SUBSCRIPTIONS_LOCK:
+            return list(self.SUBSCRIPTIONS)
 
     def push_subscription(self, subscription: dict):
         """
-        添加webpush订阅
+        添加或更新webpush订阅。
         """
-        self.SUBSCRIPTIONS.append(subscription)
+        endpoint = subscription.get("endpoint") if subscription else None
+        if not endpoint:
+            return
+        with self.SUBSCRIPTIONS_LOCK:
+            for index, current in enumerate(self.SUBSCRIPTIONS):
+                if current.get("endpoint") == endpoint:
+                    self.SUBSCRIPTIONS[index] = subscription
+                    return
+            self.SUBSCRIPTIONS.append(subscription)
+
+    def remove_subscription(self, subscription: dict) -> bool:
+        """
+        根据 endpoint 移除webpush订阅，返回是否实际删除。
+        """
+        endpoint = subscription.get("endpoint") if subscription else None
+        if not endpoint:
+            return False
+        with self.SUBSCRIPTIONS_LOCK:
+            before_count = len(self.SUBSCRIPTIONS)
+            self.SUBSCRIPTIONS[:] = [
+                current for current in self.SUBSCRIPTIONS
+                if current.get("endpoint") != endpoint
+            ]
+            return len(self.SUBSCRIPTIONS) != before_count
 
     def stop_workflow(self, workflow_id: int):
         """

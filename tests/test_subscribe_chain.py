@@ -16,13 +16,13 @@ def _load_subscribe_chain_class():
         module = sys.modules[module_name]
         return module, module.SubscribeChain
 
-    injected_modules = {}
+    original_modules = {}
 
     def ensure_module(name: str, module: types.ModuleType):
-        if name in sys.modules:
-            return sys.modules[name]
+        """临时替换模块依赖，并记录原模块以便加载完成后恢复。"""
+        if name not in original_modules:
+            original_modules[name] = sys.modules.get(name)
         sys.modules[name] = module
-        injected_modules[name] = module
         return module
 
     chain_module = ensure_module("app.chain", types.ModuleType("app.chain"))
@@ -270,9 +270,15 @@ def _load_subscribe_chain_class():
     sys.modules[module_name] = module
     assert spec and spec.loader
     spec.loader.exec_module(module)
-    module._injected_modules = injected_modules
-    for injected_name in injected_modules:
-        sys.modules.pop(injected_name, None)
+    module._injected_modules = {
+        name: sys.modules.get(name)
+        for name in original_modules
+    }
+    for injected_name, original_module in original_modules.items():
+        if original_module is None:
+            sys.modules.pop(injected_name, None)
+        else:
+            sys.modules[injected_name] = original_module
     return module, module.SubscribeChain
 
 
@@ -413,7 +419,6 @@ class SubscribeChainTest(TestCase):
             current_priority=100,
         )
 
-        self.assertEqual(SubscribeChain.get_best_version_lack_episode(subscribe), 3)
         self.assertEqual(SubscribeChain.get_best_version_current_priority(subscribe), 90)
         self.assertFalse(SubscribeChain.is_best_version_complete(subscribe))
 
@@ -424,7 +429,6 @@ class SubscribeChainTest(TestCase):
             current_priority=90,
         )
 
-        self.assertEqual(SubscribeChain.get_best_version_lack_episode(subscribe), 0)
         self.assertEqual(SubscribeChain.get_best_version_current_priority(subscribe), 100)
         self.assertTrue(SubscribeChain.is_best_version_complete(subscribe))
 
@@ -705,7 +709,8 @@ class SubscribeChainTest(TestCase):
         payload = subscribe_oper.update.call_args.args[1]
         self.assertEqual(payload["episode_priority"], {"1": 100, "2": 80, "3": 90, "4": 60})
         self.assertEqual(payload["current_priority"], 90)
-        self.assertEqual(payload["lack_episode"], 3)
+        # update_subscribe_priority 不再回写 lack_episode；lack 由下载链路末端的 __update_lack_episodes 维护
+        self.assertNotIn("lack_episode", payload)
         self.assertEqual(subscribe.episode_priority, {"1": 100, "2": 80, "3": 90, "4": 60})
         self.assertEqual(subscribe.current_priority, 90)
         self.assertEqual(subscribe.lack_episode, 3)
@@ -743,7 +748,8 @@ class SubscribeChainTest(TestCase):
         payload = subscribe_oper.update.call_args.args[1]
         self.assertEqual(payload["episode_priority"], {"1": 100, "2": 100, "3": 100})
         self.assertEqual(payload["current_priority"], 100)
-        self.assertEqual(payload["lack_episode"], 0)
+        # 完成判定仍由 __is_best_version_complete 走 episode_priority 字典做出，lack_episode 不参与
+        self.assertNotIn("lack_episode", payload)
         finish_mock.assert_called_once_with(subscribe=subscribe, meta=meta, mediainfo=mediainfo)
 
     def test_full_best_version_updates_all_episodes_when_pack_has_no_episode_metadata(self):
@@ -776,7 +782,7 @@ class SubscribeChainTest(TestCase):
         payload = subscribe_oper.update.call_args.args[1]
         self.assertEqual(payload["episode_priority"], {"1": 100, "2": 100, "3": 100})
         self.assertEqual(payload["current_priority"], 100)
-        self.assertEqual(payload["lack_episode"], 0)
+        self.assertNotIn("lack_episode", payload)
         finish_mock.assert_called_once_with(subscribe=subscribe, meta=meta, mediainfo=mediainfo)
 
     def test_episode_best_version_updates_all_episodes_when_full_pack_has_no_episode_metadata(self):
@@ -809,7 +815,7 @@ class SubscribeChainTest(TestCase):
         payload = subscribe_oper.update.call_args.args[1]
         self.assertEqual(payload["episode_priority"], {"1": 100, "2": 100, "3": 100})
         self.assertEqual(payload["current_priority"], 100)
-        self.assertEqual(payload["lack_episode"], 0)
+        self.assertNotIn("lack_episode", payload)
         finish_mock.assert_called_once_with(subscribe=subscribe, meta=meta, mediainfo=mediainfo)
 
     def test_check_resets_current_priority_when_new_episodes_expand_target_range(self):

@@ -4,7 +4,7 @@ import re
 import traceback
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional
 
@@ -43,10 +43,11 @@ from app.agent.runtime import agent_runtime_manager
 from app.agent.tools.factory import MoviePilotToolFactory
 from app.chain import ChainBase
 from app.core.config import settings
+from app.core.event import eventmanager
 from app.log import logger
-from app.schemas import Notification, NotificationType
+from app.schemas import AgentLLMProviderEventData, AgentTokensUsageEventData, Notification, NotificationType
 from app.schemas.message import ChannelCapabilityManager, ChannelCapability
-from app.schemas.types import MessageChannel
+from app.schemas.types import ChainEventType, EventType, MessageChannel
 from app.utils.identity import SYSTEM_INTERNAL_USER_ID
 
 
@@ -58,22 +59,36 @@ def _finish_processing_status(status: Optional[dict], user_id: Optional[str] = N
     """结束入站消息的渠道处理状态。"""
     if not status:
         return
-    try:
-        channel = MessageChannel(status.get("channel"))
-    except Exception:
-        return
-    try:
-        AgentChain().run_module(
-            "mark_message_processing_finished",
-            channel=channel,
-            source=status.get("source"),
-            userid=status.get("userid") or user_id,
-            message_id=status.get("message_id"),
-            chat_id=status.get("chat_id"),
-            status=status,
-        )
-    except Exception as err:
-        logger.debug(f"结束Agent消息处理状态失败: {err}")
+    AgentChain().finish_message_processing_status(
+        status=status,
+        userid=user_id,
+    )
+
+
+async def _async_start_processing_status(task: "_MessageTask") -> Optional[dict]:
+    """
+    在 Agent worker 中启动渠道处理状态。
+    渠道启动可能触发外部 API，同步实现需切到线程池避免阻塞事件循环。
+    """
+    if not task.channel:
+        return None
+
+    def _start() -> Optional[dict]:
+        """在线程池中通过统一 Chain 接口启动处理状态。"""
+        try:
+            return AgentChain().start_message_processing_status(
+                channel=MessageChannel(task.channel),
+                source=task.source,
+                userid=task.user_id,
+                message_id=task.original_message_id,
+                chat_id=task.original_chat_id,
+                text=task.message,
+            )
+        except Exception as err:
+            logger.debug(f"启动Agent消息处理状态失败: {err}")
+            return None
+
+    return await run_in_threadpool(_start)
 
 
 async def _async_finish_processing_status(
@@ -205,6 +220,8 @@ class ReplyMode(str, Enum):
 
 HEARTBEAT_SESSION_PREFIX = "__agent_heartbeat_"
 UNSUPPORTED_IMAGE_INPUT_MESSAGE = "当前模型不支持图片输入，请更换支持图片输入的模型，或在系统设置中关闭图片输入支持后重试。"
+AGENT_EXECUTION_ERROR_PREFIX = "智能助手执行失败"
+AGENT_EXECUTION_ERROR_MESSAGE = "智能助手执行失败，请稍后重试。"
 
 
 class MoviePilotAgent:
@@ -240,6 +257,9 @@ class MoviePilotAgent:
         self._tool_context: Dict[str, object] = {}
         self._streamed_output = ""
         self._session_usage = _SessionUsageSnapshot()
+        self._llm_runtime_config: Optional[Dict[str, Any]] = None
+        self._llm_provider_selection: Dict[str, Any] = {}
+        self._agent_started_at: Optional[datetime] = None
 
         # 流式token管理
         self.stream_handler = StreamingHandler()
@@ -325,6 +345,40 @@ class MoviePilotAgent:
             )
         return self._session_usage.to_dict(self.session_id)
 
+    def _send_agent_tokens_usage_event(
+            self,
+            *,
+            success: bool,
+            error: Optional[str] = None,
+    ) -> None:
+        """
+        广播本次 Agent 执行的 token 聚合用量，供配额类插件异步记录。
+        """
+        try:
+            selection = self._llm_provider_selection or {}
+            event_data = AgentTokensUsageEventData(
+                session_id=self.session_id,
+                selected_provider_id=selection.get("selected_provider_id"),
+                selected_provider_name=selection.get("selected_provider_name"),
+                provider=selection.get("provider") or settings.LLM_PROVIDER,
+                base_url=selection.get("base_url") or settings.LLM_BASE_URL,
+                model=self._session_usage.model or selection.get("model") or settings.LLM_MODEL,
+                input_tokens=self._session_usage.total_input_tokens,
+                output_tokens=self._session_usage.total_output_tokens,
+                total_tokens=self._session_usage.total_tokens,
+                model_call_count=self._session_usage.model_call_count,
+                success=success,
+                error=error,
+                started_at=self._agent_started_at.strftime("%Y-%m-%d %H:%M:%S")
+                if self._agent_started_at
+                else None,
+                finished_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                source=selection.get("source") or "agent",
+            )
+            eventmanager.send_event(EventType.AgentTokensUsage, event_data)
+        except Exception as err:
+            logger.debug(f"广播 Agent Tokens 用量事件失败: {err}")
+
     @property
     def is_background(self) -> bool:
         """
@@ -372,12 +426,113 @@ class MoviePilotAgent:
             return False
 
     @staticmethod
-    async def _initialize_llm(streaming: bool = False):
+    def _get_event_value(event_data: Any, key: str, default: Any = None) -> Any:
+        """
+        从链式事件数据中兼容读取 Pydantic 模型或普通字典字段。
+        """
+        if isinstance(event_data, dict):
+            return event_data.get(key, default)
+        return getattr(event_data, key, default)
+
+    @staticmethod
+    def _set_event_value(event_data: Any, key: str, value: Any) -> None:
+        """
+        向链式事件数据中兼容写入 Pydantic 模型或普通字典字段。
+        """
+        if isinstance(event_data, dict):
+            event_data[key] = value
+        else:
+            setattr(event_data, key, value)
+
+    @classmethod
+    def _clean_optional_text(cls, value: Any) -> Optional[str]:
+        """
+        标准化事件返回的可选文本字段，空字符串按未返回处理。
+        """
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
+
+    async def _resolve_llm_runtime_config(self) -> Dict[str, Any]:
+        """
+        通过链式事件解析本次 Agent 可用的 LLM 运行时配置。
+
+        若没有插件返回 selected_provider_id，则沿用系统配置，保持既有行为。
+        """
+        if self._llm_runtime_config is not None:
+            return self._llm_runtime_config
+
+        event_data = AgentLLMProviderEventData(
+            provider=settings.LLM_PROVIDER,
+            model=settings.LLM_MODEL,
+            api_key=settings.LLM_API_KEY,
+            base_url=settings.LLM_BASE_URL,
+            base_url_preset=settings.LLM_BASE_URL_PRESET,
+            thinking_level=None,
+        )
+        selected_event = await eventmanager.async_send_event(
+            ChainEventType.AgentLLMProvider,
+            event_data,
+        )
+        resolved_data = selected_event.event_data if selected_event else event_data
+
+        provider = (
+                self._clean_optional_text(self._get_event_value(resolved_data, "provider"))
+                or settings.LLM_PROVIDER
+        )
+        model = (
+                self._clean_optional_text(self._get_event_value(resolved_data, "model"))
+                or settings.LLM_MODEL
+        )
+        api_key = (
+                self._clean_optional_text(self._get_event_value(resolved_data, "api_key"))
+                or settings.LLM_API_KEY
+        )
+        base_url = (
+                self._clean_optional_text(self._get_event_value(resolved_data, "base_url"))
+                or settings.LLM_BASE_URL
+        )
+        base_url_preset = (
+                self._clean_optional_text(self._get_event_value(resolved_data, "base_url_preset"))
+                or settings.LLM_BASE_URL_PRESET
+        )
+        thinking_level = self._clean_optional_text(
+            self._get_event_value(resolved_data, "thinking_level")
+        )
+        selected_provider_id = self._clean_optional_text(
+            self._get_event_value(resolved_data, "selected_provider_id")
+        )
+        selected_provider_name = self._clean_optional_text(
+            self._get_event_value(resolved_data, "selected_provider_name")
+        )
+        source = self._clean_optional_text(self._get_event_value(resolved_data, "source"))
+
+        self._llm_provider_selection = {
+            "selected_provider_id": selected_provider_id,
+            "selected_provider_name": selected_provider_name,
+            "provider": provider,
+            "base_url": base_url,
+            "model": model,
+            "source": source,
+        }
+        self._llm_runtime_config = {
+            "provider": provider,
+            "model": model,
+            "api_key": api_key,
+            "base_url": base_url,
+            "base_url_preset": base_url_preset,
+            "thinking_level": thinking_level,
+        }
+        return self._llm_runtime_config
+
+    async def _initialize_llm(self, streaming: bool = False):
         """
         初始化 LLM
         :param streaming: 是否启用流式输出
         """
-        return await LLMHelper.get_llm(streaming=streaming)
+        runtime_config = await self._resolve_llm_runtime_config()
+        return await LLMHelper.get_llm(streaming=streaming, **runtime_config)
 
     @staticmethod
     def _extract_text_content(content) -> str:
@@ -480,6 +635,77 @@ class MoviePilotAgent:
                 "no endpoints",
             )
         )
+
+    @staticmethod
+    def _payload_error_message(payload: Any) -> str:
+        """
+        从 SDK 返回的结构化错误体里提取 message 字段。
+        许多 OpenAI-compatible 服务会把真正原因放在 body.error.message 中。
+        """
+        if isinstance(payload, dict):
+            error = payload.get("error")
+            if isinstance(error, dict) and error.get("message"):
+                return str(error["message"])
+            for key in ("message", "detail", "error_description"):
+                if payload.get(key):
+                    return str(payload[key])
+        return ""
+
+    @staticmethod
+    def _sanitize_execution_error_message(message: str) -> str:
+        """
+        清理执行错误中的密钥和尾部长说明，避免把敏感字段或 SDK 调参文档直接发给用户。
+        """
+        sanitized = re.sub(r"\s+", " ", str(message or "")).strip()
+        if settings.LLM_API_KEY:
+            sanitized = sanitized.replace(settings.LLM_API_KEY, "***")
+        sanitized = re.sub(
+            r"(?i)(api[_-]?key\s*[:=]\s*)([^\s,;]+)",
+            r"\1***",
+            sanitized,
+        )
+        sanitized = re.sub(
+            r"(?i)authorization\s*:\s*bearer\s+[^\s,;]+",
+            "Authorization: ***",
+            sanitized,
+        )
+        for marker in (
+                " Tune or disable via ",
+                " See also ",
+                " Traceback ",
+                " - Traceback ",
+        ):
+            if marker in sanitized:
+                sanitized = sanitized.split(marker, 1)[0].strip()
+        return sanitized
+
+    @classmethod
+    def _primary_exception_message(cls, error: Exception) -> str:
+        """
+        从异常对象中抽取最主要的错误消息。
+        优先使用结构化 message，其次回退到异常字符串，保持用户回复直接反映真实失败原因。
+        """
+        candidates = [
+            getattr(error, "message", None),
+            cls._payload_error_message(getattr(error, "body", None)),
+            str(error),
+        ]
+        for candidate in candidates:
+            message = cls._sanitize_execution_error_message(candidate)
+            if message:
+                return message
+        return ""
+
+    @classmethod
+    def _friendly_execution_error_message(cls, error: Exception) -> str:
+        """
+        将 Agent 执行异常转换为用户可读消息。
+        回复只携带主错误信息，完整 traceback 保留在日志中排查。
+        """
+        message = cls._primary_exception_message(error)
+        if not message:
+            return AGENT_EXECUTION_ERROR_MESSAGE
+        return f"{AGENT_EXECUTION_ERROR_PREFIX}: {message}"
 
     async def _dispatch_execution_notice(self, message: str) -> None:
         """
@@ -663,7 +889,10 @@ class MoviePilotAgent:
             messages.append(HumanMessage(content=content))
 
             # 执行推理
-            await self._execute_agent(messages)
+            result = await self._execute_agent(messages)
+            if isinstance(result, tuple) and result:
+                return result[0]
+            return result
 
         except Exception as e:
             error_message = f"处理消息时发生错误: {str(e)}"
@@ -725,6 +954,11 @@ class MoviePilotAgent:
         - 渠道不支持消息编辑：非流式 LLM + ainvoke，完成后发送最终回复
         - 渠道支持消息编辑：流式 LLM + astream，实时推送 token
         """
+        execution_success = False
+        execution_error: Optional[str] = None
+        self._agent_started_at = datetime.now()
+        self._llm_runtime_config = None
+        self._llm_provider_selection = {}
         try:
             # Agent运行配置
             agent_config = {
@@ -858,11 +1092,14 @@ class MoviePilotAgent:
                 user_id=self.user_id,
                 messages=agent.get_state(agent_config).values.get("messages", []),
             )
+            execution_success = True
 
         except asyncio.CancelledError:
             logger.info(f"Agent执行被取消: session_id={self.session_id}")
+            execution_error = "任务已取消"
             return "任务已取消", {}
         except Exception as e:
+            execution_error = str(e)
             if self._messages_have_image_input(messages) and self._is_unsupported_image_input_error(e):
                 logger.warning(
                     f"当前模型不支持图片输入，已向用户发送友好提示: {e}"
@@ -870,8 +1107,14 @@ class MoviePilotAgent:
                 await self._dispatch_execution_notice(UNSUPPORTED_IMAGE_INPUT_MESSAGE)
                 return UNSUPPORTED_IMAGE_INPUT_MESSAGE, {}
             logger.error(f"Agent执行失败: {e} - {traceback.format_exc()}")
-            return str(e), {}
+            friendly_message = self._friendly_execution_error_message(e)
+            await self._dispatch_execution_notice(friendly_message)
+            return friendly_message, {}
         finally:
+            self._send_agent_tokens_usage_event(
+                success=execution_success,
+                error=execution_error,
+            )
             # 确保停止流式输出
             await self.stream_handler.stop_streaming()
 
@@ -952,8 +1195,11 @@ class AgentManager:
         self._session_queues: Dict[str, asyncio.Queue] = {}
         # 每个会话的worker任务
         self._session_workers: Dict[str, asyncio.Task] = {}
-        # typing 这类状态按会话/聊天共享，前一条任务结束时可能仍需延续到后续排队消息。
-        self._deferred_processing_statuses: Dict[str, dict] = {}
+        # 每个会话最后活动时间，用于回收空闲 Agent 实例
+        self._session_last_used: Dict[str, tuple[str, datetime]] = {}
+        self._idle_cleanup_task: Optional[asyncio.Task] = None
+        self._idle_session_ttl = timedelta(hours=24)
+        self._idle_cleanup_interval = 60 * 60
 
     def get_session_status(self, session_id: str) -> dict[str, Any]:
         """获取会话当前模型与 token 使用状态。"""
@@ -986,33 +1232,84 @@ class AgentManager:
         )
         return status
 
-    @staticmethod
-    async def initialize():
+    async def initialize(self):
         """
         初始化管理器
         """
         memory_manager.initialize()
+        if self._idle_cleanup_task and not self._idle_cleanup_task.done():
+            return
+        self._idle_cleanup_task = asyncio.create_task(self._cleanup_idle_sessions())
 
     async def close(self):
         """
         关闭管理器
         """
+        if self._idle_cleanup_task:
+            self._idle_cleanup_task.cancel()
+            try:
+                await self._idle_cleanup_task
+            except asyncio.CancelledError:
+                pass
+            self._idle_cleanup_task = None
         await memory_manager.close()
         # 取消所有会话worker
-        for task in self._session_workers.values():
+        for task in list(self._session_workers.values()):
             task.cancel()
         # 等待所有worker结束
-        for session_id, task in self._session_workers.items():
+        for session_id, task in list(self._session_workers.items()):
             try:
                 await task
             except asyncio.CancelledError:
                 pass
         self._session_workers.clear()
         self._session_queues.clear()
-        self._deferred_processing_statuses.clear()
-        for agent in self.active_agents.values():
+        self._session_last_used.clear()
+        for agent in list(self.active_agents.values()):
             await agent.cleanup()
         self.active_agents.clear()
+
+    def _record_session_activity(self, session_id: str, user_id: str) -> None:
+        """
+        记录会话最近活动时间，供空闲会话清理任务判断是否可释放资源。
+        """
+        self._session_last_used[session_id] = (user_id, datetime.now())
+
+    def _is_session_busy(self, session_id: str) -> bool:
+        """
+        判断会话是否仍有正在执行的 worker 或待处理消息，避免误清理活跃会话。
+        """
+        worker = self._session_workers.get(session_id)
+        if worker and not worker.done():
+            return True
+        queue = self._session_queues.get(session_id)
+        return bool(queue and not queue.empty())
+
+    def _expired_idle_sessions(self) -> list[tuple[str, str]]:
+        """
+        收集已经超过空闲时间且当前不忙的会话。
+        """
+        expire_before = datetime.now() - self._idle_session_ttl
+        expired = []
+        for session_id, (user_id, last_used) in list(self._session_last_used.items()):
+            if last_used < expire_before and not self._is_session_busy(session_id):
+                expired.append((session_id, user_id))
+        return expired
+
+    async def _cleanup_idle_sessions(self) -> None:
+        """
+        周期性清理长时间没有新消息的 Agent 会话，避免长期运行后实例持续累积。
+        """
+        while True:
+            try:
+                await asyncio.sleep(self._idle_cleanup_interval)
+                for session_id, user_id in self._expired_idle_sessions():
+                    await self.clear_session(session_id=session_id, user_id=user_id)
+                    logger.info(f"已清理空闲Agent会话: session_id={session_id}")
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"清理空闲Agent会话失败: {e}")
 
     async def process_message(
             self,
@@ -1026,7 +1323,6 @@ class AgentManager:
             username: str = None,
             original_message_id: Optional[str] = None,
             original_chat_id: Optional[str] = None,
-            processing_status: Optional[dict] = None,
             reply_mode: ReplyMode = ReplyMode.DISPATCH,
     ) -> str:
         """
@@ -1044,9 +1340,9 @@ class AgentManager:
             username=username,
             original_message_id=original_message_id,
             original_chat_id=original_chat_id,
-            processing_status=processing_status,
             reply_mode=reply_mode,
         )
+        self._record_session_activity(session_id, user_id)
 
         # 获取或创建会话队列
         if session_id not in self._session_queues:
@@ -1099,15 +1395,12 @@ class AgentManager:
                     break
 
                 try:
+                    await self._start_task_processing_status(task)
                     await self._process_message_internal(task)
                 except Exception as e:
                     logger.error(f"处理会话 {session_id} 的消息失败: {e}")
                 finally:
-                    await self._finish_task_processing_status(
-                        session_id=session_id,
-                        task=task,
-                        queue=queue,
-                    )
+                    await self._finish_task_processing_status(task)
                     queue.task_done()
 
         except asyncio.CancelledError:
@@ -1121,52 +1414,23 @@ class AgentManager:
                     and self._session_queues[session_id].empty()
             ):
                 self._session_queues.pop(session_id, None)
-            self._deferred_processing_statuses.pop(session_id, None)
 
     @staticmethod
-    def _is_shared_processing_status(status: Optional[dict]) -> bool:
+    async def _start_task_processing_status(task: _MessageTask) -> None:
         """
-        判断状态是否属于同一聊天窗口共享的处理提示。
-        reaction 绑定到具体消息，应按消息收口；typing 绑定到会话/聊天，需要等队列空闲再关闭。
+        在 Agent worker 真正开始处理消息时启动渠道处理状态。
         """
-        metadata = (status or {}).get("metadata") or {}
-        return isinstance(metadata, dict) and metadata.get("kind") == "typing"
-
-    async def _finish_task_processing_status(
-            self,
-            session_id: str,
-            task: _MessageTask,
-            queue: asyncio.Queue,
-    ) -> None:
-        """
-        根据会话队列状态结束或延后处理提示。
-        当后面还有排队消息时，typing 状态继续保留；队列真正空闲后再统一关闭。
-        """
-        status = task.processing_status
-        if self._is_shared_processing_status(status) and not queue.empty():
-            self._deferred_processing_statuses[session_id] = status
+        if task.processing_status:
             return
+        task.processing_status = await _async_start_processing_status(task)
 
-        if status:
-            await _async_finish_processing_status(status, task.user_id)
-            if self._is_shared_processing_status(status):
-                self._deferred_processing_statuses.pop(session_id, None)
-            elif queue.empty():
-                deferred_status = self._deferred_processing_statuses.pop(
-                    session_id, None
-                )
-                if deferred_status:
-                    await _async_finish_processing_status(
-                        deferred_status, task.user_id
-                    )
-            return
-
-        if not queue.empty():
-            return
-
-        deferred_status = self._deferred_processing_statuses.pop(session_id, None)
-        if deferred_status:
-            await _async_finish_processing_status(deferred_status, task.user_id)
+    @staticmethod
+    async def _finish_task_processing_status(task: _MessageTask) -> None:
+        """
+        在 Agent worker 完成或异常后结束本条消息的渠道处理状态。
+        """
+        await _async_finish_processing_status(task.processing_status, task.user_id)
+        task.processing_status = None
 
     async def _process_message_internal(self, task: _MessageTask):
         """
@@ -1232,7 +1496,6 @@ class AgentManager:
                     break
             self._session_queues.pop(session_id, None)
             stopped = True
-        self._deferred_processing_statuses.pop(session_id, None)
 
         if stopped:
             logger.info(f"会话 {session_id} 的Agent推理已应急停止")
@@ -1245,6 +1508,7 @@ class AgentManager:
         """
         清空会话
         """
+        self._session_last_used.pop(session_id, None)
         # 取消该会话的worker
         if session_id in self._session_workers:
             self._session_workers[session_id].cancel()
@@ -1252,11 +1516,10 @@ class AgentManager:
                 await self._session_workers[session_id]
             except asyncio.CancelledError:
                 pass
-            await self._session_workers.pop(session_id, None)
+            self._session_workers.pop(session_id, None)
 
         # 清理队列
         self._session_queues.pop(session_id, None)
-        self._deferred_processing_statuses.pop(session_id, None)
 
         # 清理agent
         if session_id in self.active_agents:
