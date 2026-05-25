@@ -27,7 +27,8 @@ class SecurityUtilsTest(TestCase):
 
         signed_url = SecurityUtils.sign_url(url)
 
-        self.assertIn("#mp_exp=", signed_url)
+        self.assertIn("#mp_sig=", signed_url)
+        self.assertIn("mp_purpose=image-proxy", signed_url)
         self.assertEqual(SecurityUtils.verify_signed_url(signed_url), url)
         self.assertEqual(SecurityUtils.strip_url_signature(signed_url), url)
 
@@ -45,18 +46,49 @@ class SecurityUtilsTest(TestCase):
 
         self.assertIsNone(SecurityUtils.verify_signed_url(tampered_url))
 
-    def test_signed_url_rejects_expired_signature(self):
+    def test_signed_url_is_deterministic_for_same_inputs(self):
         """
-        已过期签名不能继续放行私网图片代理请求。
+        相同 URL 与 RESOURCE_SECRET_KEY 多次签名结果必须完全一致，
+        保证浏览器 / Service Worker 缓存能稳定命中。
         """
-        with patch("app.utils.security.time.time", return_value=1000):
-            signed_url = SecurityUtils.sign_url(
-                "http://192.168.1.50:8096/Items/abc/Images/Primary",
-                expires_in=10,
-            )
+        url = "http://192.168.1.50:8096/Items/abc/Images/Primary"
 
-        with patch("app.utils.security.time.time", return_value=1011):
+        first = SecurityUtils.sign_url(url)
+        second = SecurityUtils.sign_url(url)
+
+        self.assertEqual(first, second)
+        self.assertEqual(SecurityUtils.verify_signed_url(first), url)
+
+    def test_signed_url_invalidated_after_secret_rotation(self):
+        """
+        `RESOURCE_SECRET_KEY` 变更（进程重启或运维显式轮换）后旧签名必须作废，
+        作为签名长期有效模型的失效兜底。
+        """
+        url = "http://192.168.1.50:8096/Items/abc/Images/Primary"
+
+        with patch(
+            "app.utils.security.settings.RESOURCE_SECRET_KEY",
+            "old-secret-value-aaaaaaaaaaaaaaaaaaaaaaaa",
+        ):
+            signed_url = SecurityUtils.sign_url(url)
+            self.assertEqual(SecurityUtils.verify_signed_url(signed_url), url)
+
+        with patch(
+            "app.utils.security.settings.RESOURCE_SECRET_KEY",
+            "new-secret-value-bbbbbbbbbbbbbbbbbbbbbbbb",
+        ):
             self.assertIsNone(SecurityUtils.verify_signed_url(signed_url))
+
+    def test_signed_url_rejects_other_purpose(self):
+        """
+        签名绑定 `purpose`，挪用到其它签名用途必须被拒绝。
+        """
+        url = "http://192.168.1.50:8096/Items/abc/Images/Primary"
+        signed_url = SecurityUtils.sign_url(url)
+
+        self.assertIsNone(
+            SecurityUtils.verify_signed_url(signed_url, purpose="other-purpose")
+        )
 
     def test_is_safe_url_keeps_default_allowlist_behavior(self):
         """
@@ -550,3 +582,102 @@ class SecurityUtilsTest(TestCase):
         self.assertEqual(errors, [])
         self.assertTrue(all(results))
         self.assertEqual(len(results), 8 * 50)
+
+    def test_async_dns_resolution_failure_releases_inflight_lock(self):
+        """
+        DNS 解析失败后 in-flight 锁字典中必须被清理，避免每个解析失败的 hostname
+        都在 `_dns_inflight_locks` 里残留一把 `asyncio.Lock`。
+        """
+        import asyncio
+
+        async def fail_getaddrinfo(*_args, **_kwargs):
+            raise socket.gaierror()
+
+        async def run() -> None:
+            loop = asyncio.get_running_loop()
+            with patch.object(loop, "getaddrinfo", side_effect=fail_getaddrinfo):
+                result = await SecurityUtils._hostname_addresses_async(
+                    "bad-host.example"
+                )
+            self.assertIsNone(result)
+
+        asyncio.run(run())
+        self.assertNotIn(
+            "bad-host.example",
+            _dns_inflight_locks,
+            "解析失败路径必须释放 in-flight 锁字典条目",
+        )
+
+    def test_async_dns_resolution_success_releases_inflight_lock(self):
+        """
+        正常解析完成后 in-flight 锁字典也必须被清理，避免 hostname 累积。
+        """
+        import asyncio
+
+        async def fake_getaddrinfo(*_args, **_kwargs):
+            return [
+                (
+                    socket.AF_INET,
+                    socket.SOCK_STREAM,
+                    0,
+                    "",
+                    ("93.184.216.34", 0),
+                )
+            ]
+
+        async def run() -> None:
+            loop = asyncio.get_running_loop()
+            with patch.object(loop, "getaddrinfo", side_effect=fake_getaddrinfo):
+                result = await SecurityUtils._hostname_addresses_async(
+                    "ok-host.example"
+                )
+            self.assertIsNotNone(result)
+
+        asyncio.run(run())
+        self.assertNotIn(
+            "ok-host.example",
+            _dns_inflight_locks,
+            "正常解析路径必须释放 in-flight 锁字典条目",
+        )
+
+    def test_async_dns_concurrent_waiters_release_inflight_lock(self):
+        """
+        并发未命中场景下，所有等待者完成后 in-flight 锁字典也必须被清理，
+        覆盖"等到锁但缓存已被前一个协程回填"的二次返回路径。
+        """
+        import asyncio
+
+        async def run() -> None:
+            loop = asyncio.get_running_loop()
+            release = asyncio.Event()
+
+            async def slow_getaddrinfo(*_args, **_kwargs):
+                await release.wait()
+                return [
+                    (
+                        socket.AF_INET,
+                        socket.SOCK_STREAM,
+                        0,
+                        "",
+                        ("93.184.216.34", 0),
+                    )
+                ]
+
+            with patch.object(loop, "getaddrinfo", side_effect=slow_getaddrinfo):
+                tasks = [
+                    asyncio.create_task(
+                        SecurityUtils._hostname_addresses_async("multi-host.example")
+                    )
+                    for _ in range(5)
+                ]
+                await asyncio.sleep(0)
+                await asyncio.sleep(0)
+                release.set()
+                await asyncio.gather(*tasks)
+
+        asyncio.run(run())
+        self.assertNotIn(
+            "multi-host.example",
+            _dns_inflight_locks,
+            "并发等待者全部退出后必须释放 in-flight 锁字典条目",
+        )
