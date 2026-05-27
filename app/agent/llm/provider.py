@@ -1085,14 +1085,20 @@ class LLMProviderManager(metaclass=Singleton):
         return builtin_specs + self._dynamic_provider_specs(builtin_specs)
 
     async def _get_provider_async(
-            self, provider_id: str, force_refresh: bool = False
+            self,
+            provider_id: str,
+            force_refresh: bool = False,
+            use_proxy: Optional[bool] = None,
     ) -> ProviderSpec:
         """异步获取指定 provider 的 ProviderSpec 实例。"""
         normalized_provider_id = self._normalize_provider_id(provider_id)
         try:
             return self.get_provider(normalized_provider_id)
         except LLMProviderError:
-            await self.get_models_dev_data(force_refresh=force_refresh)
+            await self.get_models_dev_data(
+                force_refresh=force_refresh,
+                use_proxy=use_proxy,
+            )
             return self.get_provider(normalized_provider_id)
 
     def _serialize_provider(self, spec: ProviderSpec) -> dict[str, Any]:
@@ -1132,11 +1138,16 @@ class LLMProviderManager(metaclass=Singleton):
         }
 
     async def list_providers_async(
-            self, force_refresh: bool = False
+            self,
+            force_refresh: bool = False,
+            use_proxy: Optional[bool] = None,
     ) -> list[dict[str, Any]]:
         """返回前端可渲染的 provider 目录，并优先补齐 models.dev 动态平台。"""
         try:
-            await self.get_models_dev_data(force_refresh=force_refresh)
+            await self.get_models_dev_data(
+                force_refresh=force_refresh,
+                use_proxy=use_proxy,
+            )
         except Exception as err:
             logger.debug(f"加载 models.dev provider 目录失败，回退内置列表: {err}")
         return self.list_providers()
@@ -1165,6 +1176,23 @@ class LLMProviderManager(metaclass=Singleton):
         if not value:
             return None
         return value.rstrip("/")
+
+    @staticmethod
+    def _merge_user_agent_header(
+            default_headers: Optional[dict[str, str]],
+            user_agent: Optional[str],
+    ) -> Optional[dict[str, str]]:
+        """
+        合并用户配置的 OpenAI 兼容接口 User-Agent 请求头。
+        """
+        headers = dict(default_headers or {})
+        normalized_user_agent = str(user_agent or "").strip()
+        if normalized_user_agent:
+            for key in list(headers.keys()):
+                if key.lower() == "user-agent":
+                    headers.pop(key)
+            headers["User-Agent"] = normalized_user_agent
+        return headers or None
 
     @classmethod
     def _default_base_url_for_provider(cls, spec: ProviderSpec) -> Optional[str]:
@@ -1310,10 +1338,14 @@ class LLMProviderManager(metaclass=Singleton):
         params = httpx.Client.__init__.__code__.co_varnames
         return "proxy" if "proxy" in params else "proxies"
 
-    def _build_httpx_kwargs(self) -> dict[str, Any]:
+    def _build_httpx_kwargs(self, use_proxy: Optional[bool] = None) -> dict[str, Any]:
         """构造用于 httpx 客户端的参数，如代理等。"""
-        kwargs: dict[str, Any] = {"timeout": self._DEFAULT_TIMEOUT}
-        if settings.PROXY_HOST:
+        should_use_proxy = settings.LLM_USE_PROXY if use_proxy is None else use_proxy
+        kwargs: dict[str, Any] = {
+            "timeout": self._DEFAULT_TIMEOUT,
+            "trust_env": False,
+        }
+        if should_use_proxy and settings.PROXY_HOST:
             kwargs[self._httpx_proxy_key()] = settings.PROXY_HOST
         return kwargs
 
@@ -1424,15 +1456,19 @@ class LLMProviderManager(metaclass=Singleton):
         except Exception as err:
             logger.warning(f"写入 models.dev 缓存失败: {err}")
 
-    async def _fetch_models_dev(self) -> dict[str, Any]:
+    async def _fetch_models_dev(self, use_proxy: Optional[bool] = None) -> dict[str, Any]:
         """通过网络请求获取最新 models.dev 数据。"""
         headers = {"User-Agent": "MoviePilot/1.0"}
-        async with httpx.AsyncClient(**self._build_httpx_kwargs()) as client:
+        async with httpx.AsyncClient(**self._build_httpx_kwargs(use_proxy)) as client:
             response = await client.get(self._MODELS_DEV_URL, headers=headers)
             response.raise_for_status()
             return response.json()
 
-    async def get_models_dev_data(self, force_refresh: bool = False) -> dict[str, Any]:
+    async def get_models_dev_data(
+            self,
+            force_refresh: bool = False,
+            use_proxy: Optional[bool] = None,
+    ) -> dict[str, Any]:
         """
         返回 models.dev 原始数据。
 
@@ -1458,7 +1494,7 @@ class LLMProviderManager(metaclass=Singleton):
                         return cached
 
             try:
-                payload = await self._fetch_models_dev()
+                payload = await self._fetch_models_dev(use_proxy=use_proxy)
                 self._models_dev_data = payload
                 self._models_dev_loaded_at = now
                 await self._write_models_dev_to_disk(payload)
@@ -1482,9 +1518,13 @@ class LLMProviderManager(metaclass=Singleton):
             provider_id: str,
             base_url: Optional[str] = None,
             base_url_preset_id: Optional[str] = None,
+            use_proxy: Optional[bool] = None,
     ) -> dict[str, Any]:
         """获取指定 provider 在 models.dev 中的完整负载。"""
-        spec = await self._get_provider_async(provider_id)
+        spec = await self._get_provider_async(
+            provider_id,
+            use_proxy=use_proxy,
+        )
         models_dev_provider_id = self._resolve_provider_models_dev_provider_id(
             spec,
             base_url,
@@ -1492,7 +1532,9 @@ class LLMProviderManager(metaclass=Singleton):
         )
         if not models_dev_provider_id:
             return {}
-        return (await self.get_models_dev_data()).get(models_dev_provider_id, {}) or {}
+        return (
+            await self.get_models_dev_data(use_proxy=use_proxy)
+        ).get(models_dev_provider_id, {}) or {}
 
     async def _models_dev_model(
             self,
@@ -1500,12 +1542,14 @@ class LLMProviderManager(metaclass=Singleton):
             model_id: str,
             base_url: Optional[str] = None,
             base_url_preset_id: Optional[str] = None,
+            use_proxy: Optional[bool] = None,
     ) -> dict[str, Any] | None:
         """获取指定模型的 models.dev 元数据。"""
         payload = await self._models_dev_provider_payload(
             provider_id,
             base_url=base_url,
             base_url_preset_id=base_url_preset_id,
+            use_proxy=use_proxy,
         )
         models = payload.get("models") if isinstance(payload, dict) else None
         if not isinstance(models, dict):
@@ -1604,19 +1648,23 @@ class LLMProviderManager(metaclass=Singleton):
             return normalized[:-3]
         return normalized
 
-    async def _list_models_from_google(self, api_key: str) -> list[dict[str, Any]]:
+    async def _list_models_from_google(
+            self,
+            api_key: str,
+            use_proxy: Optional[bool] = None,
+    ) -> list[dict[str, Any]]:
         """从 Google AI Studio 获取模型列表。"""
         from google import genai
         from google.genai.types import HttpOptions
 
-        http_options = None
-        if settings.PROXY_HOST:
-            proxy_key = self._httpx_proxy_key()
-            proxy_args = {proxy_key: settings.PROXY_HOST}
-            http_options = HttpOptions(
-                client_args=proxy_args,
-                async_client_args=proxy_args,
-            )
+        should_use_proxy = settings.LLM_USE_PROXY if use_proxy is None else use_proxy
+        client_args: dict[str, Any] = {"trust_env": False}
+        if should_use_proxy and settings.PROXY_HOST:
+            client_args[self._httpx_proxy_key()] = settings.PROXY_HOST
+        http_options = HttpOptions(
+            client_args=client_args,
+            async_client_args=client_args,
+        )
 
         client = genai.Client(api_key=api_key, http_options=http_options)
         response = await client.aio.models.list()
@@ -1626,7 +1674,11 @@ class LLMProviderManager(metaclass=Singleton):
             if "generateContent" not in supported:
                 continue
             model_id = model.name
-            metadata = await self._models_dev_model("google", model_id) or {}
+            metadata = await self._models_dev_model(
+                "google",
+                model_id,
+                use_proxy=use_proxy,
+            ) or {}
             results.append(
                 self._normalize_model_record(
                     model_id=model_id,
@@ -1643,6 +1695,7 @@ class LLMProviderManager(metaclass=Singleton):
             api_key: str,
             base_url: str,
             default_headers: Optional[dict[str, str]] = None,
+            use_proxy: Optional[bool] = None,
     ) -> list[dict[str, Any]]:
         """通过 OpenAI 兼容接口获取模型列表。"""
         from openai import AsyncOpenAI
@@ -1653,6 +1706,7 @@ class LLMProviderManager(metaclass=Singleton):
             default_headers=default_headers,
             timeout=15.0,
             max_retries=2,
+            http_client=httpx.AsyncClient(**self._build_httpx_kwargs(use_proxy)),
         )
         results = []
         response = await client.models.list()
@@ -1661,6 +1715,7 @@ class LLMProviderManager(metaclass=Singleton):
                 provider_id,
                 model.id,
                 base_url=base_url,
+                use_proxy=use_proxy,
             ) or {}
             results.append(
                 self._normalize_model_record(
@@ -1678,6 +1733,7 @@ class LLMProviderManager(metaclass=Singleton):
             transport: str = "openai",
             base_url: Optional[str] = None,
             base_url_preset_id: Optional[str] = None,
+            use_proxy: Optional[bool] = None,
     ) -> list[dict[str, Any]]:
         """
         某些 provider 没有统一稳定的 models.list 行为，
@@ -1688,6 +1744,7 @@ class LLMProviderManager(metaclass=Singleton):
             provider_id,
             base_url=base_url,
             base_url_preset_id=base_url_preset_id,
+            use_proxy=use_proxy,
         )
         models = payload.get("models") if isinstance(payload, dict) else None
         if not isinstance(models, dict):
@@ -1724,9 +1781,13 @@ class LLMProviderManager(metaclass=Singleton):
             headers["Authorization"] = f"Bearer {token}"
         return headers
 
-    async def _list_models_from_copilot(self, token: str) -> list[dict[str, Any]]:
+    async def _list_models_from_copilot(
+            self,
+            token: str,
+            use_proxy: Optional[bool] = None,
+    ) -> list[dict[str, Any]]:
         """从 GitHub Copilot 端点获取模型列表。"""
-        async with httpx.AsyncClient(**self._build_httpx_kwargs()) as client:
+        async with httpx.AsyncClient(**self._build_httpx_kwargs(use_proxy)) as client:
             response = await client.get(
                 "https://api.githubcopilot.com/models",
                 headers=self._copilot_headers(token),
@@ -1763,7 +1824,11 @@ class LLMProviderManager(metaclass=Singleton):
 
             limits = ((item.get("capabilities") or {}).get("limits") or {})
             supports = ((item.get("capabilities") or {}).get("supports") or {})
-            metadata = await self._models_dev_model("github-copilot", model_id) or {}
+            metadata = await self._models_dev_model(
+                "github-copilot",
+                model_id,
+                use_proxy=use_proxy,
+            ) or {}
             results.append(
                 self._normalize_model_record(
                     model_id=model_id,
@@ -1794,6 +1859,7 @@ class LLMProviderManager(metaclass=Singleton):
             provider_id: str,
             base_url: Optional[str] = None,
             base_url_preset_id: Optional[str] = None,
+            use_proxy: Optional[bool] = None,
     ) -> list[dict[str, Any]]:
         """获取开启 OAuth 的 ChatGPT 模型列表。"""
         # ChatGPT OAuth 仍然是 chatgpt provider 专属能力，但模型目录不再维护
@@ -1802,6 +1868,7 @@ class LLMProviderManager(metaclass=Singleton):
             provider_id,
             base_url=base_url,
             base_url_preset_id=base_url_preset_id,
+            use_proxy=use_proxy,
         )
         models = payload.get("models") if isinstance(payload, dict) else None
         if not isinstance(models, dict):
@@ -1825,10 +1892,16 @@ class LLMProviderManager(metaclass=Singleton):
             api_key: Optional[str] = None,
             base_url: Optional[str] = None,
             base_url_preset_id: Optional[str] = None,
+            user_agent: Optional[str] = None,
+            use_proxy: Optional[bool] = None,
             force_refresh: bool = False,
     ) -> list[dict[str, Any]]:
         """返回标准化后的模型目录。"""
-        spec = await self._get_provider_async(provider_id, force_refresh=force_refresh)
+        spec = await self._get_provider_async(
+            provider_id,
+            force_refresh=force_refresh,
+            use_proxy=use_proxy,
+        )
         resolved_model_list_strategy = self._resolve_provider_model_list_strategy(
             spec,
             base_url,
@@ -1842,7 +1915,10 @@ class LLMProviderManager(metaclass=Singleton):
             # 对依赖 models.dev 的 provider 主动刷新一次缓存，保证“刷新模型列表”
             # 在使用目录型 provider 时也能拿到最新参数。
             if force_refresh:
-                await self.get_models_dev_data(force_refresh=True)
+                await self.get_models_dev_data(
+                    force_refresh=True,
+                    use_proxy=use_proxy,
+                )
 
         if resolved_model_list_strategy == "manual":
             # 万擎等推理点型平台没有稳定的全局模型目录，模型 ID 需要用户从控制台复制。
@@ -1854,13 +1930,21 @@ class LLMProviderManager(metaclass=Singleton):
             api_key=api_key,
             base_url=base_url,
             base_url_preset_id=base_url_preset_id,
+            user_agent=user_agent,
+            use_proxy=use_proxy,
         )
 
         if resolved_model_list_strategy == "google":
-            return await self._list_models_from_google(runtime["api_key"])
+            return await self._list_models_from_google(
+                runtime["api_key"],
+                use_proxy=use_proxy,
+            )
 
         if resolved_model_list_strategy == "github_copilot":
-            return await self._list_models_from_copilot(runtime["api_key"])
+            return await self._list_models_from_copilot(
+                runtime["api_key"],
+                use_proxy=use_proxy,
+            )
 
         if resolved_model_list_strategy == "chatgpt":
             if runtime.get("auth_mode") == "oauth":
@@ -1868,6 +1952,7 @@ class LLMProviderManager(metaclass=Singleton):
                     provider_id=provider_id,
                     base_url=base_url,
                     base_url_preset_id=base_url_preset_id,
+                    use_proxy=use_proxy,
                 )
             return await self._list_models_from_openai_compatible(
                 provider_id="chatgpt",
@@ -1877,7 +1962,11 @@ class LLMProviderManager(metaclass=Singleton):
                     runtime["base_url"],
                     base_url_preset_id=base_url_preset_id,
                 ),
-                default_headers=runtime.get("default_headers"),
+                default_headers=self._merge_user_agent_header(
+                    runtime.get("default_headers"),
+                    user_agent,
+                ),
+                use_proxy=use_proxy,
             )
 
         if resolved_model_list_strategy == "anthropic_compatible":
@@ -1886,6 +1975,7 @@ class LLMProviderManager(metaclass=Singleton):
                 transport="anthropic",
                 base_url=base_url,
                 base_url_preset_id=base_url_preset_id,
+                use_proxy=use_proxy,
             )
             
         if resolved_model_list_strategy == "models_dev_only":
@@ -1894,6 +1984,7 @@ class LLMProviderManager(metaclass=Singleton):
                 transport="openai",
                 base_url=base_url,
                 base_url_preset_id=base_url_preset_id,
+                use_proxy=use_proxy,
             )
 
         # openai-compatible / deepseek 默认走官方 models 端点。
@@ -1905,7 +1996,11 @@ class LLMProviderManager(metaclass=Singleton):
                 runtime["base_url"],
                 base_url_preset_id=base_url_preset_id,
             ),
-            default_headers=runtime.get("default_headers"),
+            default_headers=self._merge_user_agent_header(
+                runtime.get("default_headers"),
+                user_agent,
+            ),
+            use_proxy=use_proxy,
         )
 
     async def resolve_model_metadata(
@@ -1914,6 +2009,7 @@ class LLMProviderManager(metaclass=Singleton):
             model_id: Optional[str],
             base_url: Optional[str] = None,
             base_url_preset_id: Optional[str] = None,
+            use_proxy: Optional[bool] = None,
     ) -> dict[str, Any] | None:
         """解析并返回指定模型在 models.dev 中的元数据。"""
         if not model_id:
@@ -1923,13 +2019,18 @@ class LLMProviderManager(metaclass=Singleton):
             model_id,
             base_url=base_url,
             base_url_preset_id=base_url_preset_id,
+            use_proxy=use_proxy,
         )
         if metadata:
             return metadata
         if provider_id == "chatgpt":
-            return await self._models_dev_model("openai", model_id)
+            return await self._models_dev_model(
+                "openai",
+                model_id,
+                use_proxy=use_proxy,
+            )
         if provider_id == "openai":
-            models_dev = await self.get_models_dev_data()
+            models_dev = await self.get_models_dev_data(use_proxy=use_proxy)
             return models_dev.get("openai", {}).get("models", {}).get(model_id)
         return None
 
@@ -2398,6 +2499,8 @@ class LLMProviderManager(metaclass=Singleton):
             api_key: Optional[str] = None,
             base_url: Optional[str] = None,
             base_url_preset_id: Optional[str] = None,
+            user_agent: Optional[str] = None,
+            use_proxy: Optional[bool] = None,
     ) -> dict[str, Any]:
         """
         解析 provider 运行时参数。
@@ -2409,7 +2512,10 @@ class LLMProviderManager(metaclass=Singleton):
             normalized_provider_id,
             base_url_preset_id,
         )
-        spec = await self._get_provider_async(normalized_provider_id)
+        spec = await self._get_provider_async(
+            normalized_provider_id,
+            use_proxy=use_proxy,
+        )
         resolved_runtime = self._resolve_provider_runtime(
             spec,
             base_url,
@@ -2428,6 +2534,8 @@ class LLMProviderManager(metaclass=Singleton):
                         api_key=api_key,
                         base_url=base_url,
                         base_url_preset_id=normalized_base_url_preset_id,
+                        user_agent=user_agent,
+                        use_proxy=use_proxy,
                     )
                         if item["id"] == model
                     ),
@@ -2447,6 +2555,7 @@ class LLMProviderManager(metaclass=Singleton):
                 model,
                 base_url=base_url,
                 base_url_preset_id=normalized_base_url_preset_id,
+                use_proxy=use_proxy,
             ),
             "default_headers": None,
             "use_responses_api": None,
@@ -2470,7 +2579,10 @@ class LLMProviderManager(metaclass=Singleton):
                         "runtime": "chatgpt",
                         "api_key": auth["access_token"],
                         "base_url": self._CHATGPT_CODEX_BASE_URL,
-                        "default_headers": headers,
+                        "default_headers": self._merge_user_agent_header(
+                            headers,
+                            user_agent,
+                        ),
                         "use_responses_api": True,
                         "auth_mode": "oauth",
                     }
@@ -2484,6 +2596,10 @@ class LLMProviderManager(metaclass=Singleton):
                         "api_key": normalized_api_key,
                         "base_url": normalized_base_url
                                     or self._default_base_url_for_provider(spec),
+                        "default_headers": self._merge_user_agent_header(
+                            None,
+                            user_agent,
+                        ),
                         "auth_mode": "api_key",
                     }
                 )
@@ -2508,9 +2624,12 @@ class LLMProviderManager(metaclass=Singleton):
                     else "github_copilot",
                     "api_key": token,
                     "base_url": "https://api.githubcopilot.com",
-                    "default_headers": self._copilot_headers(
-                        token,
-                        include_auth=transport == "anthropic",
+                    "default_headers": self._merge_user_agent_header(
+                        self._copilot_headers(
+                            token,
+                            include_auth=transport == "anthropic",
+                        ),
+                        user_agent,
                     ),
                     "auth_mode": "oauth" if auth else "api_key",
                 }
@@ -2543,6 +2662,10 @@ class LLMProviderManager(metaclass=Singleton):
                     "base_url": self._normalize_base_url_for_anthropic(
                         effective_base_url
                     ),
+                    "default_headers": self._merge_user_agent_header(
+                        None,
+                        user_agent,
+                    ),
                     "auth_mode": "api_key",
                 }
             )
@@ -2557,6 +2680,7 @@ class LLMProviderManager(metaclass=Singleton):
             {
                 "api_key": normalized_api_key,
                 "base_url": effective_base_url,
+                "default_headers": self._merge_user_agent_header(None, user_agent),
                 "auth_mode": "api_key",
             }
         )

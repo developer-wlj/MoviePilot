@@ -6,13 +6,19 @@ from types import ModuleType, SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
 
+_ORIGINAL_STUBBED_MODULES = {}
+
+
 def _stub_module(name: str, **attrs):
-    module = sys.modules.get(name)
-    if module is None:
-        module = ModuleType(name)
-        sys.modules[name] = module
+    """
+    安装临时 stub 模块，并记录原模块用于导入后恢复。
+    """
+    if name not in _ORIGINAL_STUBBED_MODULES:
+        _ORIGINAL_STUBBED_MODULES[name] = sys.modules.get(name)
+    module = ModuleType(name)
     for key, value in attrs.items():
         setattr(module, key, value)
+    sys.modules[name] = module
     return module
 
 
@@ -70,7 +76,7 @@ _stub_module("app.helper.mediaserver", MediaServerHelper=_Dummy)
 _stub_module("app.helper.message", MessageHelper=_Dummy)
 _stub_module("app.helper.progress", ProgressHelper=_Dummy)
 _stub_module("app.helper.rule", RuleHelper=_Dummy)
-_stub_module("app.helper.subscribe", SubscribeHelper=_Dummy)
+_stub_module("app.helper.server", MoviePilotServerHelper=_Dummy)
 _stub_module("app.helper.system", SystemHelper=_Dummy)
 _stub_module("app.helper.image", ImageHelper=_Dummy)
 _stub_module("app.scheduler", Scheduler=_Dummy)
@@ -82,12 +88,31 @@ _stub_module(
 )
 _stub_module("app.utils.crypto", HashUtils=_Dummy)
 _stub_module("app.utils.http", RequestUtils=_Dummy, AsyncRequestUtils=_Dummy)
-_stub_module("version", APP_VERSION="test")
+_stub_module("version", APP_VERSION="test", FRONTEND_VERSION="frontend-test")
 
 from app.api.endpoints import system as system_endpoint
 
+for _module_name, _module in _ORIGINAL_STUBBED_MODULES.items():
+    if _module is None:
+        sys.modules.pop(_module_name, None)
+    else:
+        sys.modules[_module_name] = _module
+
 
 class NettestSecurityTest(unittest.TestCase):
+    def test_get_env_setting_reports_rust_available_and_enabled_separately(self):
+        """
+        系统配置接口应分别返回 Rust 扩展可用性和当前实际启用状态。
+        """
+        with patch.object(system_endpoint.rust_accel, "is_available", return_value=True), patch.object(
+            system_endpoint.rust_accel, "is_enabled", return_value=False
+        ):
+            resp = asyncio.run(system_endpoint.get_env_setting(_="token"))
+
+        self.assertTrue(resp.success)
+        self.assertTrue(resp.data["RUST_ACCEL_AVAILABLE"])
+        self.assertFalse(resp.data["RUST_ACCEL_ENABLED"])
+
     def test_fetch_image_allows_signed_private_url(self):
         """
         服务端签名过的私网图片 URL 可以继续代理，保证前端封面显示。
