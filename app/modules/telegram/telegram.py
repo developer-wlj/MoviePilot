@@ -47,7 +47,7 @@ class Telegram:
     _typing_lock = threading.RLock()
     _typing_interval_seconds = 5
     _typing_initial_delay_seconds = 1
-    _typing_max_duration_seconds = 5 * 60
+    _typing_max_duration_seconds = 10 * 60
     _typing_command_max_duration_seconds = 30
     _typing_callback_max_duration_seconds = 60
 
@@ -225,14 +225,14 @@ class Telegram:
             ).get_res(file_url)
             if resp and resp.content:
                 logger.info(
-                    "Telegram图片下载成功: file_id=%s, file_path=%s, content_bytes=%s",
+                    "Telegram文件下载成功: file_id=%s, file_path=%s, content_bytes=%s",
                     file_id,
                     file_info.file_path,
                     len(resp.content),
                 )
                 return resp.content
             logger.warn(
-                "Telegram图片下载失败: file_id=%s, file_path=%s, file_url=%s, proxy_enabled=%s",
+                "Telegram文件下载失败: file_id=%s, file_path=%s, file_url=%s, proxy_enabled=%s",
                 file_id,
                 getattr(file_info, "file_path", None),
                 file_url,

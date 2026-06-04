@@ -10,8 +10,13 @@ from app.agent import (
     AgentManager,
     ReplyMode,
     UNSUPPORTED_IMAGE_INPUT_MESSAGE,
+    _MessageTask,
 )
 from app.agent.memory import memory_manager
+from app.agent.middleware.subagents import (
+    SUBAGENT_CONTROL_TOOL_NAME,
+    SUBAGENT_TASK_TOOL_NAME,
+)
 from app.agent.tools.factory import MoviePilotToolFactory
 from app.core.config import settings
 from app.utils.identity import SYSTEM_INTERNAL_USER_ID
@@ -288,17 +293,41 @@ class AgentBackgroundOutputTest(unittest.IsolatedAsyncioTestCase):
 
         process_message.assert_not_awaited()
 
+    async def test_agent_manager_preserves_voice_input_flag(self):
+        """会话队列执行时应把语音输入标记继续传给 Agent。"""
+        manager = AgentManager()
+        agent = MoviePilotAgent(session_id="session-1", user_id="user-1")
+        manager.active_agents["session-1"] = agent
+        agent.process = AsyncMock(return_value="ok")
+        task = _MessageTask(
+            session_id="session-1",
+            user_id="user-1",
+            message="帮我推荐一部电影",
+            has_audio_input=True,
+        )
+
+        await manager._process_message_internal(task)
+
+        agent.process.assert_awaited_once_with(
+            "帮我推荐一部电影",
+            images=None,
+            files=None,
+            has_audio_input=True,
+        )
+
     async def test_create_agent_excludes_activity_log_for_heartbeat_session(self):
         agent = MoviePilotAgent(
             session_id=f"{HEARTBEAT_SESSION_PREFIX}test__",
             user_id="system",
         )
         agent._initialize_tools = lambda: []
+        agent._initialize_subagent_tools = lambda: []
 
         with (
             patch.object(settings, "LLM_MAX_TOOLS", 0),
             patch.object(agent, "_initialize_llm", new=AsyncMock(return_value=object())),
             patch("app.agent.prompt_manager.get_agent_prompt", return_value="PROMPT"),
+            patch("app.agent.create_subagent_middlewares", return_value=([], [])),
             patch(
                 "app.agent.MoviePilotToolFactory.get_tool_selector_always_include_names",
                 return_value=[],
@@ -330,14 +359,62 @@ class AgentBackgroundOutputTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("send_message", always_include)
 
+    async def test_create_agent_always_includes_subagent_tools(self):
+        """工具筛选开启时应保留同步和异步子代理入口。"""
+        captured = {}
+        agent = MoviePilotAgent(session_id="normal-session", user_id="system")
+        agent._initialize_tools = lambda: []
+        agent._initialize_subagent_tools = lambda: []
+
+        def _tool_selector(**kwargs):
+            captured["always_include"] = kwargs["always_include"]
+            return "selector"
+
+        with (
+            patch.object(settings, "LLM_MAX_TOOLS", 5),
+            patch.object(agent, "_initialize_llm", new=AsyncMock(return_value=object())),
+            patch("app.agent.prompt_manager.get_agent_prompt", return_value="PROMPT"),
+            patch(
+                "app.agent.create_subagent_middlewares",
+                return_value=(
+                    ["subagent"],
+                    [
+                        SimpleNamespace(name=SUBAGENT_TASK_TOOL_NAME),
+                        SimpleNamespace(name=SUBAGENT_CONTROL_TOOL_NAME),
+                    ],
+                ),
+            ),
+            patch(
+                "app.agent.MoviePilotToolFactory.get_tool_selector_always_include_names",
+                return_value=[],
+            ),
+            patch("app.agent.SkillsMiddleware", side_effect=lambda *args, **kwargs: "skills"),
+            patch("app.agent.JobsMiddleware", side_effect=lambda *args, **kwargs: "jobs"),
+            patch("app.agent.RuntimeConfigMiddleware", side_effect=lambda *args, **kwargs: "runtime"),
+            patch("app.agent.MemoryMiddleware", side_effect=lambda *args, **kwargs: "memory"),
+            patch("app.agent.ActivityLogMiddleware", side_effect=lambda *args, **kwargs: "activity"),
+            patch("app.agent.SummarizationMiddleware", side_effect=lambda *args, **kwargs: "summary"),
+            patch("app.agent.PatchToolCallsMiddleware", side_effect=lambda *args, **kwargs: "patch"),
+            patch("app.agent.UsageMiddleware", side_effect=lambda *args, **kwargs: "usage"),
+            patch("app.agent.ToolSelectorMiddleware", side_effect=_tool_selector),
+            patch("app.agent.InMemorySaver", return_value="checkpointer"),
+            patch("app.agent.create_agent", side_effect=lambda **kwargs: kwargs),
+        ):
+            await agent._create_agent(streaming=False)
+
+        self.assertIn(SUBAGENT_TASK_TOOL_NAME, captured["always_include"])
+        self.assertIn(SUBAGENT_CONTROL_TOOL_NAME, captured["always_include"])
+
     async def test_create_agent_keeps_activity_log_for_normal_session(self):
         agent = MoviePilotAgent(session_id="normal-session", user_id="system")
         agent._initialize_tools = lambda: []
+        agent._initialize_subagent_tools = lambda: []
 
         with (
             patch.object(settings, "LLM_MAX_TOOLS", 0),
             patch.object(agent, "_initialize_llm", new=AsyncMock(return_value=object())),
             patch("app.agent.prompt_manager.get_agent_prompt", return_value="PROMPT"),
+            patch("app.agent.create_subagent_middlewares", return_value=([], [])),
             patch(
                 "app.agent.MoviePilotToolFactory.get_tool_selector_always_include_names",
                 return_value=[],
@@ -384,7 +461,3 @@ class AgentBackgroundOutputTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ReplyMode.CAPTURE_ONLY, captured["reply_mode"])
         self.assertFalse(captured["allow_message_tools"])
         self.assertEqual(SYSTEM_INTERNAL_USER_ID, captured["user_id"])
-
-
-if __name__ == "__main__":
-    unittest.main()

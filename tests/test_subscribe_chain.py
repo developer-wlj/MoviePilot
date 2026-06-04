@@ -7,6 +7,7 @@ from unittest import TestCase
 from unittest.mock import patch
 
 from app.schemas.types import MediaType
+from app.testing import stub_modules
 
 
 def _load_subscribe_chain_class():
@@ -16,13 +17,11 @@ def _load_subscribe_chain_class():
         module = sys.modules[module_name]
         return module, module.SubscribeChain
 
-    original_modules = {}
+    stub_deps = {}
 
     def ensure_module(name: str, module: types.ModuleType):
-        """临时替换模块依赖，并记录原模块以便加载完成后恢复。"""
-        if name not in original_modules:
-            original_modules[name] = sys.modules.get(name)
-        sys.modules[name] = module
+        """登记一个加载期临时替换模块；实际替换与精确还原由 stub_modules 在加载时统一处理。"""
+        stub_deps[name] = module
         return module
 
     chain_module = ensure_module("app.chain", types.ModuleType("app.chain"))
@@ -158,6 +157,14 @@ def _load_subscribe_chain_class():
             self.convert_type = kwargs.get("convert_type")
             self.media_dict = kwargs.get("media_dict")
 
+    class _SubscribeEpisodesRefreshEventData:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    class _SubscribeCompletionCheckEventData:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
     schemas_module.Notification = _Notification
     schemas_module.Subscribe = _SubscribeSchema
     schemas_module.NotExistMediaInfo = _NotExistMediaInfo
@@ -166,6 +173,8 @@ def _load_subscribe_chain_class():
     schemas_module.SubscribeDownloadFileInfo = _SubscribeDownloadFileInfo
     schemas_module.SubscribeLibraryFileInfo = _SubscribeLibraryFileInfo
     schemas_module.MediaRecognizeConvertEventData = _MediaRecognizeConvertEventData
+    schemas_module.SubscribeEpisodesRefreshEventData = _SubscribeEpisodesRefreshEventData
+    schemas_module.SubscribeCompletionCheckEventData = _SubscribeCompletionCheckEventData
 
     logger_module = ensure_module("app.log", types.ModuleType("app.log"))
 
@@ -288,18 +297,12 @@ def _load_subscribe_chain_class():
     subscribe_path = Path(__file__).resolve().parents[1] / "app" / "chain" / "subscribe.py"
     spec = importlib.util.spec_from_file_location(module_name, subscribe_path)
     module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
     assert spec and spec.loader
-    spec.loader.exec_module(module)
-    module._injected_modules = {
-        name: sys.modules.get(name)
-        for name in original_modules
-    }
-    for injected_name, original_module in original_modules.items():
-        if original_module is None:
-            sys.modules.pop(injected_name, None)
-        else:
-            sys.modules[injected_name] = original_module
+    # 加载期用 stub_modules 精确替换依赖、退出时统一还原；module_name 非桩，缓存入 sys.modules 供复用
+    with stub_modules(stub_deps):
+        sys.modules[module_name] = module
+        spec.loader.exec_module(module)
+        module._injected_modules = {name: sys.modules.get(name) for name in stub_deps}
     return module, module.SubscribeChain
 
 

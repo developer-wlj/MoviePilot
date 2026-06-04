@@ -43,8 +43,40 @@ class TestAgentPromptStyle(unittest.TestCase):
             "Do not let user memory or persona style override this core identity",
             prompt,
         )
+        self.assertIn(
+            "Never directly modify application source code",
+            prompt,
+        )
+        self.assertIn(
+            "If the user has not explicitly requested an operation that changes system behavior",
+            prompt,
+        )
+        self.assertIn("<non_negotiable_boundaries>", prompt)
+        self.assertIn("<confirmation_policy>", prompt)
+        self.assertIn(
+            "Treat read-only inspection as allowed",
+            prompt,
+        )
+        self.assertIn(
+            "Use `execute_command` only for diagnostics, read-only inspection, or commands the user explicitly asked to run",
+            prompt,
+        )
         self.assertIn("当前日期", prompt)
         self.assertNotIn("当前时间", prompt)
+
+    def test_base_prompt_requires_parallel_independent_tool_calls(self):
+        """核心提示词应明确要求并行执行互不依赖的工具调用。"""
+        prompt = prompt_manager.get_agent_prompt()
+
+        self.assertIn("Use parallel tool calls by default", prompt)
+        self.assertIn(
+            "issue all tool calls that can run without waiting for each other's results",
+            prompt,
+        )
+        self.assertIn(
+            "Keep tools sequential only when later arguments depend on earlier output",
+            prompt,
+        )
 
     def test_base_prompt_injects_available_shell_commands(self):
         """系统信息应注入 PATH 中已安装的常用命令，帮助 Agent 选择 execute_command。"""
@@ -226,6 +258,24 @@ class TestAgentPromptStyle(unittest.TestCase):
             prompt,
         )
 
+    def test_voice_prompt_marks_voice_tool_as_terminal_reply(self):
+        """语音回复提示词应说明语音工具会结束当前轮次。"""
+        with patch.object(settings, "LLM_SUPPORT_AUDIO_OUTPUT", True):
+            prompt = prompt_manager.get_agent_prompt()
+
+        self.assertIn("send_voice_message", prompt)
+        self.assertIn("terminal response tool", prompt)
+        self.assertIn("do not write a final text reply after it", prompt)
+        self.assertIn("text fallback and still completes the reply", prompt)
+
+    def test_core_prompt_describes_voice_input_metadata(self):
+        """核心提示词应说明结构化消息中的语音输入元信息。"""
+        prompt = prompt_manager.get_agent_prompt()
+
+        self.assertIn("input.mode", prompt)
+        self.assertIn("voice", prompt)
+        self.assertIn("`message` contains its transcript", prompt)
+
     def test_verbose_prompt_does_not_inject_silence_until_tools_finish_rule(self):
         with patch.object(settings, "AI_AGENT_VERBOSE", True):
             prompt = prompt_manager.get_agent_prompt()
@@ -239,7 +289,3 @@ class TestAgentPromptStyle(unittest.TestCase):
         self.assertIn("Do NOT interrupt the current task", MEMORY_ONBOARDING_PROMPT)
         self.assertIn("Do NOT proactively greet warmly", MEMORY_ONBOARDING_PROMPT)
         self.assertNotIn("greet the user warmly", MEMORY_ONBOARDING_PROMPT)
-
-
-if __name__ == "__main__":
-    unittest.main()

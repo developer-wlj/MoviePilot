@@ -74,6 +74,12 @@ MoviePilot 实现了标准的 **Model Context Protocol (MCP)**，允许 AI 智�
 ## 6. RESTful API
 所有工具相关的API端点都在 `/api/v1/mcp` 路径下（保持向后兼容）。
 
+### 插件补充接口
+
+**GET** `/api/v1/plugin/history/{plugin_id}`
+
+按需读取指定已安装插件的最新远端更新说明。该接口用于前端在用户点击“查看更新说明”时再实时访问插件仓库，避免加载已安装插件列表时批量请求网络。
+
 ### 1. 列出所有工具
 
 **GET** `/api/v1/mcp/tools`
@@ -145,6 +151,21 @@ MoviePilot 实现了标准的 **Model Context Protocol (MCP)**，允许 AI 智�
   "error": "调用工具失败: 参数验证失败"
 }
 ```
+
+**`search_web` 网络搜索示例**:
+```json
+{
+  "tool_name": "search_web",
+  "arguments": {
+    "query": "asyncio TaskGroup",
+    "search_engine": "duckduckgo",
+    "site_url": "https://docs.python.org/3/",
+    "max_results": 5
+  }
+}
+```
+
+`search_engine` 可选，通过 DDGS 支持 `auto`、`duckduckgo`、`google`、`brave`、`yahoo`、`wikipedia`、`yandex`、`mojeek`。`site_url` 可选，用于限定搜索到指定域名或 URL 路径范围。搜索默认使用系统代理配置。
 
 ### 3. 获取工具详情
 
