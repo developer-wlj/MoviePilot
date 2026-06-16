@@ -250,6 +250,46 @@ class SubscriptionMessage(BaseModel):
     data: Optional[dict] = Field(default_factory=dict)
 
 
+class AgentWebChatRequest(BaseModel):
+    """
+    Web 智能助手对话请求。
+    """
+
+    class AgentWebChatFile(BaseModel):
+        """
+        Web 智能助手输入附件。
+        """
+
+        ref: str = Field(..., min_length=1)
+        name: Optional[str] = Field(None)
+        mime_type: Optional[str] = Field(None)
+        size: Optional[int] = Field(None)
+        local_path: Optional[str] = Field(None)
+        status: Optional[str] = Field(None)
+
+    # 用户本轮输入
+    text: str = Field(default="")
+    # 前端会话标识，相同标识复用同一段 Agent 记忆
+    session_id: Optional[str] = Field(None)
+    # 图片 URL 或 data URL 列表
+    images: Optional[List[str]] = Field(default_factory=list)
+    # 语音/音频引用列表
+    audio_refs: Optional[List[str]] = Field(default_factory=list)
+    # 文件附件列表
+    files: Optional[List[AgentWebChatFile]] = Field(default_factory=list)
+
+
+class AgentWebChoiceRequest(BaseModel):
+    """
+    Web 智能助手按钮选择请求。
+    """
+
+    # 前端会话标识，用于保持与原对话窗口的关联
+    session_id: Optional[str] = Field(None)
+    # Agent 工具生成的按钮回调数据
+    callback_data: str = Field(..., min_length=1)
+
+
 class ChannelCapability(Enum):
     """
     渠道能力枚举
@@ -443,6 +483,21 @@ class ChannelCapabilityManager:
                 ChannelCapability.LINKS,
             },
             fallback_enabled=True,
+        ),
+        MessageChannel.WebAgent: ChannelCapabilities(
+            channel=MessageChannel.WebAgent,
+            capabilities={
+                ChannelCapability.INLINE_BUTTONS,
+                ChannelCapability.CALLBACK_QUERIES,
+                ChannelCapability.MESSAGE_EDITING,
+                ChannelCapability.MARKDOWN,
+                ChannelCapability.RICH_TEXT,
+                ChannelCapability.IMAGES,
+                ChannelCapability.LINKS,
+                ChannelCapability.AUDIO_OUTPUT,
+                ChannelCapability.FILE_SENDING,
+            },
+            fallback_enabled=False,
         ),
         MessageChannel.QQ: ChannelCapabilities(
             channel=MessageChannel.QQ,
