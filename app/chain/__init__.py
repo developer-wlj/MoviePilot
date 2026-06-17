@@ -205,6 +205,13 @@ class ChainBase(metaclass=ABCMeta):
         )
         return dispatch_message
 
+    @staticmethod
+    def _build_notice_message_data(message: Notification) -> dict:
+        """
+        构造消息通知事件数据。
+        """
+        return {**message.model_dump(exclude={"save_history"}), "type": message.mtype}
+
     async def async_remove_cache(self, filename: str) -> None:
         """
         异步删除缓存，同时删除Redis和本地缓存
@@ -1478,7 +1485,8 @@ class ChainBase(metaclass=ABCMeta):
         if not message:
             logger.warning("消息为空，跳过发送")
             return
-        self.messageoper.add(**message.model_dump())
+        if message.save_history:
+            self.messageoper.add(**message.model_dump())
         dispatch_message = self._normalize_notification_for_dispatch(message)
         # 发送消息按设置隔离
         if not dispatch_message.userid and dispatch_message.mtype:
@@ -1539,7 +1547,7 @@ class ChainBase(metaclass=ABCMeta):
                     # 按设定发送
                     self.eventmanager.send_event(
                         etype=EventType.NoticeMessage,
-                        data={**send_message.model_dump(), "type": send_message.mtype},
+                        data=self._build_notice_message_data(send_message),
                     )
                     self.messagequeue.send_message(
                         "post_message", message=send_message, **kwargs
@@ -1549,7 +1557,7 @@ class ChainBase(metaclass=ABCMeta):
         # 发送消息事件
         self.eventmanager.send_event(
             etype=EventType.NoticeMessage,
-            data={**dispatch_message.model_dump(), "type": dispatch_message.mtype},
+            data=self._build_notice_message_data(dispatch_message),
         )
         # 按原消息发送
         self.messagequeue.send_message(
@@ -1593,7 +1601,8 @@ class ChainBase(metaclass=ABCMeta):
         if not message:
             logger.warning("消息为空，跳过发送")
             return
-        await self.messageoper.async_add(**message.model_dump())
+        if message.save_history:
+            await self.messageoper.async_add(**message.model_dump())
         dispatch_message = self._normalize_notification_for_dispatch(message)
         # 发送消息按设置隔离
         if not dispatch_message.userid and dispatch_message.mtype:
@@ -1654,7 +1663,7 @@ class ChainBase(metaclass=ABCMeta):
                     # 按设定发送
                     await self.eventmanager.async_send_event(
                         etype=EventType.NoticeMessage,
-                        data={**send_message.model_dump(), "type": send_message.mtype},
+                        data=self._build_notice_message_data(send_message),
                     )
                     await self.messagequeue.async_send_message(
                         "post_message", message=send_message, **kwargs
@@ -1664,7 +1673,7 @@ class ChainBase(metaclass=ABCMeta):
         # 发送消息事件
         await self.eventmanager.async_send_event(
             etype=EventType.NoticeMessage,
-            data={**dispatch_message.model_dump(), "type": dispatch_message.mtype},
+            data=self._build_notice_message_data(dispatch_message),
         )
         # 按原消息发送
         await self.messagequeue.async_send_message(
@@ -1684,7 +1693,8 @@ class ChainBase(metaclass=ABCMeta):
         :return: 成功或失败
         """
         note_list = [media.to_dict() for media in medias]
-        self.messageoper.add(**message.model_dump(), note=note_list)
+        if message.save_history:
+            self.messageoper.add(**message.model_dump(), note=note_list)
         dispatch_message = self._normalize_notification_for_dispatch(message)
         return self.messagequeue.send_message(
             "post_medias_message",
@@ -1703,7 +1713,8 @@ class ChainBase(metaclass=ABCMeta):
         :return: 成功或失败
         """
         note_list = [torrent.torrent_info.to_dict() for torrent in torrents]
-        self.messageoper.add(**message.model_dump(), note=note_list)
+        if message.save_history:
+            self.messageoper.add(**message.model_dump(), note=note_list)
         dispatch_message = self._normalize_notification_for_dispatch(message)
         return self.messagequeue.send_message(
             "post_torrents_message",
