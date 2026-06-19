@@ -313,6 +313,12 @@ class MoviePilotAgent:
             and self.channel not in AGENT_DISPLAY_HISTORY_SKIP_CHANNELS
         )
 
+    def _should_persist_agent_chat(self) -> bool:
+        """
+        判断当前 Agent 是否需要写入会话历史表。
+        """
+        return bool(self.channel and self.source)
+
     def _save_display_history_messages(self, messages: List[dict]) -> None:
         """
         将一组可见消息追加到 Agent 会话历史表。
@@ -372,6 +378,8 @@ class MoviePilotAgent:
         """
         首次对话时生成并保存会话标题。
         """
+        if not self._should_persist_agent_chat():
+            return
         if self._tool_context.get("chat_title_prepared"):
             return
         self._tool_context["chat_title_prepared"] = True
@@ -1373,12 +1381,12 @@ class MoviePilotAgent:
                         break
             self._save_assistant_display_message_once(display_text)
 
-            # 保存消息
-            memory_manager.save_agent_messages(
-                session_id=self.session_id,
-                user_id=self.user_id,
-                messages=agent.get_state(agent_config).values.get("messages", []),
-            )
+            if self._should_persist_agent_chat():
+                memory_manager.save_agent_messages(
+                    session_id=self.session_id,
+                    user_id=self.user_id,
+                    messages=agent.get_state(agent_config).values.get("messages", []),
+                )
             execution_success = True
 
         except asyncio.CancelledError:
