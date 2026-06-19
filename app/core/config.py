@@ -575,7 +575,7 @@ class ConfigModel(BaseModel):
     # LLM Base URL 预设标识，用于区分同一 Base URL 下的不同模型目录
     LLM_BASE_URL_PRESET: Optional[str] = None
     # LLM最大上下文Token数量（K）
-    LLM_MAX_CONTEXT_TOKENS: int = 64
+    LLM_MAX_CONTEXT_TOKENS: int = 128
     # LLM OpenAI兼容接口请求User-Agent
     LLM_USER_AGENT: Optional[str] = None
     # LLM温度参数
@@ -596,7 +596,7 @@ class ConfigModel(BaseModel):
     # AI推荐条目数量限制
     AI_RECOMMEND_MAX_ITEMS: int = 50
     # LLM工具选择中间件最大工具数量，0为不启用工具选择中间件
-    LLM_MAX_TOOLS: int = 0
+    LLM_MAX_TOOLS: int = 20
     # AI智能体定时任务检查间隔（小时），0为不启用，默认24小时
     AI_AGENT_JOB_INTERVAL: int = 0
     # AI智能体啰嗦模式，开启后会回复工具调用过程
