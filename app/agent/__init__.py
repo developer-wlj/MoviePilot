@@ -27,7 +27,10 @@ from langgraph.checkpoint.memory import InMemorySaver
 from app.agent.callback import StreamingHandler
 from app.agent.llm import LLMHelper
 from app.agent.memory import memory_manager
-from app.agent.middleware.activity_log import ActivityLogMiddleware
+from app.agent.middleware.activity_log import (
+    ActivityLogMiddleware,
+    QUERY_ACTIVITY_LOG_TOOL_NAME,
+)
 from app.agent.middleware.jobs import (
     JobsMiddleware,
     filter_active_jobs,
@@ -36,7 +39,7 @@ from app.agent.middleware.jobs import (
 from app.agent.middleware.memory import MemoryMiddleware
 from app.agent.middleware.patch_tool_calls import PatchToolCallsMiddleware
 from app.agent.middleware.runtime_config import RuntimeConfigMiddleware
-from app.agent.middleware.skills import SkillsMiddleware
+from app.agent.middleware.skills import SKILL_TOOL_NAME, SkillsMiddleware
 from app.agent.middleware.subagents import (
     SUBAGENT_CONTROL_TOOL_NAME,
     SUBAGENT_TASK_TOOL_NAME,
@@ -371,7 +374,7 @@ class MoviePilotAgent:
                 HumanMessage(content=str(message).strip()[:1000]),
             ]
         )
-        content = LLMHelper._extract_text_content(getattr(response, "content", response))
+        content = LLMHelper.extract_text_content(getattr(response, "content", response))
         return self._sanitize_chat_title(content)
 
     async def prepare_chat_title(self, message: str) -> None:
@@ -736,39 +739,6 @@ class MoviePilotAgent:
         runtime_config = await self._resolve_llm_runtime_config()
         return await LLMHelper.get_llm(streaming=streaming, **runtime_config)
 
-    @staticmethod
-    def _extract_text_content(content) -> str:
-        """
-        从消息内容中提取纯文本，过滤掉思考/推理类型的内容块。
-        :param content: 消息内容，可能是字符串或内容块列表
-        :return: 纯文本内容
-        """
-        if not content:
-            return ""
-        # 跳过思考/推理类型的内容块
-        if isinstance(content, list):
-            text_parts = []
-            for block in content:
-                if isinstance(block, str):
-                    text_parts.append(block)
-                elif isinstance(block, dict):
-                    # 优先检查 thought 标志（LangChain Google GenAI 方案）
-                    if block.get("thought"):
-                        continue
-                    if block.get("type") in (
-                            "thinking",
-                            "reasoning_content",
-                            "reasoning",
-                            "thought",
-                    ):
-                        continue
-                    if block.get("type") == "text":
-                        text_parts.append(block.get("text", ""))
-                    else:
-                        text_parts.append(str(block))
-            return "".join(text_parts)
-        return str(content)
-
     @classmethod
     def _has_image_input_content(cls, content: Any) -> bool:
         """
@@ -1005,6 +975,20 @@ class MoviePilotAgent:
 
             # 工具列表
             tools = self._initialize_tools()
+            skills_middleware = SkillsMiddleware(
+                sources=[str(agent_runtime_manager.skills_dir)],
+                bundled_skills_dir=str(settings.ROOT_PATH / "skills"),
+            )
+            skill_tools = list(getattr(skills_middleware, "tools", []) or [])
+            activity_log_middleware = None
+            activity_log_tools = []
+            if self.has_message_context:
+                activity_log_middleware = ActivityLogMiddleware(
+                    activity_dir=str(agent_runtime_manager.activity_dir),
+                )
+                activity_log_tools = list(
+                    getattr(activity_log_middleware, "tools", []) or []
+                )
             subagent_middlewares, subagent_task_tools = create_subagent_middlewares(
                 model=non_streaming_model,
                 tools=self._initialize_subagent_tools(),
@@ -1021,14 +1005,23 @@ class MoviePilotAgent:
                     if getattr(tool, "name", None)
                     in {SUBAGENT_TASK_TOOL_NAME, SUBAGENT_CONTROL_TOOL_NAME}
                 )
+            if skill_tools:
+                always_include_tools.extend(
+                    tool.name
+                    for tool in skill_tools
+                    if getattr(tool, "name", None) == SKILL_TOOL_NAME
+                )
+            if activity_log_tools:
+                always_include_tools.extend(
+                    tool.name
+                    for tool in activity_log_tools
+                    if getattr(tool, "name", None) == QUERY_ACTIVITY_LOG_TOOL_NAME
+                )
 
             # 中间件
             middlewares = [
                 # Skills
-                SkillsMiddleware(
-                    sources=[str(agent_runtime_manager.skills_dir)],
-                    bundled_skills_dir=str(settings.ROOT_PATH / "skills"),
-                ),
+                skills_middleware,
                 # Jobs 任务管理
                 JobsMiddleware(
                     sources=[str(agent_runtime_manager.jobs_dir)],
@@ -1052,9 +1045,7 @@ class MoviePilotAgent:
             if self.has_message_context:
                 middlewares.insert(
                     4,
-                    ActivityLogMiddleware(
-                        activity_dir=str(agent_runtime_manager.activity_dir),
-                    ),
+                    activity_log_middleware,
                 )
 
             # 工具选择
@@ -1062,7 +1053,12 @@ class MoviePilotAgent:
                 middlewares.append(
                     ToolSelectorMiddleware(
                         model=non_streaming_model,
-                        selection_tools=[*tools, *subagent_task_tools],
+                        selection_tools=[
+                            *tools,
+                            *skill_tools,
+                            *activity_log_tools,
+                            *subagent_task_tools,
+                        ],
                         max_tools=max_tools,
                         always_include=always_include_tools,
                     )
@@ -1070,7 +1066,7 @@ class MoviePilotAgent:
 
             return create_agent(
                 model=agent_model,
-                tools=tools,
+                tools=[*tools, *skill_tools, *activity_log_tools],
                 system_prompt=system_prompt,
                 middleware=middlewares,
                 checkpointer=InMemorySaver(),
@@ -1102,9 +1098,9 @@ class MoviePilotAgent:
             self._streamed_output = ""
 
             # 获取历史消息
-            messages = memory_manager.get_agent_messages(
+            messages = list(memory_manager.get_agent_messages(
                 session_id=self.session_id, user_id=self.user_id
-            )
+            ))
 
             # 构建结构化用户消息内容
             request_payload = {
@@ -1210,8 +1206,9 @@ class MoviePilotAgent:
             )
         return attachments
 
+    @staticmethod
     async def _stream_agent_tokens(
-            self, agent, messages: dict, config: dict, on_token: Callable[[str], None]
+            agent, messages: dict, config: dict, on_token: Callable[[str], None]
     ):
         """
         流式运行智能体，过滤工具调用token和思考内容，将模型生成的内容通过回调输出。
@@ -1250,7 +1247,7 @@ class MoviePilotAgent:
 
                 if token.content:
                     # content 可能是字符串或内容块列表，过滤掉思考类型的块
-                    content = self._extract_text_content(token.content)
+                    content = LLMHelper.extract_text_content(token.content)
                     if content:
                         stripper.process(content, on_token)
 
@@ -1269,6 +1266,7 @@ class MoviePilotAgent:
         self._agent_started_at = datetime.now()
         self._llm_runtime_config = None
         self._llm_provider_selection = {}
+        streaming_stopped = False
         try:
             # Agent运行配置
             agent_config = {
@@ -1316,6 +1314,7 @@ class MoviePilotAgent:
                     all_sent_via_stream,
                     streamed_text,
                 ) = await self.stream_handler.stop_streaming()
+                streaming_stopped = True
 
                 if not all_sent_via_stream:
                     # 流式输出未能发送全部内容（发送失败等）
@@ -1351,7 +1350,7 @@ class MoviePilotAgent:
                 for msg in reversed(final_messages):
                     if hasattr(msg, "type") and msg.type == "ai" and msg.content:
                         # 过滤掉思考/推理内容，只提取纯文本
-                        text = self._extract_text_content(msg.content)
+                        text = LLMHelper.extract_text_content(msg.content)
                         if text:
                             # 过滤掉包含在 <think> 标签中的内容
                             text = re.sub(
@@ -1384,11 +1383,14 @@ class MoviePilotAgent:
                 )
                 for msg in reversed(final_messages):
                     if hasattr(msg, "type") and msg.type == "ai" and msg.content:
-                        display_text = self._extract_text_content(msg.content).strip()
+                        display_text = LLMHelper.extract_text_content(msg.content).strip()
                         break
             self._save_assistant_display_message_once(display_text)
 
-            if self._should_persist_agent_chat():
+            if (
+                    self._should_persist_agent_chat()
+                    and not self._tool_context.get("user_reply_sent")
+            ):
                 memory_manager.save_agent_messages(
                     session_id=self.session_id,
                     user_id=self.user_id,
@@ -1418,7 +1420,8 @@ class MoviePilotAgent:
                 error=execution_error,
             )
             # 确保停止流式输出
-            await self.stream_handler.stop_streaming()
+            if not streaming_stopped:
+                await self.stream_handler.stop_streaming()
 
     async def send_agent_message(self, message: str, title: str = ""):
         """

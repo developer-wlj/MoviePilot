@@ -1003,7 +1003,7 @@ async def get_logging(
 
             # 读取历史日志
             async with aiofiles.open(
-                log_path, mode="r", encoding="utf-8", errors="ignore"
+                log_path, mode="r", encoding="utf-8", errors="replace"
             ) as f:
                 # 优化大文件读取策略
                 if file_size > 100 * 1024:
@@ -1032,7 +1032,7 @@ async def get_logging(
 
             # 实时监听新日志
             async with aiofiles.open(
-                log_path, mode="r", encoding="utf-8", errors="ignore"
+                log_path, mode="r", encoding="utf-8", errors="replace"
             ) as f:
                 # 移动文件指针到文件末尾，继续监听新增内容
                 await f.seek(0, 2)
@@ -1071,7 +1071,7 @@ async def get_logging(
         try:
             # 使用 aiofiles 异步读取文件
             async with aiofiles.open(
-                log_path, mode="r", encoding="utf-8", errors="ignore"
+                log_path, mode="r", encoding="utf-8", errors="replace"
             ) as file:
                 text = await file.read()
             # 倒序输出
