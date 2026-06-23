@@ -1564,6 +1564,101 @@ class LLMProviderManager(metaclass=Singleton):
                 return models[candidate]
         return None
 
+    def _cached_models_dev_model(
+            self,
+            provider_id: str,
+            model_id: str,
+            base_url: Optional[str] = None,
+            base_url_preset_id: Optional[str] = None,
+    ) -> dict[str, Any] | None:
+        """从已缓存或内置的 models.dev 数据中同步读取模型元数据。"""
+        try:
+            spec = self.get_provider(provider_id)
+        except LLMProviderError:
+            return None
+
+        models_dev_provider_id = self._resolve_provider_models_dev_provider_id(
+            spec,
+            base_url,
+            base_url_preset_id=base_url_preset_id,
+        )
+        if not models_dev_provider_id:
+            return None
+
+        payload = self._cached_models_dev_payload().get(models_dev_provider_id, {}) or {}
+        models = payload.get("models") if isinstance(payload, dict) else None
+        if not isinstance(models, dict):
+            return None
+
+        candidates = [model_id]
+        if model_id.startswith("models/"):
+            candidates.append(model_id.removeprefix("models/"))
+
+        for candidate in candidates:
+            if candidate in models:
+                return models[candidate]
+        return None
+
+    def resolve_cached_model_metadata(
+            self,
+            provider_id: str,
+            model_id: Optional[str],
+            base_url: Optional[str] = None,
+            base_url_preset_id: Optional[str] = None,
+    ) -> dict[str, Any] | None:
+        """同步解析缓存中的模型元数据，不触发远端 models.dev 刷新。"""
+        if not model_id:
+            return None
+        metadata = self._cached_models_dev_model(
+            provider_id,
+            model_id,
+            base_url=base_url,
+            base_url_preset_id=base_url_preset_id,
+        )
+        if metadata:
+            return metadata
+        if provider_id == "chatgpt":
+            return self._cached_models_dev_model("openai", model_id)
+        if provider_id == "openai":
+            return (
+                self._cached_models_dev_payload()
+                .get("openai", {})
+                .get("models", {})
+                .get(model_id)
+            )
+        return None
+
+    def _resolve_cached_model_record(
+            self,
+            provider_id: str,
+            model_id: Optional[str],
+            base_url: Optional[str] = None,
+            base_url_preset_id: Optional[str] = None,
+            transport: str = "openai",
+    ) -> dict[str, Any] | None:
+        """从缓存中的模型元数据构造轻量模型记录，不触发远端模型列表刷新。"""
+        if not model_id:
+            return None
+        metadata = self.resolve_cached_model_metadata(
+            provider_id,
+            model_id,
+            base_url=base_url,
+            base_url_preset_id=base_url_preset_id,
+        ) or {}
+        if not metadata:
+            return self._normalize_model_record(
+                model_id=model_id,
+                transport=transport,
+                source="configured",
+            )
+        return self._normalize_model_record(
+            model_id=model_id,
+            display_name=metadata.get("name") or model_id,
+            metadata=metadata,
+            transport=transport,
+            source="models.dev-cache",
+        )
+
     @staticmethod
     def _normalize_model_record(
             model_id: str,
@@ -2040,7 +2135,7 @@ class LLMProviderManager(metaclass=Singleton):
         try:
             return jwt.decode(token, options={"verify_signature": False})
         except Exception as err:
-            print(err)
+            logger.debug(f"解析 JWT token 内容失败: {err}")
             return {}
 
     @staticmethod
@@ -2523,40 +2618,29 @@ class LLMProviderManager(metaclass=Singleton):
         )
         normalized_api_key = str(api_key or "").strip() or None
         normalized_base_url = self._sanitize_base_url(base_url)
-        model_record = None
-        if model:
-            try:
-                model_record = next(
-                    (
-                        item
-                        for item in await self.list_models(
-                        normalized_provider_id,
-                        api_key=api_key,
-                        base_url=base_url,
-                        base_url_preset_id=normalized_base_url_preset_id,
-                        user_agent=user_agent,
-                        use_proxy=use_proxy,
-                    )
-                        if item["id"] == model
-                    ),
-                    None,
-                )
-            except Exception as err:
-                print(err)
-                model_record = None
+        default_transport = (
+            "anthropic" if resolved_runtime == "anthropic_compatible" else "openai"
+        )
+        model_record = self._resolve_cached_model_record(
+            normalized_provider_id,
+            model,
+            base_url=base_url,
+            base_url_preset_id=normalized_base_url_preset_id,
+            transport=default_transport,
+        )
+        model_metadata = self.resolve_cached_model_metadata(
+            normalized_provider_id,
+            model,
+            base_url=base_url,
+            base_url_preset_id=normalized_base_url_preset_id,
+        )
 
         result: dict[str, Any] = {
             "provider_id": normalized_provider_id,
             "runtime": resolved_runtime,
             "model_id": model,
             "model_record": model_record,
-            "model_metadata": await self.resolve_model_metadata(
-                normalized_provider_id,
-                model,
-                base_url=base_url,
-                base_url_preset_id=normalized_base_url_preset_id,
-                use_proxy=use_proxy,
-            ),
+            "model_metadata": model_metadata,
             "default_headers": None,
             "use_responses_api": None,
             "auth_mode": "api_key",
@@ -2567,8 +2651,7 @@ class LLMProviderManager(metaclass=Singleton):
             try:
                 auth = await self._resolve_chatgpt_oauth()
             except Exception as err:
-                print(err)
-                pass
+                logger.debug(f"解析 ChatGPT OAuth 鉴权失败，回退 API Key 模式: {err}")
 
             if auth:
                 headers = {"originator": "moviepilot"}
