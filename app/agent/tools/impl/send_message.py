@@ -14,10 +14,6 @@ from app.schemas.types import NotificationType
 class SendMessageInput(BaseModel):
     """发送消息工具的输入参数模型"""
 
-    explanation: Optional[str] = Field(
-        None,
-        description="Clear explanation of why this tool is being used in the current context",
-    )
     message: Optional[str] = Field(
         None,
         description="The message content to send to the user (should be clear and informative)",
@@ -104,6 +100,7 @@ class SendMessageTool(MoviePilotTool):
                     title=title,
                     text=text,
                     image=image_url,
+                    save_history=False,
                 )
             )
             self._agent_context["user_reply_sent"] = True

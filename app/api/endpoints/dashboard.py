@@ -18,7 +18,7 @@ from app.utils.system import SystemUtils
 router = APIRouter()
 
 
-def _build_statistic(name: Optional[str] = None) -> schemas.Statistic:
+def _build_statistic(db: Session, name: Optional[str] = None) -> schemas.Statistic:
     """
     构建媒体数量统计信息。
     """
@@ -39,8 +39,14 @@ def _build_statistic(name: Optional[str] = None) -> schemas.Statistic:
         if not has_episode_count:
             # 所有媒体服务都未提供剧集统计时，返回 None 供前端展示“未获取”。
             ret_statistic.episode_count = None
-        return ret_statistic
-    return schemas.Statistic()
+    else:
+        ret_statistic = schemas.Statistic()
+
+    movie_count_month, tv_count_month, episode_count_month = TransferHistory.monthly_media_statistics(db)
+    ret_statistic.movie_count_month = movie_count_month
+    ret_statistic.tv_count_month = tv_count_month
+    ret_statistic.episode_count_month = episode_count_month
+    return ret_statistic
 
 
 def _build_storage() -> schemas.Storage:
@@ -84,22 +90,27 @@ def _build_downloader(name: Optional[str] = None) -> schemas.DownloaderInfo:
 
 @router.get("/statistic", summary="媒体数量统计", response_model=schemas.Statistic)
 def statistic(
-    name: Optional[str] = None, _: Any = Depends(get_current_active_superuser)
+    name: Optional[str] = None,
+    db: Session = Depends(get_db),
+    _: Any = Depends(get_current_active_superuser),
 ) -> Any:
     """
     查询媒体数量统计信息
     """
-    return _build_statistic(name)
+    return _build_statistic(db, name)
 
 
 @router.get(
     "/statistic2", summary="媒体数量统计（API_TOKEN）", response_model=schemas.Statistic
 )
-def statistic2(_: Annotated[str, Depends(verify_apitoken)]) -> Any:
+def statistic2(
+    _: Annotated[str, Depends(verify_apitoken)],
+    db: Session = Depends(get_db),
+) -> Any:
     """
     查询媒体数量统计信息 API_TOKEN认证（?token=xxx）
     """
-    return _build_statistic()
+    return _build_statistic(db)
 
 
 @router.get("/storage", summary="本地存储空间", response_model=schemas.Storage)
@@ -126,6 +137,14 @@ def processes(_: Any = Depends(get_current_active_superuser)) -> Any:
     查询进程信息
     """
     return SystemUtils.processes()
+
+
+@router.get("/system", summary="系统摘要信息", response_model=schemas.DashboardSystemInfo)
+def system_info(_: Any = Depends(get_current_active_superuser)) -> Any:
+    """
+    查询仪表板系统摘要信息
+    """
+    return SystemUtils.dashboard_system_info()
 
 
 @router.get("/downloader", summary="下载器信息", response_model=schemas.DownloaderInfo)
@@ -159,6 +178,23 @@ async def schedule(_: Any = Depends(get_current_active_superuser)) -> Any:
 
 
 @router.get(
+    "/schedule/{job_id}/progress",
+    summary="后台服务进度",
+    response_model=schemas.Response,
+)
+async def schedule_progress(
+    job_id: str, _: Any = Depends(get_current_active_superuser)
+) -> Any:
+    """
+    查询指定后台服务的执行进度。
+    """
+    progress = Scheduler().get_progress(job_id)
+    if not progress:
+        return schemas.Response(success=False, message="后台服务不存在")
+    return schemas.Response(success=True, data=progress.model_dump())
+
+
+@router.get(
     "/schedule2",
     summary="后台服务（API_TOKEN）",
     response_model=List[schemas.ScheduleInfo],
@@ -168,6 +204,23 @@ async def schedule2(_: Annotated[str, Depends(verify_apitoken)]) -> Any:
     查询下载器信息 API_TOKEN认证（?token=xxx）
     """
     return Scheduler().list()
+
+
+@router.get(
+    "/schedule2/{job_id}/progress",
+    summary="后台服务进度（API_TOKEN）",
+    response_model=schemas.Response,
+)
+async def schedule_progress2(
+    job_id: str, _: Annotated[str, Depends(verify_apitoken)]
+) -> Any:
+    """
+    查询指定后台服务的执行进度 API_TOKEN认证（?token=xxx）
+    """
+    progress = Scheduler().get_progress(job_id)
+    if not progress:
+        return schemas.Response(success=False, message="后台服务不存在")
+    return schemas.Response(success=True, data=progress.model_dump())
 
 
 @router.get("/transfer", summary="文件整理统计", response_model=List[int])
@@ -199,22 +252,26 @@ def cpu2(_: Annotated[str, Depends(verify_apitoken)]) -> Any:
     return SystemUtils.cpu_usage()
 
 
-@router.get("/memory", summary="获取当前内存使用量和使用率", response_model=List[int])
+@router.get(
+    "/memory",
+    summary="获取当前应用与系统内存信息",
+    response_model=schemas.DashboardMemoryInfo,
+)
 def memory(_: Any = Depends(get_current_active_superuser)) -> Any:
     """
-    获取当前内存使用率
+    获取当前应用与系统内存信息
     """
     return SystemUtils.memory_usage()
 
 
 @router.get(
     "/memory2",
-    summary="获取当前内存使用量和使用率（API_TOKEN）",
-    response_model=List[int],
+    summary="获取当前应用与系统内存信息（API_TOKEN）",
+    response_model=schemas.DashboardMemoryInfo,
 )
 def memory2(_: Annotated[str, Depends(verify_apitoken)]) -> Any:
     """
-    获取当前内存使用率 API_TOKEN认证（?token=xxx）
+    获取当前应用与系统内存信息 API_TOKEN认证（?token=xxx）
     """
     return SystemUtils.memory_usage()
 

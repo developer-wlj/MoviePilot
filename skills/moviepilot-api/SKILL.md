@@ -282,7 +282,7 @@ All endpoints are under the base URL `{MP_HOST}`. Path parameters are shown as `
 | POST | `/api/v1/transfer/manual` | Manual transfer. Params: `background`. Body: ManualTransferItem JSON |
 | GET | `/api/v1/transfer/now` | Run immediate transfer |
 
-### Dashboard (16 endpoints)
+### Dashboard (19 endpoints)
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -291,10 +291,13 @@ All endpoints are under the base URL `{MP_HOST}`. Path parameters are shown as `
 | GET | `/api/v1/dashboard/storage` | Local storage space |
 | GET | `/api/v1/dashboard/storage2` | Local storage space (API_TOKEN) |
 | GET | `/api/v1/dashboard/processes` | Process info |
+| GET | `/api/v1/dashboard/system` | Host name, operating system, MoviePilot runtime, and backend version |
 | GET | `/api/v1/dashboard/downloader` | Downloader info. Params: `name` |
 | GET | `/api/v1/dashboard/downloader2` | Downloader info (API_TOKEN) |
 | GET | `/api/v1/dashboard/schedule` | Scheduled services |
 | GET | `/api/v1/dashboard/schedule2` | Scheduled services (API_TOKEN) |
+| GET | `/api/v1/dashboard/schedule/{job_id}/progress` | Scheduled service real-time progress |
+| GET | `/api/v1/dashboard/schedule2/{job_id}/progress` | Scheduled service real-time progress (API_TOKEN) |
 | GET | `/api/v1/dashboard/transfer` | Transfer statistics. Params: `days` |
 | GET | `/api/v1/dashboard/cpu` | CPU usage |
 | GET | `/api/v1/dashboard/cpu2` | CPU usage (API_TOKEN) |
@@ -420,7 +423,7 @@ All endpoints are under the base URL `{MP_HOST}`. Path parameters are shown as `
 | POST | `/api/v1/torrent/cache/refresh` | Refresh torrent cache |
 | POST | `/api/v1/torrent/cache/reidentify/{domain}/{torrent_hash}` | Re-identify torrent. Params: `tmdbid`, `doubanid` |
 
-### Message (6 endpoints)
+### Message (8 endpoints)
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -428,6 +431,8 @@ All endpoints are under the base URL `{MP_HOST}`. Path parameters are shown as `
 | GET | `/api/v1/message/` | Callback verification. Params: `token`, `echostr`, `msg_signature`, `timestamp`, `nonce`, `source` |
 | POST | `/api/v1/message/web` | Send web message. Params: `text` (required) |
 | GET | `/api/v1/message/web` | Get web messages. Params: `page`, `count` |
+| GET | `/api/v1/message/notification` | Get notification history. Params: `page`, `count`; server filters cleared history |
+| DELETE | `/api/v1/message/notification` | Mark notification history as cleared. Params: `scope` (`all`, `system`, `media`) |
 | POST | `/api/v1/message/webpush/subscribe` | WebPush subscribe. Body: Subscription JSON |
 | POST | `/api/v1/message/webpush/send` | Send WebPush notification. Body: SubscriptionMessage JSON |
 

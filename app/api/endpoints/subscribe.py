@@ -19,7 +19,9 @@ from app.db.models.user import User
 from app.db.systemconfig_oper import SystemConfigOper
 from app.db.user_oper import get_current_active_user_async
 from app.helper.server import MoviePilotServerHelper
+from app.log import logger
 from app.scheduler import Scheduler
+from app.schemas.event import SubscribeModifiedEventData
 from app.schemas.types import MediaType, EventType, SystemConfigKey
 
 router = APIRouter()
@@ -39,6 +41,14 @@ def start_subscribe_add(
         season=season,
         username=username,
     )
+
+
+def build_subscribe_event_payload(subscribe: Subscribe) -> dict:
+    """
+    从 ORM 已加载字段构造订阅事件快照，避免异步接口里属性懒加载触发隐式 IO。
+    """
+    values = subscribe.__dict__
+    return {column.name: values.get(column.name) for column in subscribe.__table__.columns}
 
 
 @router.get("/", summary="查询所有订阅", response_model=List[schemas.Subscribe])
@@ -140,11 +150,12 @@ async def update_subscribe(
     # 发送订阅调整事件
     await eventmanager.async_send_event(
         EventType.SubscribeModified,
-        {
-            "subscribe_id": subscribe_in.id,
-            "old_subscribe_info": old_subscribe_dict,
-            "subscribe_info": updated_subscribe.to_dict() if updated_subscribe else {},
-        },
+        SubscribeModifiedEventData(
+            subscribe_id=subscribe_in.id,
+            old_subscribe_info=old_subscribe_dict,
+            subscribe_info=updated_subscribe.to_dict() if updated_subscribe else {},
+            scene="update",
+        ).to_dict(),
     )
     return schemas.Response(success=True)
 
@@ -172,11 +183,12 @@ async def update_subscribe_status(
     # 发送订阅调整事件
     await eventmanager.async_send_event(
         EventType.SubscribeModified,
-        {
-            "subscribe_id": subid,
-            "old_subscribe_info": old_subscribe_dict,
-            "subscribe_info": updated_subscribe.to_dict() if updated_subscribe else {},
-        },
+        SubscribeModifiedEventData(
+            subscribe_id=subid,
+            old_subscribe_info=old_subscribe_dict,
+            subscribe_info=updated_subscribe.to_dict() if updated_subscribe else {},
+            scene="status",
+        ).to_dict(),
     )
     return schemas.Response(success=True)
 
@@ -266,13 +278,14 @@ async def reset_subscribes(
         # 发送订阅调整事件
         await eventmanager.async_send_event(
             EventType.SubscribeModified,
-            {
-                "subscribe_id": subid,
-                "old_subscribe_info": old_subscribe_dict,
-                "subscribe_info": updated_subscribe.to_dict()
+            SubscribeModifiedEventData(
+                subscribe_id=subid,
+                old_subscribe_info=old_subscribe_dict,
+                subscribe_info=updated_subscribe.to_dict()
                 if updated_subscribe
                 else {},
-            },
+                scene="reset",
+            ).to_dict(),
         )
         return schemas.Response(success=True)
     return schemas.Response(success=False, message="订阅不存在")
@@ -349,16 +362,27 @@ async def delete_subscribe_by_mediaid(
         subscribe = await Subscribe.async_get_by_mediaid(db, mediaid)
         if subscribe:
             delete_subscribes.append(subscribe)
+    delete_events = []
     for subscribe in delete_subscribes:
-        # 在删除之前获取订阅信息
-        subscribe_info = subscribe.to_dict()
-        subscribe_id = subscribe.id
-        await Subscribe.async_delete(db, subscribe_id)
-        # 发送事件
-        await eventmanager.async_send_event(
-            EventType.SubscribeDeleted,
-            {"subscribe_id": subscribe_id, "subscribe_info": subscribe_info},
-        )
+        subscribe_info = build_subscribe_event_payload(subscribe)
+        subscribe_id = subscribe_info.get("id")
+        if not subscribe_id:
+            continue
+        delete_events.append((subscribe_id, subscribe_info))
+        await db.delete(subscribe)
+    try:
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
+    for subscribe_id, subscribe_info in delete_events:
+        try:
+            await eventmanager.async_send_event(
+                EventType.SubscribeDeleted,
+                {"subscribe_id": subscribe_id, "subscribe_info": subscribe_info},
+            )
+        except Exception as err:
+            logger.error(f"发送订阅删除事件失败：{subscribe_id} - {err}", exc_info=True)
     return schemas.Response(success=True)
 
 
@@ -726,8 +750,13 @@ async def delete_subscribe(
     subscribe = await Subscribe.async_get(db, subscribe_id)
     if subscribe:
         # 在删除之前获取订阅信息
-        subscribe_info = subscribe.to_dict()
-        await Subscribe.async_delete(db, subscribe_id)
+        subscribe_info = build_subscribe_event_payload(subscribe)
+        await db.delete(subscribe)
+        try:
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
         # 发送事件
         await eventmanager.async_send_event(
             EventType.SubscribeDeleted,
@@ -735,6 +764,6 @@ async def delete_subscribe(
         )
         # 统计订阅
         MoviePilotServerHelper.sub_done_async(
-            {"tmdbid": subscribe.tmdbid, "doubanid": subscribe.doubanid}
+            {"tmdbid": subscribe_info.get("tmdbid"), "doubanid": subscribe_info.get("doubanid")}
         )
     return schemas.Response(success=True)

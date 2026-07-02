@@ -1000,6 +1000,15 @@ class MessageChain(ChainBase):
             self._schedule_agent_session_clear(old_session[0], userid)
         self._user_sessions[userid] = (session_id, datetime.now())
 
+    def bind_user_session(self, userid: Union[str, int], session_id: str) -> None:
+        """
+        绑定用户与指定智能体会话，供非传统入口复用远程命令状态查询。
+
+        :param userid: 用户 ID
+        :param session_id: 智能体会话 ID
+        """
+        self._bind_session_id(userid, session_id)
+
     def _record_user_message(
             self,
             channel: MessageChannel,
@@ -2626,6 +2635,8 @@ class MediaInteractionChain(ChainBase):
         download_dirs = self._get_download_dirs(media_info)
         if not download_dirs:
             return False
+        if len(download_dirs) == 1 and not self._is_auto_download_dir(download_dirs[0]):
+            return False
 
         request.pending_torrent_page = request.page
         request.phase = "download-dir"
@@ -3243,6 +3254,11 @@ class MediaInteractionChain(ChainBase):
         """
         获取可供消息交互选择的下载目录。
         """
+        dir_infos = [
+            dir_info
+            for dir_info in DirectoryHelper().get_download_dirs()
+            if dir_info.download_path
+        ]
         download_dirs = [
             DownloadDirectory(
                 name=dir_info.name,
@@ -3256,11 +3272,13 @@ class MediaInteractionChain(ChainBase):
                 media_type=dir_info.media_type,
                 media_category=dir_info.media_category,
             )
-            for dir_info in DirectoryHelper().get_download_dirs()
-            if dir_info.download_path and cls._match_download_dir_media(dir_info, media_info)
+            for dir_info in dir_infos
+            if cls._match_download_dir_media(dir_info, media_info)
         ]
         if not download_dirs:
             return []
+        if len(download_dirs) == 1:
+            return download_dirs
         return [cls._build_auto_download_dir(), *download_dirs]
 
     @classmethod

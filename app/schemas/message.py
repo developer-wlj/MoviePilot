@@ -7,6 +7,32 @@ from pydantic import BaseModel, Field, field_validator
 from app.schemas.types import ContentType, NotificationType, MessageChannel
 
 
+class NotificationClearScope(str, Enum):
+    """
+    通知中心清理范围。
+    """
+
+    # 全部消息
+    All = "all"
+    # 系统消息
+    System = "system"
+    # 媒体消息
+    Media = "media"
+
+
+class NotificationClearBefore(BaseModel):
+    """
+    通知中心按范围记录的清理时间。
+    """
+
+    # 全部消息清理时间
+    all: int = 0
+    # 系统消息清理时间
+    system: int = 0
+    # 媒体消息清理时间
+    media: int = 0
+
+
 class MessageResponse(BaseModel):
     """
     消息发送响应，包含消息ID等信息用于后续编辑
@@ -304,6 +330,8 @@ class AgentWebChatRequest(BaseModel):
 
     # 用户本轮输入
     text: str = Field(default="")
+    # 展示历史中记录的用户可读文本；为空时使用 text
+    display_text: Optional[str] = Field(None)
     # 前端会话标识，相同标识复用同一段 Agent 记忆
     session_id: Optional[str] = Field(None)
     # 图片 URL 或 data URL 列表
@@ -312,6 +340,12 @@ class AgentWebChatRequest(BaseModel):
     audio_refs: Optional[List[str]] = Field(default_factory=list)
     # 文件附件列表
     files: Optional[List[AgentWebChatFile]] = Field(default_factory=list)
+    # 用户通过按钮选择时的完整选择快照
+    choice_selection: Optional[Dict[str, Any]] = Field(default=None)
+    # WebAgent 按钮回调关联的原消息 ID，用于传统交互原地编辑卡片
+    original_message_id: Optional[Union[str, int]] = Field(default=None)
+    # WebAgent 按钮回调关联的原聊天 ID，用于传统交互原地编辑卡片
+    original_chat_id: Optional[Union[str, int]] = Field(default=None)
     # 是否在展示历史中记录本轮用户消息
     echo_user: bool = Field(default=True)
 
@@ -325,6 +359,10 @@ class AgentWebChoiceRequest(BaseModel):
     session_id: Optional[str] = Field(None)
     # Agent 工具生成的按钮回调数据
     callback_data: str = Field(..., min_length=1)
+    # WebAgent 原助手消息 ID，用于传统按钮回调原地编辑
+    original_message_id: Optional[Union[str, int]] = Field(default=None)
+    # WebAgent 原聊天 ID，用于传统按钮回调原地编辑
+    original_chat_id: Optional[Union[str, int]] = Field(default=None)
 
 
 class ChannelCapability(Enum):
