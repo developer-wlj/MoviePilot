@@ -1240,14 +1240,44 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
             history_exists: bool = True,
     ):
         """
-        当同一种子的任务都已结束时，回写下载器已整理标签。
+        当同一种子的任务都已结束且种子已完成下载时，回写下载器已整理标签。
         """
         if (
-                history_exists
-                and download_hash
-                and self.jobview.is_torrent_done(download_hash)
+                not history_exists
+                or not download_hash
+                or not self.jobview.is_torrent_done(download_hash)
         ):
-            self.transfer_completed(hashs=download_hash, downloader=downloader)
+            return
+        # 作业视图只包含已登记的整理任务；多集种子部分文件先下载完成时，
+        # 剩余文件尚未产生任务，此时打已整理标签会使下载器轮询永久跳过
+        # 剩余文件（#6009），因此必须确认种子已整体下载完成。
+        if not self.__is_torrent_download_completed(download_hash, downloader):
+            logger.debug(
+                f"种子 {download_hash} 尚未下载完成或状态未知，暂不设置已整理标签"
+            )
+            return
+        if not self.jobview.is_torrent_done(download_hash):
+            logger.debug(
+                f"种子 {download_hash} 存在新登记的整理任务，暂不设置已整理标签"
+            )
+            return
+        self.transfer_completed(hashs=download_hash, downloader=downloader)
+
+    def __is_torrent_download_completed(
+            self, download_hash: str, downloader: Optional[str]
+    ) -> bool:
+        """
+        检查种子在下载器中是否已完成下载；查询不到或查询失败时视为未完成，
+        留待下载器定时轮询兜底，避免误打已整理标签。
+        """
+        try:
+            torrents = self.list_torrents(hashs=download_hash, downloader=downloader)
+            if not torrents:
+                return False
+            return all((torrent.progress or 0) >= 100 for torrent in torrents)
+        except Exception as e:
+            logger.error(f"检查种子 {download_hash} 下载进度失败：{e}")
+            return False
 
     def __send_metadata_scrape_event(
             self, task: TransferTask, transferinfo: TransferInfo
@@ -1543,7 +1573,13 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
                 if download_history:
                     task.username = download_history.username
                     # 识别媒体信息
-                    if download_history.tmdbid or download_history.doubanid:
+                    history_year_conflict = self._is_movie_year_conflict(
+                        task.meta, download_history
+                    )
+                    if (
+                            (download_history.tmdbid or download_history.doubanid)
+                            and not history_year_conflict
+                    ):
                         # 下载记录中已存在识别信息
                         mediainfo: Optional[MediaInfo] = self.recognize_media(
                             mtype=MediaType(download_history.type),
@@ -1556,6 +1592,18 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
                             # 更新自定义媒体类别
                             if download_history.media_category:
                                 mediainfo.category = download_history.media_category
+                    else:
+                        if history_year_conflict:
+                            logger.info(
+                                f"{task.fileitem.name} 文件年份 {task.meta.year} 与下载记录年份 "
+                                f"{download_history.year} 不一致，按文件名重新识别"
+                            )
+                        mediainfo = MediaChain().recognize_by_meta(
+                            task.meta,
+                            obtain_images=True,
+                        )
+                        if mediainfo and download_history.media_category:
+                            mediainfo.category = download_history.media_category
                 else:
                     # 识别媒体信息
                     mediainfo = MediaChain().recognize_by_meta(
@@ -2305,6 +2353,31 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
         return None
 
     @staticmethod
+    def _is_movie_year_conflict(
+            file_meta: MetaBase, media: Union[DownloadHistory, MediaInfo]
+    ) -> bool:
+        """
+        判断文件名年份是否与已识别电影年份冲突。
+
+        多电影合集只保存一条下载历史，不能把合集首部电影的媒体 ID 套用到其它年份的文件；
+        电视剧季包仍应继续复用同一条下载历史。
+        """
+        file_year = getattr(file_meta, "year", None)
+        media_year = getattr(media, "year", None)
+        if not file_meta or not media or not file_year or not media_year:
+            return False
+        media_type = getattr(media, "type", None)
+        if not isinstance(media_type, MediaType):
+            try:
+                media_type = MediaType(media_type)
+            except (TypeError, ValueError):
+                return False
+        return (
+            media_type == MediaType.MOVIE
+            and str(file_year) != str(media_year)
+        )
+
+    @staticmethod
     def __optional_attr_equal(
             source: MetaBase,
             target: MetaBase,
@@ -2487,6 +2560,7 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
             manual: Optional[bool] = False,
             preview: Optional[bool] = False,
             sync_extra_files: Optional[bool] = False,
+            cleanup_dest_fileitem: Optional[FileItem] = None,
             continue_callback: Callable = None,
     ) -> Tuple[bool, Union[str, dict]]:
         """
@@ -2511,6 +2585,7 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
         :param manual: 是否手动整理
         :param preview: 是否仅预览
         :param sync_extra_files: 是否在整理主视频文件时同步整理同媒体附加文件
+        :param cleanup_dest_fileitem: 确认存在待整理任务后需要清理的旧目标文件
         :param continue_callback: 继续处理回调
         返回：成功标识，错误信息
         """
@@ -2520,9 +2595,8 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
         if preview:
             # 预览模式始终同步执行，避免进入异步队列
             background = False
-        manual_single_file = bool(manual and fileitem and fileitem.type == "file")
-
         # 自定义格式
+        has_episode_format_template = bool(epformat and epformat.format)
         formaterHandler = (
             FormatParser(
                 eformat=epformat.format,
@@ -2540,6 +2614,7 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
         )
         # 汇总错误信息
         err_msgs: List[str] = []
+        matched_episode_format_template = False
 
         def _build_file_meta(
                 source_path: Path,
@@ -2598,29 +2673,20 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
 
             return current_meta
 
-        def _filter(item: FileItem, is_bluray_dir: bool) -> bool:
+        def _is_allowed_transfer_item(item: FileItem, is_bluray_dir: bool) -> bool:
             """
-            过滤文件项
+            判断候选文件项是否允许进入整理规划。
 
             :return: True 表示保留，False 表示排除
             """
+            nonlocal matched_episode_format_template
             if continue_callback and not continue_callback():
                 raise OperationInterrupted()
-            is_extra_file = self.__is_subtitle_file(item) or self.__is_audio_file(item)
-            # 手动单文件整理时，前端可能把同目录文件拆成多个根文件提交；
-            # 此时应优先信任用户显式选择的根文件，并允许附加文件进入后续同媒体匹配流程，
-            # 避免仅因模板未覆盖字幕/音轨后缀而被提前过滤。
-            should_bypass_epformat_match = (
-                (manual_single_file and item.path == fileitem.path)
-                or (sync_extra_files and is_extra_file)
-            )
-            # 有集自定义格式，过滤文件
-            if (
-                    formaterHandler
-                    and not should_bypass_epformat_match
-                    and not formaterHandler.match(item.name)
-            ):
-                return False
+            # 存在集数定位模板时，模板匹配结果作为手动整理的硬过滤条件。
+            if has_episode_format_template and formaterHandler:
+                if not formaterHandler.match(item.name):
+                    return False
+                matched_episode_format_template = True
             # 过滤后缀和大小（蓝光目录、附加文件不过滤）
             if (
                     not is_bluray_dir
@@ -2646,6 +2712,32 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
             ):
                 return False
             return True
+
+        def _keep_candidate_item(item: FileItem, is_bluray_dir: bool) -> bool:
+            """
+            收集候选文件时仅检查中断状态，不套用整理业务过滤。
+            """
+            if continue_callback and not continue_callback():
+                raise OperationInterrupted()
+            return True
+
+        def _collect_candidate_file_items() -> List[Tuple[FileItem, bool]]:
+            """
+            收集来源下的候选文件项，不在此阶段套用整理业务过滤。
+            """
+            return self.__get_trans_fileitems(fileitem, predicate=_keep_candidate_item)
+
+        def _filter_allowed_file_items(
+                candidates: List[Tuple[FileItem, bool]]
+        ) -> List[Tuple[FileItem, bool]]:
+            """
+            将候选文件项筛选为本轮允许整理的文件项。
+            """
+            return [
+                (candidate_item, candidate_bluray_dir)
+                for candidate_item, candidate_bluray_dir in candidates
+                if _is_allowed_transfer_item(candidate_item, candidate_bluray_dir)
+            ]
 
         def _build_main_meta(
                 main_fileitem: FileItem,
@@ -2728,7 +2820,7 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
                     continue
                 if not (self.__is_subtitle_file(item) or self.__is_audio_file(item)):
                     continue
-                if not _filter(item, False):
+                if not _is_allowed_transfer_item(item, False):
                     continue
                 extra_items.append((item, False))
             return main_fileitems, extra_items
@@ -2875,19 +2967,36 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
 
             return planned_items, inherited_map
 
+        candidate_file_items: List[Tuple[FileItem, bool]] = []
         try:
-            # 获取经过筛选后的待整理文件项列表
-            file_items = self.__get_trans_fileitems(fileitem, predicate=_filter)
+            candidate_file_items = _collect_candidate_file_items()
+            file_items = _filter_allowed_file_items(candidate_file_items)
         except OperationInterrupted:
             return False, f"{fileitem.name} 已取消"
+        finally:
+            candidate_file_items.clear()
 
         if not file_items:
+            if has_episode_format_template and not matched_episode_format_template:
+                logger.info(f"{fileitem.path} 未匹配到集数定位模板，跳过整理")
+                if preview:
+                    return True, {
+                        "summary": {"total": 0, "success": 0, "failed": 0},
+                        "items": [],
+                        "message": "",
+                    }
+                return True, ""
             logger.warn(f"{fileitem.path} 没有找到可整理的媒体文件")
             return False, f"{fileitem.name} 没有找到可整理的媒体文件"
 
         file_items, inherited_meta_map = _plan_file_items(file_items)
 
         planned_file_count = len(file_items)
+        if cleanup_dest_fileitem and planned_file_count and not preview:
+            state = StorageChain().delete_media_file(cleanup_dest_fileitem)
+            if not state:
+                return False, f"{cleanup_dest_fileitem.path} 删除失败"
+
         if preview:
             logger.info(f"正在预览 {planned_file_count} 个文件的整理路径...")
         else:
@@ -2964,11 +3073,19 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
                     _downloader = downloader
                     _download_hash = download_hash
 
+                # 自动整理预载的媒体信息来自整条下载历史；电影合集内文件年份冲突时逐文件识别。
+                task_mediainfo = mediainfo
+                if (
+                        not manual
+                        and self._is_movie_year_conflict(file_meta, task_mediainfo)
+                ):
+                    task_mediainfo = None
+
                 # 后台整理
                 transfer_task = TransferTask(
                     fileitem=file_item,
                     meta=file_meta,
-                    mediainfo=mediainfo,
+                    mediainfo=task_mediainfo,
                     target_directory=target_directory,
                     target_storage=target_storage,
                     target_path=target_path,
@@ -3343,6 +3460,7 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
             download_hash: Optional[str] = None,
             preview: Optional[bool] = False,
             sync_extra_files: Optional[bool] = True,
+            cleanup_dest_fileitem: Optional[FileItem] = None,
     ) -> Tuple[bool, Union[str, dict]]:
         """
         手动整理，支持复杂条件，带进度显示
@@ -3366,6 +3484,7 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
         :param download_hash: 下载任务哈希
         :param preview: 是否仅预览
         :param sync_extra_files: 是否同步整理同媒体附加文件
+        :param cleanup_dest_fileitem: 确认存在待整理任务后需要清理的旧目标文件
         """
         logger.info(f"手动整理：{fileitem.path} ...")
         if tmdbid or doubanid:
@@ -3406,6 +3525,7 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
                 download_hash=download_hash,
                 preview=preview,
                 sync_extra_files=sync_extra_files,
+                cleanup_dest_fileitem=cleanup_dest_fileitem,
             )
             if not state:
                 return False, errmsg
@@ -3432,6 +3552,7 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
                 download_hash=download_hash,
                 preview=preview,
                 sync_extra_files=sync_extra_files,
+                cleanup_dest_fileitem=cleanup_dest_fileitem,
             )
             return state, errmsg
 

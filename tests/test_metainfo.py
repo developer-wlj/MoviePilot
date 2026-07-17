@@ -1,8 +1,11 @@
 # -*- coding: utf-8 -*-
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from app.core.metainfo import MetaInfo, MetaInfoPath, find_metainfo
+from app.helper.torrent import TorrentHelper
+from app.schemas.types import MediaType
 from tests.cases.meta import meta_cases
 
 
@@ -106,6 +109,149 @@ def test_metainfo_preserves_original_name_when_custom_words_applied():
     meta = MetaInfo(title="电影测试替换名称 (2024)", custom_words=custom_words)
     assert meta.name == "电影名称"
     assert meta.original_name == "电影测试替换名称"
+
+
+def test_torrent_title_match_ignores_question_mark_variants():
+    """问号差异不应导致番剧罗马字标题匹配失败。"""
+    mediainfo = SimpleNamespace(
+        title="哪里有温柔对待阿宅的辣妹！？",
+        original_title="オタクに優しいギャルはいない!?",
+        names=["Otaku ni Yasashii Gal wa Inai!?"],
+        type=MediaType.TV,
+        year=None,
+        tmdb_id=None,
+        douban_id=None,
+        imdb_id=None,
+        season_years={},
+    )
+    torrent_meta = SimpleNamespace(
+        tmdbid=None,
+        doubanid=None,
+        cn_name=None,
+        en_name="Otaku ni Yasashii Gal wa Inai",
+        type=MediaType.TV,
+        year=None,
+        org_string=None,
+    )
+    torrent = SimpleNamespace(
+        site_name="MiKan",
+        title="[今晚月色真美][Otaku ni Yasashii Gal wa Inai!?][12][1080P]",
+        category=MediaType.TV.value,
+        imdbid=None,
+        description=None,
+    )
+
+    assert TorrentHelper.match_torrent(
+        mediainfo=mediainfo,
+        torrent_meta=torrent_meta,
+        torrent=torrent,
+    )
+
+    mediainfo.names = []
+    torrent_meta.cn_name = "哪里有温柔对待阿宅的辣妹"
+    torrent_meta.en_name = None
+    assert TorrentHelper.match_torrent(
+        mediainfo=mediainfo,
+        torrent_meta=torrent_meta,
+        torrent=torrent,
+    )
+
+
+def test_python_metainfo_fallback_preserves_xxx_movie_title():
+    """Python 兜底解析不应删除合法 xXx 片名。"""
+    with patch("app.core.metainfo.rust_accel.parse_metainfo", return_value=None):
+        meta = MetaInfo("xXx 2002 1080p AMZN WEB-DL H.264 DDP 5.1-FROGWeb")
+
+    assert meta.en_name == "Xxx"
+    assert meta.year == "2002"
+    assert meta.resource_pix == "1080p"
+    assert meta.edition == "WEB-DL"
+    assert meta.audio_encode == "DDP 5.1"
+
+
+def test_python_subtitle_episode_range_fin_with_chinese_season():
+    """Python 兜底解析应识别副标题中 [01-26Fin] 格式的集数范围（#6103）。"""
+    with patch("app.core.metainfo.rust_accel.parse_metainfo", return_value=None):
+        meta = MetaInfo(
+            title="JoJos Bizarre Adventure S01 2012 1080i BluRay x264 FLAC 2.0-AnimeF@ADE",
+            subtitle="JOJO的奇妙冒险 第一季 / JoJo's Bizarre Adventure [01-26Fin] [简繁字幕]",
+        )
+
+    assert meta.type == MediaType.TV
+    assert meta.begin_season == 1
+    assert meta.begin_episode == 1
+    assert meta.end_episode == 26
+    assert meta.total_episode == 26
+
+
+def test_subtitle_episode_range_fin_with_default_parser():
+    """默认解析路径应识别副标题中 [01-26Fin] 格式的集数范围（#6103）。"""
+    meta = MetaInfo(
+        title="JoJos Bizarre Adventure S01 2012 1080i BluRay x264 FLAC 2.0-AnimeF@ADE",
+        subtitle="JOJO的奇妙冒险 第一季 / JoJo's Bizarre Adventure [01-26Fin] [简繁字幕]",
+    )
+
+    assert meta.type == MediaType.TV
+    assert meta.begin_season == 1
+    assert meta.begin_episode == 1
+    assert meta.end_episode == 26
+    assert meta.total_episode == 26
+
+
+def test_python_subtitle_episode_range_fin_without_chinese_marker():
+    """副标题无中文季集标记时也应识别 [01-38Fin] 集数范围。"""
+    with patch("app.core.metainfo.rust_accel.parse_metainfo", return_value=None):
+        meta = MetaInfo(
+            title="Some Show S01 2022 1080p WEB-DL H264-GRP",
+            subtitle="Some Show [01-38Fin]",
+        )
+
+    assert meta.begin_episode == 1
+    assert meta.end_episode == 38
+    assert meta.total_episode == 38
+
+
+def test_python_subtitle_episode_range_end_variant():
+    """END/完结 等完结标记变体同样应识别为集数范围。"""
+    with patch("app.core.metainfo.rust_accel.parse_metainfo", return_value=None):
+        meta_end = MetaInfo(
+            title="Some Show S01 2022 1080p WEB-DL H264-GRP",
+            subtitle="Some Show 01-24 END",
+        )
+        meta_cn = MetaInfo(
+            title="Some Show S01 2022 1080p WEB-DL H264-GRP",
+            subtitle="某剧 01-12完结",
+        )
+
+    assert meta_end.begin_episode == 1
+    assert meta_end.end_episode == 24
+    assert meta_cn.begin_episode == 1
+    assert meta_cn.end_episode == 12
+
+
+def test_python_subtitle_year_range_not_treated_as_episodes():
+    """年份范围（如 2019-2020）不得误识别为集数。"""
+    with patch("app.core.metainfo.rust_accel.parse_metainfo", return_value=None):
+        meta = MetaInfo(
+            title="Some Collection 2020 1080p WEB-DL H264-GRP",
+            subtitle="A Collection [2019-2020Fin]",
+        )
+
+    assert meta.begin_episode is None
+    assert meta.total_episode == 0
+
+
+def test_python_subtitle_episode_range_fin_rejects_numeric_suffix():
+    """Python 兜底解析不得把带数字后缀的完结范围截断识别为集数。"""
+    for subtitle in ("Some Show [01-26Fin]2", "Some Show 01-26Fin 2"):
+        with patch("app.core.metainfo.rust_accel.parse_metainfo", return_value=None):
+            meta = MetaInfo(
+                title="Some Show S01 2022 1080p WEB-DL H264-GRP",
+                subtitle=subtitle,
+            )
+
+        assert meta.begin_episode is None
+        assert meta.total_episode == 0
 
 
 def test_custom_words_replace_then_episode_offset():
@@ -273,3 +419,39 @@ def test_metainfopath_cn_title_containing_keyword_not_cleared():
     path = Path("/Some Movie 2024/粤语残片.mkv")
     meta = MetaInfoPath(path)
     assert "粤语残片" in meta.cn_name
+
+
+def test_metainfopath_movie_collection_parent_does_not_override_file_title():
+    """电影合集父目录不应覆盖文件名中更具体的片名与年份。"""
+    collection = (
+        "/Unraid/Media/MoviePilot/电影/"
+        "The.Hunger.Games.Complete.4-Film.Collection.2160p.UHD.Blu-ray."
+        "DV.Atmos.TrueHD.7.1.x265-HDH"
+    )
+    cases = [
+        (
+            "The.Hunger.Games.2012.2160p.UHD.Blu-ray.DV.Atmos.TrueHD.7.1.x265-HDH.mkv",
+            "The Hunger Games",
+            "2012",
+        ),
+        (
+            "The.Hunger.Games.Catching.Fire.2013.2160p.UHD.Blu-ray.DV.Atmos.TrueHD.7.1.x265-HDH.mkv",
+            "The Hunger Games Catching Fire",
+            "2013",
+        ),
+        (
+            "The.Hunger.Games.Mockingjay.Part.1.2014.2160p.UHD.Blu-ray.DV.Atmos.TrueHD.7.1.x265-HDH.mkv",
+            "The Hunger Games Mockingjay Part 1",
+            "2014",
+        ),
+        (
+            "The.Hunger.Games.Mockingjay.Part.2.2015.2160p.UHD.Blu-ray.DV.Atmos.TrueHD.7.1.x265-HDH.mkv",
+            "The Hunger Games Mockingjay Part 2",
+            "2015",
+        ),
+    ]
+
+    for file_name, expected_name, expected_year in cases:
+        meta = MetaInfoPath(Path(f"{collection}/{file_name}"))
+        assert meta.name == expected_name
+        assert meta.year == expected_year

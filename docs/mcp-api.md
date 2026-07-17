@@ -11,6 +11,14 @@ MoviePilot 实现了标准的 **Model Context Protocol (MCP)**，允许 AI 智�
     *   Header: `X-API-KEY: <你的API_KEY>`
     *   Query: `?apikey=<你的API_KEY>`
 
+### 安全提示
+
+MCP 使用系统配置中的 `API_TOKEN` 作为认证密钥，文档中的 API KEY 是请求字段名。该密钥应按管理员级 secret 保管，持有者可作为受信第三方集成调用暴露的 MoviePilot 工具。
+
+- 优先使用 `X-API-KEY` 请求头；查询参数更容易出现在代理、浏览器或客户端日志中。
+- 不要在缺少 HTTPS、访问控制和网络隔离的情况下，将 MCP、OpenAI 或 Anthropic 兼容接口直接暴露到公网。
+- MCP 隐藏工具列表只用于减少默认暴露面，不是 per-user 权限系统。
+
 ## 2. 标准 MCP 协议 (JSON-RPC 2.0)
 
 ### 端点
@@ -59,6 +67,26 @@ MoviePilot 实现了标准的 **Model Context Protocol (MCP)**，允许 AI 智�
 }
 ```
 
+## 4.1 Agent 外部 MCP Client 配置
+
+MoviePilot 的内置 Agent 也可以作为 MCP Client 连接外部 MCP 服务器，将外部工具注入到智能助手工具列表中。当前支持：
+
+- `stdio`：按配置的命令和参数启动本地 MCP 进程，通过标准输入输出交换 JSON-RPC 消息。
+- `sse`：连接旧版 HTTP+SSE MCP 服务，先读取 `endpoint` 事件，再向返回的 endpoint POST JSON-RPC 消息。
+- `http` / `streamable_http`：连接 Streamable HTTP MCP 服务，直接向配置 URL POST JSON-RPC 消息。
+
+这些配置是管理员级 Agent 运行时配置，保存在 `SystemConfigKey.AIAgentMcpServers` 中。外部 MCP 工具默认要求管理员上下文调用，避免普通用户触发高权限外部工具。
+
+### Agent MCP 配置接口
+
+这些接口使用登录态鉴权，并要求当前用户为超级管理员。
+
+| 方法 | 路径 | 说明 |
+| :--- | :--- | :--- |
+| GET | `/api/v1/message/agent/mcp/servers` | 查询已配置的外部 MCP 服务器列表 |
+| POST | `/api/v1/message/agent/mcp/servers` | 保存外部 MCP 服务器列表 |
+| POST | `/api/v1/message/agent/mcp/servers/test` | 测试单个外部 MCP 服务器，返回发现的工具列表 |
+
 ## 5. 错误码说明
 
 | 错误码 | 消息 | 说明 |
@@ -77,6 +105,10 @@ MoviePilot 实现了标准的 **Model Context Protocol (MCP)**，允许 AI 智�
 ### 相关 REST 端点
 
 MoviePilot 也提供普通 REST API 给前端和自动化客户端使用。所有接口同样需要 API KEY 认证，在请求头中添加 `X-API-KEY: <api_key>` 或在查询参数中添加 `apikey=<api_key>`。
+
+标准 REST 响应包含 `success`、`message`、`message_i18n`、`data` 字段。为兼容 App 和第三方客户端，`message` 继续保留原中文或原始后端文本；新版前端可发送 `X-MoviePilot-Locale: zh-CN|zh-TW|en-US` 或 `Accept-Language`，并优先展示 `message_i18n`。未提供语言头或翻译缺失时，`message_i18n` 会回退为原文本。
+
+FastAPI 异常响应保留 `detail` 字段，并在错误详情为文本时返回 `detail_i18n`；新版前端优先展示 `detail_i18n`，缺失时回退 `detail`。
 
 #### 搜索 / 种子 / 字幕
 
@@ -119,6 +151,21 @@ MoviePilot 也提供普通 REST API 给前端和自动化客户端使用。所�
 | GET | `/api/v1/dashboard/schedule2/{job_id}/progress` | 使用 API_TOKEN 查询指定后台定时服务的实时进度详情 |
 | GET | `/api/v1/system/setting/public/{key}` | 登录用户读取白名单内非敏感系统设置，仅支持目录、存储、站点范围、默认订阅规则、Follow 订阅者和插件市场地址等前端必需配置 |
 | POST | `/api/v1/system/setting/PLUGIN_MARKET/sync-wiki` | 管理员从 MoviePilot Wiki 的插件文档同步公开插件仓库清单，和本地 `PLUGIN_MARKET` 合并去重后写入配置 |
+| GET | `/api/v1/system/modulelist` | 查询已加载模块，保留 `name` 原始中文字段，并提供 `name_i18n` 和 `name_key` 给多语言前端展示 |
+| GET | `/api/v1/system/moduletest/{moduleid}` | 测试指定模块可用性，保留原 `message`，并在标准响应顶层返回 `message_i18n` |
+| GET | `/api/v1/message/agent/mcp/servers` | 管理员查询 Agent 外部 MCP 服务器配置 |
+| POST | `/api/v1/message/agent/mcp/servers` | 管理员保存 Agent 外部 MCP 服务器配置 |
+| POST | `/api/v1/message/agent/mcp/servers/test` | 管理员测试单个 Agent 外部 MCP 服务器并读取工具列表 |
+
+#### 缓存管理
+
+以下接口使用登录态鉴权，并要求当前用户为超级管理员。
+
+| 方法 | 路径 | 说明 |
+| :--- | :--- | :--- |
+| GET | `/api/v1/tmdb/cache` | 查询 TheMovieDb 识别缓存及识别成功、失败条目统计 |
+| DELETE | `/api/v1/tmdb/cache/{cache_key}` | 按缓存键删除单条 TheMovieDb 识别缓存，缓存键需要进行 URL 编码 |
+| DELETE | `/api/v1/tmdb/cache` | 清空全部 TheMovieDb 识别缓存 |
 
 ### 插件补充接口
 

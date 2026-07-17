@@ -62,12 +62,13 @@ class TelegramModule(_ModuleBase, _MessageBase[Telegram]):
         """
         return 0
 
-    def stop(self):
-        """
-        停止模块
-        """
+    def stop(self) -> None:
+        """停止模块"""
         for client in self.get_instances().values():
-            client.stop()
+            try:
+                client.stop()
+            except Exception as err:
+                logger.error(f"停止Telegram模块实例失败：{err}")
 
     def test(self) -> Optional[Tuple[bool, str]]:
         """
@@ -252,9 +253,11 @@ class TelegramModule(_ModuleBase, _MessageBase[Telegram]):
         处理普通文本消息
         """
         text = msg.get("text") or msg.get("caption")
+        message_id = msg.get("message_id")
         user_id = msg.get("from", {}).get("id")
         user_name = msg.get("from", {}).get("username")
         chat_id = msg.get("chat", {}).get("id")
+        reply_to_message_id = (msg.get("reply_to_message") or {}).get("message_id")
 
         # 将 text_link 实体中的 URL 嵌入到文本中
         if text:
@@ -309,7 +312,9 @@ class TelegramModule(_ModuleBase, _MessageBase[Telegram]):
                 userid=user_id,
                 username=user_name,
                 text=cleaned_text,
+                message_id=message_id,
                 chat_id=str(chat_id) if chat_id else None,
+                reply_to_message_id=reply_to_message_id,
                 images=images if images else None,
                 audio_refs=audio_refs if audio_refs else None,
                 files=files if files else None,
@@ -514,6 +519,12 @@ class TelegramModule(_ModuleBase, _MessageBase[Telegram]):
                         parse_mode=message.parse_mode,
                     )
                 else:
+                    # Telegram 的 reply_markup 不能同时承载 InlineKeyboard 和 ForceReply。
+                    # 普通通知只清空可编辑消息 ID，仍保留原会话作为新消息目标。
+                    has_interaction_context = bool(message.buttons or message.force_reply)
+                    original_message_id = (
+                        message.original_message_id if has_interaction_context else None
+                    )
                     client.send_msg(
                         title=message.title,
                         text=message.text,
@@ -521,7 +532,8 @@ class TelegramModule(_ModuleBase, _MessageBase[Telegram]):
                         userid=userid,
                         link=message.link,
                         buttons=message.buttons,
-                        original_message_id=message.original_message_id,
+                        force_reply=message.force_reply,
+                        original_message_id=original_message_id,
                         original_chat_id=message.original_chat_id,
                         disable_web_page_preview=message.disable_web_page_preview,
                         parse_mode=message.parse_mode,
@@ -734,12 +746,19 @@ class TelegramModule(_ModuleBase, _MessageBase[Telegram]):
                         parse_mode=message.parse_mode,
                     )
                 else:
+                    # direct message 只禁用编辑旧消息；仅 ForceReply 使用 original_chat_id
+                    # 发回原会话，并保留 original_message_id 让 client reply_to 原消息。
+                    original_chat_id = message.original_chat_id if message.force_reply else None
+                    original_message_id = message.original_message_id if message.force_reply else None
                     result = client.send_msg(
                         title=message.title,
                         text=message.text,
                         image=message.image,
                         userid=userid,
                         link=message.link,
+                        force_reply=message.force_reply,
+                        original_message_id=original_message_id,
+                        original_chat_id=original_chat_id,
                         disable_web_page_preview=message.disable_web_page_preview,
                         parse_mode=message.parse_mode,
                     )

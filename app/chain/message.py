@@ -29,7 +29,12 @@ from app.db.models import TransferHistory
 from app.db.transferhistory_oper import TransferHistoryOper
 from app.db.user_oper import UserOper
 from app.helper.directory import DirectoryHelper
-from app.helper.interaction import agent_interaction_manager, media_interaction_manager, PendingMediaInteraction
+from app.helper.interaction import (
+    agent_interaction_manager,
+    media_interaction_manager,
+    plugin_input_interaction_manager,
+    PendingMediaInteraction,
+)
 from app.helper.torrent import TorrentHelper
 from app.log import logger
 from app.schemas import CommingMessage, DownloadDirectory, FileURI, NotExistMediaInfo, Notification
@@ -136,9 +141,9 @@ class MessageChain(ChainBase):
             logger.debug(f"未识别到消息内容：：{body}{form}{args}")
             return
 
-        # 获取原消息ID信息
         original_message_id = info.message_id
         original_chat_id = info.chat_id
+        reply_to_message_id = info.reply_to_message_id
 
         # 处理消息
         self.handle_message(
@@ -149,6 +154,7 @@ class MessageChain(ChainBase):
             text=text,
             original_message_id=original_message_id,
             original_chat_id=original_chat_id,
+            reply_to_message_id=reply_to_message_id,
             images=images,
             audio_refs=audio_refs,
             files=files,
@@ -160,12 +166,13 @@ class MessageChain(ChainBase):
             source: str,
             userid: Union[str, int],
             username: str,
-            text: str,
+            text: Optional[str],
             original_message_id: Optional[Union[str, int]] = None,
             original_chat_id: Optional[str] = None,
             images: Optional[List[CommingMessage.MessageImage]] = None,
             audio_refs: Optional[List[str]] = None,
             files: Optional[List[CommingMessage.MessageAttachment]] = None,
+            reply_to_message_id: Optional[Union[str, int]] = None,
     ) -> None:
         """
         识别消息内容，执行操作
@@ -200,6 +207,21 @@ class MessageChain(ChainBase):
                         )
                     )
                     return
+
+            if self._handle_plugin_input_interaction(
+                    channel=channel,
+                    source=source,
+                    userid=userid,
+                    username=username,
+                    text=text,
+                    original_chat_id=original_chat_id,
+                    reply_to_message_id=reply_to_message_id,
+                    images=images,
+                    audio_refs=audio_refs,
+                    files=files,
+                    has_audio_input=has_audio_input,
+            ):
+                return
 
             is_agent_message = self._is_agent_message(
                 userid=userid,
@@ -236,6 +258,7 @@ class MessageChain(ChainBase):
                 text=text,
                 original_message_id=original_message_id,
                 original_chat_id=original_chat_id,
+                reply_to_message_id=reply_to_message_id,
                 images=images,
                 audio_refs=audio_refs,
                 files=files,
@@ -259,7 +282,7 @@ class MessageChain(ChainBase):
             source: str,
             userid: Union[str, int],
             username: str,
-            text: str,
+            text: Optional[str],
             original_message_id: Optional[Union[str, int]] = None,
             original_chat_id: Optional[str] = None,
             images: Optional[List[CommingMessage.MessageImage]] = None,
@@ -267,6 +290,7 @@ class MessageChain(ChainBase):
             files: Optional[List[CommingMessage.MessageAttachment]] = None,
             has_audio_input: bool = False,
             processing_status: Optional[_ProcessingStatus] = None,
+            reply_to_message_id: Optional[Union[str, int]] = None,
     ) -> bool:
         """执行实际消息路由，便于统一包裹处理中状态。"""
 
@@ -288,6 +312,21 @@ class MessageChain(ChainBase):
                     channel.value,
                     text,
                 )
+            return False
+
+        if self._handle_plugin_input_interaction(
+                channel=channel,
+                source=source,
+                userid=userid,
+                username=username,
+                text=text,
+                original_chat_id=original_chat_id,
+                reply_to_message_id=reply_to_message_id,
+                images=images,
+                audio_refs=audio_refs,
+                files=files,
+                has_audio_input=has_audio_input,
+        ):
             return False
 
         no_ai_requested, no_ai_text = self._strip_no_ai_prefix(text)
@@ -411,9 +450,127 @@ class MessageChain(ChainBase):
                 "userid": userid,
                 "channel": channel,
                 "source": source,
+                "chat_id": original_chat_id,
+                "reply_to_message_id": reply_to_message_id,
             },
         )
         return False
+
+    def _handle_plugin_input_interaction(
+            self,
+            channel: MessageChannel,
+            source: str,
+            userid: Union[str, int],
+            username: str,
+            text: str,
+            original_chat_id: Optional[Union[str, int]] = None,
+            images: Optional[List[CommingMessage.MessageImage]] = None,
+            audio_refs: Optional[List[str]] = None,
+            files: Optional[List[CommingMessage.MessageAttachment]] = None,
+            has_audio_input: bool = False,
+            reply_to_message_id: Optional[Union[str, int]] = None,
+    ) -> bool:
+        """
+        将插件输入会话中的下一条普通文本派发给指定插件。
+        """
+        if not text or not text.strip() or images or audio_refs or files or has_audio_input:
+            return False
+        if text.startswith("CALLBACK:"):
+            return False
+
+        is_cancel_text = text.strip().lower() in {"取消", "退出", "q", "quit", "exit"}
+        request, status = plugin_input_interaction_manager.consume_by_user(
+            userid,
+            channel,
+            source,
+            original_chat_id,
+            reply_to_message_id=reply_to_message_id,
+            bypass_reply_check=is_cancel_text,
+        )
+        if not request:
+            return False
+
+        if status == "expired":
+            self.eventmanager.send_event(
+                EventType.MessageAction,
+                {
+                    "plugin_id": request.plugin_id,
+                    "__mp_target_plugin_id": request.plugin_id,
+                    "text": f"plugin_input_expired|{request.request_id}",
+                    "userid": userid,
+                    "channel": channel,
+                    "source": source,
+                    "username": username,
+                    "chat_id": original_chat_id,
+                    "reply_to_message_id": reply_to_message_id,
+                    "prompt_id": request.prompt_id,
+                    "input_session_id": request.request_id,
+                    "expired": True,
+                    "payload": request.payload,
+                },
+            )
+            self.post_message(
+                Notification(
+                    channel=channel,
+                    source=source,
+                    userid=userid,
+                    username=username,
+                    title="插件输入已超时，请重新发起操作。",
+                    save_history=False,
+                )
+            )
+            return not text.strip().startswith("/")
+
+        if is_cancel_text:
+            self.eventmanager.send_event(
+                EventType.MessageAction,
+                {
+                    "plugin_id": request.plugin_id,
+                    "__mp_target_plugin_id": request.plugin_id,
+                    "text": f"plugin_input_cancel|{request.request_id}",
+                    "userid": userid,
+                    "channel": channel,
+                    "source": source,
+                    "username": username,
+                    "chat_id": original_chat_id,
+                    "reply_to_message_id": reply_to_message_id,
+                    "prompt_id": request.prompt_id,
+                    "input_session_id": request.request_id,
+                    "cancelled": True,
+                    "payload": request.payload,
+                },
+            )
+            self.post_message(
+                Notification(
+                    channel=channel,
+                    source=source,
+                    userid=userid,
+                    username=username,
+                    title="已取消插件输入",
+                    save_history=False,
+                )
+            )
+            return True
+
+        self.eventmanager.send_event(
+            EventType.MessageAction,
+            {
+                "plugin_id": request.plugin_id,
+                "__mp_target_plugin_id": request.plugin_id,
+                "text": f"plugin_input|{request.request_id}",
+                "input_text": text,
+                "userid": userid,
+                "channel": channel,
+                "source": source,
+                "username": username,
+                "chat_id": original_chat_id,
+                "reply_to_message_id": reply_to_message_id,
+                "prompt_id": request.prompt_id,
+                "input_session_id": request.request_id,
+                "payload": request.payload,
+            },
+        )
+        return True
 
     @classmethod
     def _strip_no_ai_prefix(cls, text: str) -> Tuple[bool, str]:

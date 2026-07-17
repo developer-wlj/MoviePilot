@@ -318,6 +318,71 @@ class SubscribeChain(ChainBase):
         return update_data
 
     @classmethod
+    def __prepare_best_version_total_change_fields(
+            cls,
+            subscribe: Subscribe,
+            total_episode: int,
+            old_total_episode: int,
+    ) -> Dict[str, Any]:
+        """
+        准备洗版电视剧总集数变化后需要写库的字段。
+
+        总集数变化会改变目标范围，按集优先级只保留新范围内的目标集，避免范围外
+        旧状态继续参与完成集、缺失集和当前优先级计算。
+        """
+        update_data: Dict[str, Any] = {"total_episode": total_episode}
+        target_episodes = set(cls.__get_best_version_target_episodes(
+            subscribe,
+            total_episode=total_episode,
+        ))
+        episode_priority = cls.__get_episode_priority(
+            subscribe,
+            total_episode=old_total_episode,
+        )
+        filtered_priority = {
+            str(episode): priority
+            for episode, priority in episode_priority.items()
+            if int(episode) in target_episodes
+        }
+        subscribe.total_episode = total_episode
+        subscribe.episode_priority = filtered_priority
+        current_priority = 0 if not target_episodes else cls.get_best_version_current_priority(
+            subscribe,
+            episode_priority=filtered_priority,
+        )
+        subscribe.current_priority = current_priority
+        update_data["episode_priority"] = filtered_priority
+        update_data["current_priority"] = current_priority
+        update_data.update(cls.__prepare_subscribe_progress_fields(subscribe=subscribe, no_exists={}))
+        return update_data
+
+    @classmethod
+    def __prepare_total_episode_change_fields(
+            cls,
+            subscribe: Subscribe,
+            total_episode: int,
+            old_total_episode: int,
+    ) -> Dict[str, Any]:
+        """
+        准备已有订阅总集数持久化字段，并同步内存对象上的总集数快照。
+        """
+        if subscribe.best_version and subscribe.type == MediaType.TV.value:
+            return cls.__prepare_best_version_total_change_fields(
+                subscribe=subscribe,
+                total_episode=total_episode,
+                old_total_episode=old_total_episode,
+            )
+
+        subscribe.total_episode = total_episode
+        return {
+            "total_episode": total_episode,
+            "lack_episode": max(
+                (subscribe.lack_episode or 0) + (total_episode - old_total_episode),
+                0,
+            ),
+        }
+
+    @classmethod
     def __is_best_version_complete(cls, subscribe: Subscribe) -> bool:
         """
         判断洗版订阅是否已完成。
@@ -387,9 +452,10 @@ class SubscribeChain(ChainBase):
         获取已完成洗版的剧集。
         """
         episode_priority = cls.__get_episode_priority(subscribe)
+        target_episodes = set(cls.__get_best_version_target_episodes(subscribe))
         return sorted(
             int(episode) for episode, priority in episode_priority.items()
-            if str(episode).isdigit() and priority == 100
+            if str(episode).isdigit() and int(episode) in target_episodes and priority == 100
         )
 
     @classmethod
@@ -773,11 +839,13 @@ class SubscribeChain(ChainBase):
                     if not mediainfo.seasons:
                         logger.error(f"媒体信息中没有季集信息，标题：{title}，tmdbid：{tmdbid}，doubanid：{doubanid}")
                         return None, "媒体信息中没有季集信息"
-                total_episode = len(mediainfo.seasons.get(season) or [])
-                # 允许外部覆盖按 TMDB 算出的总集数（如待定集数）
+                current_total_episode = len(mediainfo.seasons.get(season) or [])
+                # 创建场景没有旧订阅事实，仅允许外部补正未知或扩展总集数。
                 total_episode = self.__apply_episodes_refresh(
-                    total_episode, season=season, mediainfo=mediainfo,
+                    current_total_episode, season=season, mediainfo=mediainfo,
                     tmdbid=mediainfo.tmdb_id, doubanid=mediainfo.douban_id, scene="create")
+                if current_total_episode and total_episode < current_total_episode:
+                    total_episode = current_total_episode
                 if not total_episode:
                     logger.error(f'未获取到总集数，标题：{title}，tmdbid：{tmdbid}, doubanid：{doubanid}')
                     return None, f"未获取到第 {season} 季的总集数"
@@ -958,11 +1026,13 @@ class SubscribeChain(ChainBase):
                     if not mediainfo.seasons:
                         logger.error(f"媒体信息中没有季集信息，标题：{title}，tmdbid：{tmdbid}，doubanid：{doubanid}")
                         return None, "媒体信息中没有季集信息"
-                total_episode = len(mediainfo.seasons.get(season) or [])
-                # 允许外部覆盖按 TMDB 算出的总集数（如待定集数）
+                current_total_episode = len(mediainfo.seasons.get(season) or [])
+                # 创建场景没有旧订阅事实，仅允许外部补正未知或扩展总集数。
                 total_episode = await self.__async_apply_episodes_refresh(
-                    total_episode, season=season, mediainfo=mediainfo,
+                    current_total_episode, season=season, mediainfo=mediainfo,
                     tmdbid=mediainfo.tmdb_id, doubanid=mediainfo.douban_id, scene="create")
+                if current_total_episode and total_episode < current_total_episode:
+                    total_episode = current_total_episode
                 if not total_episode:
                     logger.error(f'未获取到总集数，标题：{title}，tmdbid：{tmdbid}, doubanid：{doubanid}')
                     return None, f"未获取到第 {season} 季的总集数"
@@ -1116,6 +1186,7 @@ class SubscribeChain(ChainBase):
                         )
                     mediakey = subscribe.tmdbid or subscribe.doubanid
                     custom_word_list = subscribe.custom_words.split("\n") if subscribe.custom_words else None
+                    search_attempted = False
                     # 校验当前时间减订阅创建时间是否大于1分钟，否则跳过先，留出编辑订阅的时间
                     if subscribe.date:
                         now = datetime.now()
@@ -1133,6 +1204,7 @@ class SubscribeChain(ChainBase):
                             )
                         time.sleep(sleep_time)
                     try:
+                        search_attempted = True
                         logger.info(f'开始搜索订阅，标题：{subscribe.name} ...')
                         try:
                             meta = build_subscribe_meta(subscribe)
@@ -1276,7 +1348,7 @@ class SubscribeChain(ChainBase):
                                                          downloads=downloads, lefts=lefts)
                     finally:
                         # 如果状态为N则更新为R
-                        if subscribe and subscribe.state == 'N':
+                        if search_attempted and subscribe and subscribe.state == 'N':
                             subscribeoper.update(subscribe.id, {'state': 'R'})
                         if progress_callback:
                             progress_callback(
@@ -1913,28 +1985,28 @@ class SubscribeChain(ChainBase):
             # 对于电视剧，获取当前季的总集数
             episodes = mediainfo.seasons.get(subscribe.season) or []
             progress_update = {}
-            if not subscribe.manual_total_episode and len(episodes):
-                total_episode = len(episodes)
-                # 允许外部覆盖按 TMDB 算出的总集数（如待定集数）
+            if subscribe.type == MediaType.TV.value and not subscribe.manual_total_episode and len(episodes):
+                current_total_episode = len(episodes)
+                # 外部事件只能向上覆盖主程序本次识别到的 TMDB 当前季总集数，已有订阅按最终 total 跟随持久化。
                 total_episode = self.__apply_episodes_refresh(
-                    total_episode, season=subscribe.season, mediainfo=mediainfo,
+                    current_total_episode, season=subscribe.season, mediainfo=mediainfo,
                     tmdbid=subscribe.tmdbid, doubanid=subscribe.doubanid,
                     subscribe_id=subscribe.id, scene="refresh")
-                if total_episode > (subscribe.total_episode or 0):
-                    if subscribe.best_version and subscribe.type == MediaType.TV.value:
-                        progress_update = self.__prepare_best_version_total_expansion_fields(
-                            subscribe=subscribe,
-                            total_episode=total_episode,
-                        )
-                    else:
-                        old_total_episode = subscribe.total_episode or 0
-                        progress_update = {
-                            "total_episode": total_episode,
-                            "lack_episode": max(
-                                (subscribe.lack_episode or 0) + (total_episode - old_total_episode),
-                                0,
-                            ),
-                        }
+                old_total_episode = subscribe.total_episode or 0
+                if total_episode and total_episode < old_total_episode:
+                    total_episode = self.__resolve_total_episode_decrease(
+                        subscribe=subscribe,
+                        candidate_total=total_episode,
+                        meta=meta,
+                        mediainfo=mediainfo,
+                        mediakey=subscribe.tmdbid or subscribe.doubanid,
+                    )
+                if total_episode and total_episode != old_total_episode:
+                    progress_update = self.__prepare_total_episode_change_fields(
+                        subscribe=subscribe,
+                        total_episode=total_episode,
+                        old_total_episode=old_total_episode,
+                    )
                 else:
                     total_episode = subscribe.total_episode
                     progress_update = {"lack_episode": subscribe.lack_episode}
@@ -3591,7 +3663,12 @@ class SubscribeChain(ChainBase):
             - exist_flag (bool): 布尔值，表示媒体是否已经完全下载或已存在
             - no_exists (dict): 缺失的媒体信息，包含缺失的集数或其他相关信息
         """
-        self.__refresh_total_episode_before_completion(subscribe=subscribe, mediainfo=mediainfo)
+        self.__refresh_total_episode_before_completion(
+            subscribe=subscribe,
+            mediainfo=mediainfo,
+            meta=meta,
+            mediakey=mediakey,
+        )
 
         exist_flag, no_exists = self.resolve_subscribe_missing(
             subscribe=subscribe,
@@ -3695,6 +3772,66 @@ class SubscribeChain(ChainBase):
             return bool(downloaded), no_exists
         return False, no_exists
 
+    def __resolve_total_episode_decrease(
+            self,
+            subscribe: Subscribe,
+            candidate_total: int,
+            meta: MetaBase,
+            mediainfo: MediaInfo,
+            mediakey: Optional[Union[str, int]] = None,
+    ) -> int:
+        """以旧目标范围内已确认存在的最高集号限制总集数回落。"""
+        old_total = subscribe.total_episode or 0
+        if candidate_total >= old_total or not old_total:
+            return candidate_total
+        if subscribe.type != MediaType.TV.value or self.__is_full_best_version_enabled(subscribe):
+            return candidate_total
+
+        target_key = mediakey or subscribe.tmdbid or subscribe.doubanid
+        target_season = subscribe.season
+        target_start = subscribe.start_episode or 1
+        snapshot = copy.copy(subscribe)
+        snapshot.total_episode = old_total
+        try:
+            satisfied, no_exists = self.resolve_subscribe_missing(
+                subscribe=snapshot,
+                meta=meta,
+                mediainfo=mediainfo,
+                mediakey=target_key,
+                best_version_accept_downloaded=bool(subscribe.best_version),
+            )
+        except Exception as err:
+            logger.warning(f"订阅 {subscribe.name} 已存在分集事实查询失败，按元数据总集数继续：{err}")
+            return candidate_total
+
+        if satisfied:
+            return old_total
+        if not isinstance(no_exists, dict):
+            return candidate_total
+        seasons = no_exists.get(target_key)
+        if not isinstance(seasons, dict):
+            return candidate_total
+        missing_info = seasons.get(target_season)
+        if not missing_info:
+            return candidate_total
+        try:
+            scope_matches = missing_info.season == target_season \
+                and missing_info.start_episode == target_start \
+                and missing_info.total_episode == old_total
+            episodes = missing_info.episodes
+        except AttributeError:
+            return candidate_total
+        if not scope_matches:
+            return candidate_total
+        if not isinstance(episodes, list) or not episodes:
+            return candidate_total
+        if any(isinstance(episode, bool) or not isinstance(episode, int)
+               or episode < target_start or episode > old_total for episode in episodes):
+            return candidate_total
+
+        confirmed = set(range(target_start, old_total + 1)).difference(episodes)
+        return max(candidate_total, max(confirmed) if confirmed else 0)
+
     @staticmethod
     def __resolve_effective_total_episode(subscribe: Subscribe, mediainfo: MediaInfo) -> int:
         """
@@ -3724,11 +3861,11 @@ class SubscribeChain(ChainBase):
                                  subscribe_id: Optional[int] = None,
                                  scene: Optional[str] = None) -> int:
         """
-        发送订阅总集数推算事件，允许外部据自身策略覆盖按 TMDB 季集数算出的总集数。
+        发送订阅总集数推算事件，允许外部把主程序本次识别到的 TMDB 当前季总集数向上覆盖。
 
         用途：插件在"待定集数"等场景经事件注入 total_episode
         无监听者或外部未覆盖时返回入参原值，保证零行为变更。
-        :param current_total: 主程序按 TMDB 季集数算出的默认总集数
+        :param current_total: 主程序本次识别到的 TMDB 当前季总集数
         :param season: 季号
         :return: 最终采用的总集数
         """
@@ -3739,6 +3876,7 @@ class SubscribeChain(ChainBase):
         if event and event.event_data:
             result: SubscribeEpisodesRefreshEventData = event.event_data
             if result.updated and result.total_episode:
+                result.total_episode = max(current_total or 0, result.total_episode)
                 return result.total_episode
         return current_total
 
@@ -3759,10 +3897,17 @@ class SubscribeChain(ChainBase):
         if event and event.event_data:
             result: SubscribeEpisodesRefreshEventData = event.event_data
             if result.updated and result.total_episode:
+                result.total_episode = max(current_total or 0, result.total_episode)
                 return result.total_episode
         return current_total
 
-    def __refresh_total_episode_before_completion(self, subscribe: Subscribe, mediainfo: MediaInfo):
+    def __refresh_total_episode_before_completion(
+            self,
+            subscribe: Subscribe,
+            mediainfo: MediaInfo,
+            meta: Optional[MetaBase] = None,
+            mediakey: Optional[Union[str, int]] = None,
+    ) -> None:
         """
         在完成判断前，按最新识别结果兜底修正订阅总集数，防止旧总集数导致误完成。
         """
@@ -3773,30 +3918,30 @@ class SubscribeChain(ChainBase):
         if subscribe.season is None:
             return
 
-        new_total_episode = len((mediainfo.seasons or {}).get(subscribe.season) or [])
-        # 允许外部覆盖按 TMDB 算出的总集数（如待定集数），后续“只增不减”仍作用于覆盖后的结果，避免误减导致提前完成。
+        current_total_episode = len((mediainfo.seasons or {}).get(subscribe.season) or [])
+        # 外部事件只能向上覆盖主程序本次识别到的 TMDB 当前季总集数，已有订阅回落由主程序跟随本次识别结果持久化。
         new_total_episode = self.__apply_episodes_refresh(
-            new_total_episode, season=subscribe.season, mediainfo=mediainfo,
+            current_total_episode, season=subscribe.season, mediainfo=mediainfo,
             tmdbid=subscribe.tmdbid, doubanid=subscribe.doubanid,
             subscribe_id=subscribe.id, scene="precheck")
         old_total_episode = subscribe.total_episode or 0
-        if not new_total_episode or new_total_episode <= old_total_episode:
+        if meta is not None and new_total_episode and new_total_episode < old_total_episode:
+            new_total_episode = self.__resolve_total_episode_decrease(
+                subscribe=subscribe,
+                candidate_total=new_total_episode,
+                meta=meta,
+                mediainfo=mediainfo,
+                mediakey=mediakey,
+            )
+        if not new_total_episode or new_total_episode == old_total_episode:
             return
 
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        if subscribe.best_version and subscribe.type == MediaType.TV.value:
-            update_data = self.__prepare_best_version_total_expansion_fields(
-                subscribe=subscribe,
-                total_episode=new_total_episode,
-            )
-        else:
-            update_data = {
-                "total_episode": new_total_episode,
-                "lack_episode": max(
-                    (subscribe.lack_episode or 0) + (new_total_episode - old_total_episode),
-                    0,
-                ),
-            }
+        update_data = self.__prepare_total_episode_change_fields(
+            subscribe=subscribe,
+            total_episode=new_total_episode,
+            old_total_episode=old_total_episode,
+        )
         update_data["last_update"] = now
         SubscribeOper().update(subscribe.id, update_data)
         for key, value in update_data.items():

@@ -35,10 +35,11 @@ from app.db.user_oper import (
     get_current_active_user_async,
 )
 from app.helper.image import ImageHelper
+from app.helper.locale import LocaleHelper
 from app.helper.message import MessageHelper
-from app.helper.server import MoviePilotServerHelper
 from app.helper.progress import ProgressHelper
 from app.helper.rule import RuleHelper
+from app.helper.server import MoviePilotServerHelper
 from app.helper.system import SystemHelper
 from app.log import logger
 from app.scheduler import Scheduler
@@ -798,13 +799,14 @@ async def get_progress(
     实时获取处理进度，返回格式为SSE
     """
     progress = ProgressHelper(process_type)
+    locale = LocaleHelper.get_current_locale()
 
     async def event_generator():
         try:
             while not global_vars.is_system_stopped:
                 if await request.is_disconnected():
                     break
-                detail = progress.get()
+                detail = progress.get(locale=locale)
                 yield f"data: {json.dumps(detail)}\n\n"
                 await asyncio.sleep(0.5)
         except asyncio.CancelledError:
@@ -1122,33 +1124,64 @@ def ruletest(
     """
     过滤规则测试，规则类型 1-订阅，2-洗版，3-搜索
     """
+    metainfo = MetaInfo(title=title, subtitle=subtitle)
     torrent = schemas.TorrentInfo(
         title=title,
         description=subtitle,
     )
     # 查询规则组详情
     rulegroup = RuleHelper().get_rule_group(rulegroup_name)
+    result_data = {
+        "title": title,
+        "subtitle": subtitle,
+        "rulegroup_name": rulegroup_name,
+        "rulegroup": rulegroup.model_dump() if rulegroup else None,
+        "meta_info": metainfo.to_dict(),
+        "media_info": None,
+        "torrent_info": torrent.model_dump(),
+        "priority": None,
+        "matched": False,
+    }
     if not rulegroup:
         return schemas.Response(
-            success=False, message=f"过滤规则组 {rulegroup_name} 不存在！"
+            success=False,
+            message=f"过滤规则组 {rulegroup_name} 不存在！",
+            data=result_data,
         )
 
     # 根据标题查询媒体信息
     media_info = MediaChain().recognize_by_meta(
-        MetaInfo(title=title, subtitle=subtitle),
+        metainfo,
         obtain_images=False,
     )
+    result_data["media_info"] = media_info.to_dict() if media_info else None
     if not media_info:
-        return schemas.Response(success=False, message="未识别到媒体信息！")
+        return schemas.Response(
+            success=False,
+            message="未识别到媒体信息！",
+            data=result_data,
+        )
 
     # 过滤
     result = SearchChain().filter_torrents(
         rule_groups=[rulegroup.name], torrent_list=[torrent], mediainfo=media_info
     )
     if not result:
-        return schemas.Response(success=False, message="不符合过滤规则！")
+        return schemas.Response(
+            success=False,
+            message="不符合过滤规则！",
+            data=result_data,
+        )
+    result_data.update(
+        {
+            "matched": True,
+            "priority": 100 - result[0].pri_order + 1,
+            "torrent_info": result[0].model_dump(),
+        }
+    )
     return schemas.Response(
-        success=True, data={"priority": 100 - result[0].pri_order + 1}
+        success=True,
+        data=result_data,
     )
 
 
@@ -1272,13 +1305,20 @@ def modulelist(_: schemas.TokenPayload = Depends(verify_token)):
     """
     查询已加载的模块ID列表
     """
-    modules = [
-        {
-            "id": k,
-            "name": v.get_name(),
-        }
-        for k, v in ModuleManager().get_modules().items()
-    ]
+    modules = []
+    for module_id, module in ModuleManager().get_modules().items():
+        name = module.get_name()
+        modules.append(
+            {
+                "id": module_id,
+                "name": name,
+                "name_i18n": LocaleHelper.translate(
+                    f"system.modules.{module_id}.name",
+                    default=name,
+                ),
+                "name_key": f"system.modules.{module_id}.name",
+            }
+        )
     return schemas.Response(success=True, data={"modules": modules})
 
 

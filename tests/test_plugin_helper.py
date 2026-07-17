@@ -1,5 +1,6 @@
 import asyncio
 import io
+import stat
 import sys
 import tempfile
 import threading
@@ -58,6 +59,40 @@ def _build_zip(entries: dict[str, bytes]) -> bytes:
         for name, content in entries.items():
             zf.writestr(name, content)
     return buffer.getvalue()
+
+
+def _build_release_zip_member(name: str, *, symlink: bool = False) -> bytes:
+    """构造单成员 release zip，用于覆盖成员路径与文件类型校验。"""
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as zf:
+        if symlink:
+            info = zipfile.ZipInfo(name)
+            info.create_system = 3
+            info.external_attr = (stat.S_IFLNK | 0o777) << 16
+            zf.writestr(info, b"target")
+        else:
+            zf.writestr(name, b"evil")
+    return buffer.getvalue()
+
+
+def _patch_release_install_settings(monkeypatch, tmp_path: Path) -> None:
+    """隔离 release 安装根目录，并阻止测试误触真实根路径。"""
+    monkeypatch.setattr("app.helper.plugin.settings", SimpleNamespace(
+        ROOT_PATH=tmp_path,
+        REPO_GITHUB_HEADERS=lambda repo=None: {},
+    ))
+
+    original_mkdir = Path.mkdir
+    safe_root = tmp_path.resolve()
+
+    def guarded_mkdir(path: Path, *args, **kwargs):
+        try:
+            path.resolve().relative_to(safe_root)
+        except ValueError as exc:
+            raise AssertionError(f"unsafe mkdir attempted: {path}") from exc
+        return original_mkdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", guarded_mkdir)
 
 
 def _patch_sync_remote_install(helper, monkeypatch, meta: dict,
@@ -463,6 +498,109 @@ class TestPluginHelper:
         assert [item["version"] for item in force_result] == ["1.2.3"]
         assert [item["version"] for item in cached_result] == ["1.2.3"]
         assert request_count == 2
+
+    def test_async_normal_release_read_does_not_wait_for_pending_force_refresh(self, monkeypatch):
+        """普通读取遇到后台强刷时仍优先返回已有缓存，避免页面响应被强刷阻塞。"""
+        try:
+            from app.core.cache import async_fresh
+            from app.helper.plugin import PluginHelper
+        except ModuleNotFoundError as exc:
+            pytest.skip(f"missing dependency: {exc}")
+
+        old_payload = [{
+            "tag_name": "DemoPlugin_v1.2.2",
+            "assets": [{"name": "demoplugin_v1.2.2.zip", "id": 1}],
+        }]
+        fresh_payload = [{
+            "tag_name": "DemoPlugin_v1.2.3",
+            "assets": [{"name": "demoplugin_v1.2.3.zip", "id": 2}],
+        }]
+        force_request_started = asyncio.Event()
+        release_force_request = asyncio.Event()
+        request_count = 0
+
+        async def fake_request(*_args, **_kwargs):
+            nonlocal request_count
+            request_count += 1
+            if request_count == 1:
+                return _FakeTextResponse(200, old_payload)
+            force_request_started.set()
+            await release_force_request.wait()
+            return _FakeTextResponse(200, fresh_payload)
+
+        async def run_test():
+            helper = PluginHelper()
+            await helper.async_get_plugin_release_versions.cache_clear()
+            monkeypatch.setattr(helper, "_PluginHelper__async_request_with_fallback", fake_request)
+            initial = await helper.async_get_plugin_release_versions("DemoPlugin", REPO_URL)
+            async with async_fresh(True):
+                force_task = asyncio.create_task(
+                    helper.async_get_plugin_release_versions("DemoPlugin", REPO_URL)
+                )
+            await force_request_started.wait()
+            normal_task = asyncio.create_task(
+                helper.async_get_plugin_release_versions("DemoPlugin", REPO_URL)
+            )
+            normal_before_force_finished = await asyncio.wait_for(normal_task, timeout=1)
+            force_done_before_normal_finished = force_task.done()
+            release_force_request.set()
+            force_result = await force_task
+            cached_result = await helper.async_get_plugin_release_versions("DemoPlugin", REPO_URL)
+            return (
+                initial,
+                force_done_before_normal_finished,
+                normal_before_force_finished,
+                force_result,
+                cached_result,
+            )
+
+        (
+            initial,
+            force_done_before_normal_finished,
+            normal_before_force_finished,
+            force_result,
+            cached_result,
+        ) = asyncio.run(run_test())
+
+        assert [item["version"] for item in initial] == ["1.2.2"]
+        assert force_done_before_normal_finished is False
+        assert [item["version"] for item in normal_before_force_finished] == ["1.2.2"]
+        assert [item["version"] for item in force_result] == ["1.2.3"]
+        assert [item["version"] for item in cached_result] == ["1.2.3"]
+        assert request_count == 2
+
+    def test_async_has_plugin_release_cache_reflects_repository_cache(self, monkeypatch):
+        """Release 缓存探针只判断仓库级缓存是否已经存在，不触发网络请求。"""
+        try:
+            from app.helper.plugin import PluginHelper
+        except ModuleNotFoundError as exc:
+            pytest.skip(f"missing dependency: {exc}")
+
+        payload = [{
+            "tag_name": "DemoPlugin_v1.2.3",
+            "assets": [{"name": "demoplugin_v1.2.3.zip", "id": 1}],
+        }]
+        request_count = 0
+
+        async def fake_request(*_args, **_kwargs):
+            nonlocal request_count
+            request_count += 1
+            return _FakeTextResponse(200, payload)
+
+        async def run_test():
+            helper = PluginHelper()
+            await helper.async_get_plugin_release_versions.cache_clear()
+            monkeypatch.setattr(helper, "_PluginHelper__async_request_with_fallback", fake_request)
+            before = await helper.async_has_plugin_release_cache(REPO_URL)
+            await helper.async_get_plugin_release_versions("DemoPlugin", REPO_URL)
+            after = await helper.async_has_plugin_release_cache(REPO_URL)
+            return before, after
+
+        before, after = asyncio.run(run_test())
+
+        assert before is False
+        assert after is True
+        assert request_count == 1
 
     def test_failed_forced_release_refresh_preserves_cached_repository_payload(self, monkeypatch):
         """GitHub 强刷失败时不以空值覆盖该仓库已有 Release 缓存。"""
@@ -1396,22 +1534,50 @@ class TestPluginHelper:
         assert "" == message
         assert seen_versions
 
-    def test_install_local_delegates_local_repo_url(self, monkeypatch):
+    def test_install_local_copies_runtime_assets_without_build_dependencies(self, monkeypatch, tmp_path):
         """
-        local:// 来源由本地插件安装路径处理，不访问远端仓库。
+        local:// 来源保留运行资产，但不把本地前端构建依赖复制到运行目录。
         """
         try:
             from app.helper.plugin import PluginHelper
         except ModuleNotFoundError as exc:
             pytest.skip(f"missing dependency: {exc}")
 
-        helper = PluginHelper()
-        monkeypatch.setattr(helper, "install_local", lambda pid, repo_url, force_install=False: (True, f"{pid}:{repo_url}"))
+        repo_path = tmp_path / "local-plugins"
+        source_dir = repo_path / "plugins.v2" / PLUGIN_ID.lower()
+        remote_entry = source_dir / "dist" / "assets" / "remoteEntry.js"
+        remote_entry.parent.mkdir(parents=True)
+        remote_entry.write_text("export default {}\n", encoding="utf-8")
+        dependency_file = source_dir / "node_modules" / "example" / "index.js"
+        dependency_file.parent.mkdir(parents=True)
+        dependency_file.write_text("module.exports = {}\n", encoding="utf-8")
 
-        success, message = helper.install(PLUGIN_ID, f"local://{PLUGIN_ID}?path=/tmp/plugins")
+        runtime_root = tmp_path / "runtime-plugins"
+        helper = PluginHelper()
+        monkeypatch.setattr(
+            helper,
+            "get_local_plugin_candidate",
+            lambda *_args, **_kwargs: {
+                "path": source_dir,
+                "repo_path": repo_path,
+                "package_version": "v2",
+                "version": "1.0.0",
+            },
+        )
+        monkeypatch.setattr("app.helper.plugin.PLUGIN_DIR", runtime_root)
+        monkeypatch.setattr(helper, "refresh_persistent_plugin_backup", lambda _pid: True)
+
+        success, message = helper.install(
+            PLUGIN_ID,
+            helper.make_local_repo_url(PLUGIN_ID, repo_path, "v2"),
+            force_install=True,
+        )
 
         assert success
-        assert message.startswith(f"{PLUGIN_ID}:local://{PLUGIN_ID}")
+        assert "" == message
+        runtime_dir = runtime_root / PLUGIN_ID.lower()
+        assert (runtime_dir / "dist" / "assets" / "remoteEntry.js").is_file()
+        assert not (runtime_dir / "node_modules").exists()
 
     def test_install_release_download_failure_falls_back_to_filelist(self, monkeypatch):
         """
@@ -1751,6 +1917,43 @@ class TestPluginHelper:
 
         assert not success
         assert "下载资产失败：502" == message
+
+    @pytest.mark.parametrize(
+        "member_name, symlink",
+        [
+            ("../evil.py", False),
+            ("/tmp/evil.py", False),
+            ("..\\evil.py", False),
+            ("C:/evil.py", False),
+            ("//server/share/evil.py", False),
+            ("demoplugin/link.py", True),
+        ],
+    )
+    def test_install_from_release_rejects_unsafe_zip_member(self, monkeypatch, tmp_path, member_name, symlink):
+        """
+        release zip 成员必须限制在插件运行目录内，且不能是符号链接或特殊文件。
+        """
+        try:
+            from app.helper.plugin import PluginHelper
+        except ModuleNotFoundError as exc:
+            pytest.skip(f"missing dependency: {exc}")
+
+        helper = PluginHelper()
+        responses = iter([
+            _FakeResponse(200, {"assets": [{"name": "demoplugin_v1.2.3.zip", "id": 42}]}),
+            _FakeContentResponse(200, _build_release_zip_member(member_name, symlink=symlink)),
+        ])
+        _patch_release_install_settings(monkeypatch, tmp_path)
+        monkeypatch.setattr(helper, "_PluginHelper__request_with_fallback", lambda *_args, **_kwargs: next(responses))
+
+        success, message = helper._PluginHelper__install_from_release(PLUGIN_ID, "demo/repo", "DemoPlugin_v1.2.3")
+
+        assert not success
+        assert "非法 Release 压缩包成员" in message
+        assert not (tmp_path / "app" / "plugins" / "evil.py").exists()
+        assert not (tmp_path / "app" / "plugins" / "demoplugin" / "..\\evil.py").exists()
+        assert not (tmp_path / "app" / "plugins" / "demoplugin" / "C:").exists()
+        assert not (tmp_path / "app" / "plugins" / "demoplugin" / "link.py").exists()
 
     def test_install_from_release_extracts_zip_with_top_level_directory(self, monkeypatch, tmp_path):
         """
@@ -2286,6 +2489,49 @@ class TestPluginHelper:
 
         assert not success
         assert "下载资产失败：502" == message
+
+    @pytest.mark.parametrize(
+        "member_name, symlink",
+        [
+            ("../evil.py", False),
+            ("/tmp/evil.py", False),
+            ("..\\evil.py", False),
+            ("C:/evil.py", False),
+            ("//server/share/evil.py", False),
+            ("demoplugin/link.py", True),
+        ],
+    )
+    def test_async_install_from_release_rejects_unsafe_zip_member(self, monkeypatch, tmp_path, member_name, symlink):
+        """
+        异步 release zip 成员使用同步路径相同的边界与文件类型规则。
+        """
+        try:
+            from app.helper.plugin import PluginHelper
+        except ModuleNotFoundError as exc:
+            pytest.skip(f"missing dependency: {exc}")
+
+        helper = PluginHelper()
+        responses = iter([
+            _FakeResponse(200, {"assets": [{"name": "demoplugin_v1.2.3.zip", "id": 42}]}),
+            _FakeContentResponse(200, _build_release_zip_member(member_name, symlink=symlink)),
+        ])
+
+        async def fake_request(*_args, **_kwargs):
+            return next(responses)
+
+        _patch_release_install_settings(monkeypatch, tmp_path)
+        monkeypatch.setattr(helper, "_PluginHelper__async_request_with_fallback", fake_request)
+
+        success, message = asyncio.run(
+            helper._PluginHelper__async_install_from_release(PLUGIN_ID, "demo/repo", "DemoPlugin_v1.2.3")
+        )
+
+        assert not success
+        assert "非法 Release 压缩包成员" in message
+        assert not (tmp_path / "app" / "plugins" / "evil.py").exists()
+        assert not (tmp_path / "app" / "plugins" / "demoplugin" / "..\\evil.py").exists()
+        assert not (tmp_path / "app" / "plugins" / "demoplugin" / "C:").exists()
+        assert not (tmp_path / "app" / "plugins" / "demoplugin" / "link.py").exists()
 
     def test_async_install_from_release_extracts_zip_with_top_level_directory(self, monkeypatch, tmp_path):
         """

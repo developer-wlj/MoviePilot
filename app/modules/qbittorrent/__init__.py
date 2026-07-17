@@ -37,9 +37,14 @@ _QBITTORRENT_PAUSED_STATES = {
     "stoppeddl",
     "stoppedup",
 }
+_TORRENT_FILES_RETRY_TIMES = 5
+_TORRENT_FILES_RETRY_INTERVAL = 1
 
 
 class QbittorrentModule(_ModuleBase, _DownloaderBase[Qbittorrent]):
+    """
+    qBittorrent 下载器模块，负责下载任务添加、文件选择和任务管理。
+    """
 
     def init_module(self) -> None:
         """
@@ -50,6 +55,9 @@ class QbittorrentModule(_ModuleBase, _DownloaderBase[Qbittorrent]):
 
     @staticmethod
     def get_name() -> str:
+        """
+        获取模块名称
+        """
         return "Qbittorrent"
 
     @staticmethod
@@ -73,7 +81,10 @@ class QbittorrentModule(_ModuleBase, _DownloaderBase[Qbittorrent]):
         """
         return 1
 
-    def stop(self):
+    def stop(self) -> None:
+        """
+        停止模块
+        """
         pass
 
     def test(self) -> Optional[Tuple[bool, str]]:
@@ -90,6 +101,9 @@ class QbittorrentModule(_ModuleBase, _DownloaderBase[Qbittorrent]):
         return True, ""
 
     def init_setting(self) -> Tuple[str, Union[str, bool]]:
+        """
+        返回控制模块启用状态的配置项
+        """
         pass
 
     def scheduler_job(self) -> None:
@@ -181,9 +195,6 @@ class QbittorrentModule(_ModuleBase, _DownloaderBase[Qbittorrent]):
             ignore_category_check=False
         )
 
-        # 获取种子内容布局: `Original: 原始, Subfolder: 创建子文件夹, NoSubfolder: 不创建子文件夹`
-        torrent_layout = server.get_content_layout()
-
         if not state:
             # 查询所有下载器的种子
             torrents, error = server.get_torrents()
@@ -196,7 +207,8 @@ class QbittorrentModule(_ModuleBase, _DownloaderBase[Qbittorrent]):
                         if torrent.get("name") == getattr(torrent_from_file, 'name', '') \
                                 and torrent.get("total_size") == getattr(torrent_from_file, 'total_size', 0):
                             torrent_hash = torrent.get("hash")
-                            torrent_tags = [str(tag).strip() for tag in torrent.get("tags").split(',')]
+                            server.delete_torrents_tag(torrent_hash, tag)
+                            torrent_tags = [str(tag).strip() for tag in (torrent.get("tags") or "").split(',')]
                             logger.warn(f"下载器中已存在该种子任务：{torrent_hash} - {torrent.get('name')}")
                             # 给种子打上标签
                             if "已整理" in torrent_tags:
@@ -204,6 +216,8 @@ class QbittorrentModule(_ModuleBase, _DownloaderBase[Qbittorrent]):
                             if settings.TORRENT_TAG and settings.TORRENT_TAG not in torrent_tags:
                                 logger.info(f"给种子 {torrent_hash} 打上标签：{settings.TORRENT_TAG}")
                                 server.set_torrents_tag(ids=torrent_hash, tags=[settings.TORRENT_TAG])
+                            # 获取种子内容布局: `Original: 原始, Subfolder: 创建子文件夹, NoSubfolder: 不创建子文件夹`
+                            torrent_layout = server.get_content_layout()
                             return downloader or self.get_default_config_name(), torrent_hash, torrent_layout, f"下载任务已存在"
                 finally:
                     torrents.clear()
@@ -219,9 +233,15 @@ class QbittorrentModule(_ModuleBase, _DownloaderBase[Qbittorrent]):
             if not torrent_hash:
                 return None, None, None, f"下载任务添加成功，但获取Qbittorrent任务信息失败：{content}"
             else:
+                # 获取种子内容布局: `Original: 原始, Subfolder: 创建子文件夹, NoSubfolder: 不创建子文件夹`
+                torrent_layout = server.get_content_layout()
                 if is_paused:
                     # 种子文件
-                    torrent_files = server.get_files(torrent_hash)
+                    torrent_files = server.get_files(
+                        torrent_hash,
+                        retry=_TORRENT_FILES_RETRY_TIMES,
+                        interval=_TORRENT_FILES_RETRY_INTERVAL,
+                    )
                     if not torrent_files:
                         return downloader or self.get_default_config_name(), torrent_hash, torrent_layout, "获取种子文件失败，下载任务可能在暂停状态"
 

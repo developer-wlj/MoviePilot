@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import schemas
 from app.agent import MoviePilotAgent, ReplyMode, StreamingHandler, agent_manager
 from app.agent.llm.capability import AgentCapabilityManager
+from app.agent.mcp import agent_mcp_manager
 from app.chain.message import MessageChain
 from app.chain.site import site_interaction_manager
 from app.chain.skills import skills_interaction_manager
@@ -34,6 +35,7 @@ from app.db.models.agentchat import AgentChat
 from app.db.user_oper import UserOper, get_current_active_user
 from app.helper.agent import attach_web_agent_edit_queue, detach_web_agent_edit_queue
 from app.helper.interaction import agent_interaction_manager, media_interaction_manager
+from app.helper.locale import LocaleHelper
 from app.log import logger
 from app.schemas.types import EventType, MessageChannel
 
@@ -53,6 +55,78 @@ _WEB_AGENT_NOTICE_QUEUES: dict[str, list[Queue[schemas.Notification]]] = {}
 _WEB_AGENT_NOTICE_LOCK = Lock()
 _WEB_AGENT_NOTICE_LISTENER_REGISTERED = False
 _WEB_AGENT_BACKGROUND_TASKS: set[asyncio.Task] = set()
+
+
+def _ensure_superuser(user: User) -> None:
+    """校验当前用户是否为超级管理员。"""
+    if not getattr(user, "is_superuser", False):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+
+@router.get("/mcp/servers", summary="查询 Agent MCP 服务器配置", response_model=schemas.Response)
+async def list_agent_mcp_servers(
+    current_user: User = Depends(get_current_active_user),
+) -> schemas.Response:
+    """
+    查询 Agent 外部 MCP 服务器配置。
+    """
+    _ensure_superuser(current_user)
+    servers = agent_mcp_manager.get_servers()
+    enabled_count = len([server for server in servers if server.enabled])
+    return schemas.Response(
+        success=True,
+        data={
+            "servers": [server.model_dump() for server in servers],
+            "enabled_count": enabled_count,
+            "total_count": len(servers),
+        },
+    )
+
+
+@router.post("/mcp/servers", summary="保存 Agent MCP 服务器配置", response_model=schemas.Response)
+async def save_agent_mcp_servers(
+    request: schemas.AgentMcpServersSaveRequest,
+    current_user: User = Depends(get_current_active_user),
+) -> schemas.Response:
+    """
+    保存 Agent 外部 MCP 服务器配置。
+    """
+    _ensure_superuser(current_user)
+    success = await agent_mcp_manager.save_servers(request.servers)
+    return schemas.Response(
+        success=success,
+        message="保存MCP配置成功" if success else "保存MCP配置失败",
+    )
+
+
+@router.post("/mcp/servers/test", summary="测试 Agent MCP 服务器", response_model=schemas.Response)
+async def test_agent_mcp_server(
+    request: schemas.AgentMcpServerTestRequest,
+    current_user: User = Depends(get_current_active_user),
+) -> schemas.Response:
+    """
+    测试 Agent 外部 MCP 服务器连接并读取工具列表。
+    """
+    _ensure_superuser(current_user)
+    try:
+        result = await agent_mcp_manager.test_server(request.server)
+        return schemas.Response(
+            success=result.success,
+            message=result.message,
+            data=result.model_dump(),
+        )
+    except Exception as err:
+        logger.warning(f"测试 Agent MCP 服务器失败: {err}")
+        return schemas.Response(
+            success=False,
+            message=f"测试MCP服务器失败: {str(err)}",
+            data={
+                "success": False,
+                "message": str(err),
+                "tools": [],
+                "tool_count": 0,
+            },
+        )
 
 
 class _WebAgentStreamingHandler(StreamingHandler):
@@ -326,15 +400,25 @@ def _save_web_agent_display_snapshot(
         logger.debug(f"保存WebAgent展示历史失败: {e}")
 
 
-def _build_web_agent_sse(event_type: str, data: Optional[dict] = None) -> str:
+def _build_web_agent_sse(
+        event_type: str,
+        data: Optional[dict] = None,
+        locale: Optional[str] = None,
+) -> str:
     """
     构建 Web Agent SSE 消息。
 
     :param event_type: 前端事件类型
     :param data: 事件数据
+    :param locale: 当前请求语言
     :return: 符合 SSE 格式的字符串
     """
     payload = {"type": event_type, **(data or {})}
+    message = payload.get("message")
+    if event_type == "error" and isinstance(message, str):
+        payload["message_i18n"] = LocaleHelper.translate_text(
+            message, locale=locale
+        )
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
@@ -1597,6 +1681,7 @@ async def web_agent_stream(
     :return: SSE 流式响应
     """
     prompt = payload.text.strip()
+    locale = LocaleHelper.get_locale_from_request(request)
     display_prompt = (payload.display_text or payload.text).strip()
     is_traditional_message = (
         _is_web_agent_traditional_message(prompt)
@@ -1610,6 +1695,7 @@ async def web_agent_stream(
                     _build_web_agent_sse(
                         "error",
                         {"message": denied_message},
+                        locale=locale,
                     )
                 ]),
                 media_type="text/event-stream",
@@ -1621,6 +1707,7 @@ async def web_agent_stream(
                     _build_web_agent_sse(
                         "error",
                         {"message": unknown_command_message},
+                        locale=locale,
                     )
                 ]),
                 media_type="text/event-stream",
@@ -1649,7 +1736,11 @@ async def web_agent_stream(
             """
             生成传统消息链路的 WebAgent SSE 事件。
             """
-            yield _build_web_agent_sse("start", {"session_id": session_id})
+            yield _build_web_agent_sse(
+                "start",
+                {"session_id": session_id},
+                locale=locale,
+            )
             events = await _collect_web_agent_traditional_events(
                 text=prompt,
                 current_user=current_user,
@@ -1660,7 +1751,11 @@ async def web_agent_stream(
             display_messages.append(assistant_message)
             for event in events:
                 event_payload = copy.deepcopy(event)
-                yield _build_web_agent_sse(event_payload.pop("type"), event_payload)
+                yield _build_web_agent_sse(
+                    event_payload.pop("type"),
+                    event_payload,
+                    locale=locale,
+                )
                 if await request.is_disconnected():
                     break
             await run_in_threadpool(
@@ -1670,7 +1765,7 @@ async def web_agent_stream(
                 messages=display_messages,
                 client_session_id=payload.session_id or session_id,
             )
-            yield _build_web_agent_sse("done", {})
+            yield _build_web_agent_sse("done", {}, locale=locale)
 
         return StreamingResponse(
             traditional_event_generator(),
@@ -1688,6 +1783,7 @@ async def web_agent_stream(
                 _build_web_agent_sse(
                     "error",
                     {"message": "智能助手未启用，请先在系统设置中开启。"},
+                    locale=locale,
                 )
             ]),
             media_type="text/event-stream",
@@ -1703,6 +1799,7 @@ async def web_agent_stream(
                 _build_web_agent_sse(
                     "error",
                     {"message": "语音识别失败，请稍后重试。"},
+                    locale=locale,
                 )
             ]),
             media_type="text/event-stream",
@@ -1713,6 +1810,7 @@ async def web_agent_stream(
                 _build_web_agent_sse(
                     "error",
                     {"message": "请输入要发送给智能助手的内容或选择附件。"},
+                    locale=locale,
                 )
             ]),
             media_type="text/event-stream",
@@ -1825,6 +1923,7 @@ async def web_agent_stream(
             yield _build_web_agent_sse(
                 "start",
                 {"session_id": session_id},
+                locale=locale,
             )
             disconnected = False
             while not global_vars.is_system_stopped:
@@ -1832,7 +1931,11 @@ async def web_agent_stream(
                     disconnected = True
                     break
                 event = await event_queue.get()
-                yield _build_web_agent_sse(event.pop("type"), event)
+                yield _build_web_agent_sse(
+                    event.pop("type"),
+                    event,
+                    locale=locale,
+                )
                 if task.done() and event_queue.empty():
                     break
         except asyncio.CancelledError:
