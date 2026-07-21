@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import List, Any, Union, Annotated, Optional
+from typing import Annotated, Any, List, Literal, Optional, Union
 
 from fastapi import APIRouter, Depends
 
@@ -9,7 +9,7 @@ from app.chain.tmdb import TmdbChain
 from app.core.config import settings
 from app.core.context import Context
 from app.core.event import eventmanager
-from app.core.metainfo import MetaInfo
+from app.core.metainfo import MetaInfo, MetaInfoPath
 from app.core.security import verify_token, verify_apitoken
 from app.db.models import User
 from app.db.user_oper import get_current_active_user, get_current_active_superuser
@@ -18,6 +18,7 @@ from app.schemas.category import CategoryConfig
 from app.schemas.types import ChainEventType
 
 router = APIRouter()
+MediaSource = Literal["themoviedb", "douban", "bangumi", "anilist"]
 
 
 @router.get(
@@ -27,17 +28,22 @@ async def recognize(
     title: str,
     subtitle: Optional[str] = None,
     custom_words: Optional[str] = None,
+    source: Optional[MediaSource] = None,
     _: schemas.TokenPayload = Depends(verify_token),
 ) -> Any:
     """
     根据标题、副标题识别媒体信息
     :param custom_words: 临时识别词（每行一条规则），传入时仅在本次识别中生效，不会保存到系统配置
+    :param source: 请求级识别数据源
     """
     # 识别媒体信息，传入临时识别词时优先于系统配置的识别词生效
     metainfo = MetaInfo(
         title, subtitle, custom_words=custom_words.split("\n") if custom_words else None
     )
-    mediainfo = await MediaChain().async_recognize_by_meta(metainfo)
+    mediainfo = await MediaChain().async_recognize_by_meta(
+        metainfo,
+        source=source,
+    )
     if mediainfo:
         return Context(meta_info=metainfo, media_info=mediainfo).to_dict()
     return schemas.Context()
@@ -53,25 +59,28 @@ async def recognize2(
     title: str,
     subtitle: Optional[str] = None,
     custom_words: Optional[str] = None,
+    source: Optional[MediaSource] = None,
 ) -> Any:
     """
     根据标题、副标题识别媒体信息 API_TOKEN认证（?token=xxx）
     """
     # 识别媒体信息
-    return await recognize(title, subtitle, custom_words)
+    return await recognize(title, subtitle, custom_words, source)
 
 
 @router.get(
     "/recognize_file", summary="识别媒体信息（文件）", response_model=schemas.Context
 )
 async def recognize_file(
-    path: str, _: schemas.TokenPayload = Depends(verify_token)
+    path: str,
+    source: Optional[MediaSource] = None,
+    _: schemas.TokenPayload = Depends(verify_token),
 ) -> Any:
     """
     根据文件路径识别媒体信息
     """
     # 识别媒体信息
-    context = await MediaChain().async_recognize_by_path(path)
+    context = await MediaChain().async_recognize_by_path(path, source=source)
     if context:
         return context.to_dict()
     return schemas.Context()
@@ -83,13 +92,15 @@ async def recognize_file(
     response_model=schemas.Context,
 )
 async def recognize_file2(
-    path: str, _: Annotated[str, Depends(verify_apitoken)]
+    path: str,
+    _: Annotated[str, Depends(verify_apitoken)],
+    source: Optional[MediaSource] = None,
 ) -> Any:
     """
     根据文件路径识别媒体信息 API_TOKEN认证（?token=xxx）
     """
     # 识别媒体信息
-    return await recognize_file(path)
+    return await recognize_file(path, source)
 
 
 @router.get("/search", summary="搜索媒体/人物信息", response_model=List[dict])
@@ -98,6 +109,7 @@ async def search(
     type: Optional[str] = "media",
     page: int = 1,
     count: int = 8,
+    source: Optional[MediaSource] = None,
     _: schemas.TokenPayload = Depends(verify_token),
 ) -> Any:
     """
@@ -114,7 +126,7 @@ async def search(
 
     media_chain = MediaChain()
     if type == "media":
-        _, medias = await media_chain.async_search(title=title)
+        _, medias = await media_chain.async_search(title=title, source=source)
         result = [media.to_dict() for media in medias] if medias else []
     elif type == "collection":
         collections = await media_chain.async_search_collections(name=title)
@@ -142,26 +154,64 @@ async def search(
 def scrape(
     fileitem: schemas.FileItem,
     storage: Optional[str] = "local",
+    media_source: Optional[MediaSource] = None,
+    media_id: Optional[str] = None,
+    type_name: Optional[MediaType] = None,
     _: schemas.TokenPayload = Depends(verify_token),
 ) -> Any:
     """
-    刮削媒体信息
+    刮削媒体信息，可按请求指定媒体数据源及其原生ID
+
+    :param fileitem: 待刮削文件项
+    :param storage: 文件所在存储
+    :param media_source: 请求级媒体数据源
+    :param media_id: 数据源原生ID
+    :param type_name: 媒体类型
+    :param _: Token校验
     """
     if not fileitem or not fileitem.path:
         return schemas.Response(success=False, message="刮削路径无效")
+    normalized_media_id = media_id.strip() if media_id else None
+    if normalized_media_id and not media_source:
+        return schemas.Response(
+            success=False, message="指定媒体ID时必须同时指定媒体数据源"
+        )
+    if normalized_media_id and not normalized_media_id.isdigit():
+        return schemas.Response(success=False, message="媒体ID格式无效")
+
     chain = MediaChain()
-    # 识别媒体信息
-    context = chain.recognize_by_path(fileitem.path, obtain_images=True)
-    if not context or not context.media_info:
+    if normalized_media_id:
+        meta_info = MetaInfoPath(Path(fileitem.path))
+        media_info = chain.recognize_media(
+            meta=meta_info,
+            mtype=type_name,
+            source=media_source,
+            mediaid=normalized_media_id,
+        )
+        if media_info:
+            media_info.scrape_source = media_source
+            chain.obtain_images(mediainfo=media_info)
+    else:
+        context = chain.recognize_by_path(
+            fileitem.path,
+            source=media_source,
+            obtain_images=True,
+        )
+        meta_info = context.meta_info if context else None
+        media_info = context.media_info if context else None
+
+    if not media_info:
         return schemas.Response(success=False, message="刮削失败，无法识别媒体信息")
+    if media_source:
+        media_info.scrape_source = media_source
     if storage == "local":
         if not Path(fileitem.path).exists():
             return schemas.Response(success=False, message="刮削路径不存在")
     # 手动刮削 (暂时使用同步版本，可以后续优化为异步)
     chain.scrape_metadata(
         fileitem=fileitem,
-        meta=context.meta_info,
-        mediainfo=context.media_info,
+        meta=meta_info,
+        mediainfo=media_info,
         overwrite=True,
     )
     return schemas.Response(success=True, message=f"{fileitem.path} 刮削完成")
@@ -294,7 +344,7 @@ async def detail(
     _: schemas.TokenPayload = Depends(verify_token),
 ) -> Any:
     """
-    根据媒体ID查询themoviedb或豆瓣媒体信息，type_name: 电影/电视剧
+    根据带来源前缀的媒体ID查询媒体信息，type_name: 电影/电视剧
     """
     mtype = MediaType(type_name)
     mediainfo = None
@@ -310,6 +360,10 @@ async def detail(
     elif mediaid.startswith("bangumi:"):
         mediainfo = await mediachain.async_recognize_media(
             bangumiid=int(mediaid[8:]), mtype=mtype
+        )
+    elif mediaid.startswith("anilist:"):
+        mediainfo = await mediachain.async_recognize_media(
+            anilistid=int(mediaid[8:]), mtype=mtype
         )
     else:
         # 广播事件解析媒体信息
