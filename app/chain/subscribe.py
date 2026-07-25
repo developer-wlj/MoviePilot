@@ -904,6 +904,16 @@ class SubscribeChain(ChainBase):
             metainfo.begin_season = season
         if not media_source and not media_id and mediaid:
             media_source, media_id = parse_media_key(mediaid)
+        resolved_source, resolved_media_id = resolve_media_identity(
+            source=media_source,
+            media_id=media_id,
+            tmdbid=tmdbid,
+            doubanid=doubanid,
+            bangumiid=bangumiid,
+            anilistid=anilistid,
+        )
+        if resolved_source and resolved_media_id:
+            media_source, media_id = resolved_source, resolved_media_id
         if any((media_id, tmdbid, doubanid, bangumiid, anilistid)):
             mediainfo = self.recognize_media(
                 meta=metainfo,
@@ -926,10 +936,11 @@ class SubscribeChain(ChainBase):
             if season is None:
                 season = meta.begin_season
 
-        # 使用名称识别兜底
+        # 明确来源时只允许在同一来源内按名称兜底，不能切换主识别源。
         if not mediainfo:
             mediainfo = MediaChain().recognize_by_meta(
                 metainfo,
+                source=media_source,
                 episode_group=episode_group,
                 obtain_images=False,
             )
@@ -1055,7 +1066,7 @@ class SubscribeChain(ChainBase):
             "anilistid": mediainfo.anilist_id,
             "media_source": media_source,
             "media_id": media_id,
-            "season": metainfo.begin_season,
+            "season": season,
             "poster": mediainfo.get_poster_image(),
             "backdrop": mediainfo.get_backdrop_image(),
             "vote": mediainfo.vote_average,
@@ -1099,6 +1110,16 @@ class SubscribeChain(ChainBase):
             metainfo.begin_season = season
         if not media_source and not media_id and mediaid:
             media_source, media_id = parse_media_key(mediaid)
+        resolved_source, resolved_media_id = resolve_media_identity(
+            source=media_source,
+            media_id=media_id,
+            tmdbid=tmdbid,
+            doubanid=doubanid,
+            bangumiid=bangumiid,
+            anilistid=anilistid,
+        )
+        if resolved_source and resolved_media_id:
+            media_source, media_id = resolved_source, resolved_media_id
         if any((media_id, tmdbid, doubanid, bangumiid, anilistid)):
             mediainfo = await self.async_recognize_media(
                 meta=metainfo,
@@ -1121,10 +1142,11 @@ class SubscribeChain(ChainBase):
             if season is None:
                 season = meta.begin_season
 
-        # 使用名称识别兜底
+        # 明确来源时只允许在同一来源内按名称兜底，不能切换主识别源。
         if not mediainfo:
             mediainfo = await MediaChain().async_recognize_by_meta(
                 metainfo,
+                source=media_source,
                 episode_group=episode_group,
                 obtain_images=False,
             )
@@ -1250,7 +1272,7 @@ class SubscribeChain(ChainBase):
             "anilistid": mediainfo.anilist_id,
             "media_source": media_source,
             "media_id": media_id,
-            "season": metainfo.begin_season,
+            "season": season,
             "poster": mediainfo.get_poster_image(),
             "backdrop": mediainfo.get_backdrop_image(),
             "vote": mediainfo.vote_average,
@@ -2835,7 +2857,12 @@ class SubscribeChain(ChainBase):
         # 统计订阅
         MoviePilotServerHelper.sub_done_async({
             "tmdbid": mediainfo.tmdb_id,
-            "doubanid": mediainfo.douban_id
+            "doubanid": mediainfo.douban_id,
+            "bangumiid": mediainfo.bangumi_id,
+            "anilistid": mediainfo.anilist_id,
+            "media_source": subscribe.media_source,
+            "media_id": subscribe.media_id,
+            "season": subscribe.season,
         })
 
     def remote_list(
@@ -3490,6 +3517,11 @@ class SubscribeChain(ChainBase):
                 {
                     "tmdbid": subscribe.tmdbid,
                     "doubanid": subscribe.doubanid,
+                    "bangumiid": subscribe.bangumiid,
+                    "anilistid": subscribe.anilistid,
+                    "media_source": subscribe.media_source,
+                    "media_id": subscribe.media_id,
+                    "season": subscribe.season,
                 }
             )
 
@@ -3537,7 +3569,12 @@ class SubscribeChain(ChainBase):
             # 统计订阅
             MoviePilotServerHelper.sub_done_async({
                 "tmdbid": subscribe.tmdbid,
-                "doubanid": subscribe.doubanid
+                "doubanid": subscribe.doubanid,
+                "bangumiid": subscribe.bangumiid,
+                "anilistid": subscribe.anilistid,
+                "media_source": subscribe.media_source,
+                "media_id": subscribe.media_id,
+                "season": subscribe.season,
             })
         # 重新发送消息
         self.remote_list(channel=channel, userid=userid, source=source)
