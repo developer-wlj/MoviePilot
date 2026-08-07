@@ -1,6 +1,10 @@
-name: MoviePilot Builder v2
+name: MoviePilot Builder v3
 on:
   workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
 
 jobs:
   Docker-build:
@@ -10,7 +14,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: v2
+          ref: v3
 
       - name: Release version
         id: release_version
@@ -23,9 +27,8 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: |
-            ${{ secrets.DOCKER_USERNAME }}/moviepilot-v2
-            ${{ secrets.DOCKER_USERNAME }}/moviepilot
-            ghcr.io/${{ github.repository }}
+            ${{ secrets.DOCKER_USERNAME }}/moviepilot-v3
+            ghcr.io/${{ github.repository }}-v3
           tags: |
             type=raw,value=${{ env.app_version }}
             type=raw,value=latest
@@ -59,8 +62,8 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=moviepilot-docker,version=2
-          cache-to: type=gha,scope=moviepilot-docker,mode=max,version=2
+          cache-from: type=gha,scope=moviepilot-v3-docker,version=2
+          cache-to: type=gha,scope=moviepilot-v3-docker,mode=max,version=2
 
       - name: Generate Release
         uses: softprops/action-gh-release@v2
