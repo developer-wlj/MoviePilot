@@ -10,6 +10,7 @@ from app.modules import _ModuleBase
 from app.modules.bangumi.bangumi import BangumiApi
 from app.schemas.types import MediaRecognizeType, MediaType, ModuleType
 from app.utils.http import RequestUtils
+from app.utils.media import is_media_source_enabled
 
 
 class BangumiModule(_ModuleBase):
@@ -92,6 +93,12 @@ class BangumiModule(_ModuleBase):
         :param source: 请求级识别数据源
         :return: 识别的媒体信息，包括剧集信息
         """
+        # Bangumi 只处理影视，不能在音乐模块未响应时接管音乐请求。
+        if (
+                kwargs.get("mtype") == MediaType.MUSIC
+                or getattr(meta, "type", None) == MediaType.MUSIC
+        ):
+            return None
         if not bangumiid and (
             not meta or (source or settings.RECOGNIZE_SOURCE) != "bangumi"
         ):
@@ -128,6 +135,12 @@ class BangumiModule(_ModuleBase):
         :param source: 请求级识别数据源
         :return: 识别的媒体信息，包括剧集信息
         """
+        # 与同步入口保持同一类型边界，音乐请求不得进入 Bangumi。
+        if (
+                kwargs.get("mtype") == MediaType.MUSIC
+                or getattr(meta, "type", None) == MediaType.MUSIC
+        ):
+            return None
         if not bangumiid and (
             not meta or (source or settings.RECOGNIZE_SOURCE) != "bangumi"
         ):
@@ -202,9 +215,7 @@ class BangumiModule(_ModuleBase):
         :param source: 请求级搜索数据源
         :return: 媒体信息
         """
-        if source and source != "bangumi":
-            return None
-        if not source and settings.SEARCH_SOURCE and "bangumi" not in settings.SEARCH_SOURCE:
+        if not is_media_source_enabled(source, "bangumi"):
             return None
         if not meta.name:
             return []
@@ -224,9 +235,7 @@ class BangumiModule(_ModuleBase):
         :param source: 请求级搜索数据源
         :return: 媒体信息
         """
-        if source and source != "bangumi":
-            return None
-        if not source and settings.SEARCH_SOURCE and "bangumi" not in settings.SEARCH_SOURCE:
+        if not is_media_source_enabled(source, "bangumi"):
             return None
         if not meta.name:
             return []

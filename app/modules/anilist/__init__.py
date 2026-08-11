@@ -9,6 +9,7 @@ from app.log import logger
 from app.modules import _ModuleBase
 from app.modules.anilist.anilist import AniListApi
 from app.schemas.types import MediaRecognizeType, MediaType, ModuleType
+from app.utils.media import is_media_source_enabled
 
 
 class AniListModule(_ModuleBase):
@@ -228,6 +229,12 @@ class AniListModule(_ModuleBase):
         :param source: 请求级识别数据源
         :return: 统一媒体信息
         """
+        # AniList 只处理动画影视，不能在音乐模块未响应时接管音乐请求。
+        if (
+                kwargs.get("mtype") == MediaType.MUSIC
+                or getattr(meta, "type", None) == MediaType.MUSIC
+        ):
+            return None
         if not anilistid and (not meta or not self._source_enabled(source)):
             return None
         info = self.anilist_api.detail(anilistid) if anilistid else self._match_by_meta(meta)
@@ -257,6 +264,12 @@ class AniListModule(_ModuleBase):
         :param source: 请求级识别数据源
         :return: 统一媒体信息
         """
+        # 与同步入口保持同一类型边界，音乐请求不得进入 AniList。
+        if (
+                kwargs.get("mtype") == MediaType.MUSIC
+                or getattr(meta, "type", None) == MediaType.MUSIC
+        ):
+            return None
         if not anilistid and (not meta or not self._source_enabled(source)):
             return None
         info = (
@@ -309,9 +322,7 @@ class AniListModule(_ModuleBase):
         :param source: 请求级搜索数据源
         :return: 统一媒体信息列表
         """
-        if source and source != "anilist":
-            return None
-        if not source and settings.SEARCH_SOURCE and "anilist" not in settings.SEARCH_SOURCE:
+        if not is_media_source_enabled(source, "anilist"):
             return None
         if not meta or not meta.name:
             return []
@@ -331,9 +342,7 @@ class AniListModule(_ModuleBase):
         :param source: 请求级搜索数据源
         :return: 统一媒体信息列表
         """
-        if source and source != "anilist":
-            return None
-        if not source and settings.SEARCH_SOURCE and "anilist" not in settings.SEARCH_SOURCE:
+        if not is_media_source_enabled(source, "anilist"):
             return None
         if not meta or not meta.name:
             return []
