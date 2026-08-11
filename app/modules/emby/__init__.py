@@ -3,6 +3,7 @@ from typing import Any, Dict, Generator, List, Optional, Tuple, Union
 from app import schemas
 from app.core.context import MediaInfo
 from app.core.event import eventmanager
+from app.helper.mediaserver import MusicMediaServerHelper
 from app.log import logger
 from app.modules import _MediaServerBase, _ModuleBase
 from app.modules.emby.emby import Emby
@@ -150,6 +151,17 @@ class EmbyModule(_ModuleBase, _MediaServerBase[Emby]):
             servers = self.get_instances().items()
         for name, s in servers:
             if not s:
+                continue
+            if mediainfo.type == MediaType.MUSIC:
+                matches = s.get_music(**MusicMediaServerHelper.search_params(mediainfo))
+                match = MusicMediaServerHelper.find_match(mediainfo, matches)
+                if match:
+                    return schemas.ExistMediaInfo(
+                        type=MediaType.MUSIC,
+                        server_type="emby",
+                        server=name,
+                        itemid=match.item_id,
+                    )
                 continue
             if mediainfo.type == MediaType.MOVIE:
                 if itemid:

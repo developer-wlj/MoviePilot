@@ -1,6 +1,6 @@
 from typing import Optional
 
-from sqlalchemy import Column, Integer, String, Float, JSON, Index, select
+from sqlalchemy import Column, Integer, String, Float, JSON, Index, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
@@ -29,6 +29,10 @@ class SubscribeHistory(Base):
     mediaid = Column(String, index=True)
     media_source = Column(String, index=True)
     media_id = Column(String, index=True)
+    # 音乐实体类型：recording 单曲、album 专辑
+    music_type = Column(String)
+    # 专辑预期总曲目数
+    total_tracks = Column(Integer)
     # 季号
     season = Column(Integer)
     # 海报
@@ -51,6 +55,16 @@ class SubscribeHistory(Base):
     resolution = Column(String)
     # 特效
     effect = Column(String)
+    # 音乐音质等级：hires/lossless/lossy，可用正则组合
+    audio_quality = Column(String)
+    # 音频格式，可用正则组合
+    audio_format = Column(String)
+    # 最低码率（bps）
+    min_bitrate = Column(Integer)
+    # 最低位深（bit）
+    min_bit_depth = Column(Integer)
+    # 最低采样率（Hz）
+    min_sample_rate = Column(Integer)
     # 总集数
     total_episode = Column(Integer)
     # 开始集数
@@ -65,6 +79,16 @@ class SubscribeHistory(Base):
     best_version = Column(Integer, default=0)
     # 是否只洗全集整包，开启后电视剧洗版不按单集下载
     best_version_full = Column(Integer, default=0)
+    # 完成时的整体优先级
+    current_priority = Column(Integer)
+    # 完成时的音乐格式
+    current_audio_format = Column(String)
+    # 完成时的音乐码率（bps）
+    current_bitrate = Column(Integer)
+    # 完成时的音乐位深（bit）
+    current_bit_depth = Column(Integer)
+    # 完成时的音乐采样率（Hz）
+    current_sample_rate = Column(Integer)
     # 洗版时已下载剧集的优先级状态，格式：{"1": 90, "2": 100}
     episode_priority = Column(JSON)
     # 保存路径
@@ -140,10 +164,17 @@ class SubscribeHistory(Base):
             doubanid: Optional[str] = None,
             bangumiid: Optional[int] = None,
             anilistid: Optional[int] = None,
+            music_type: Optional[str] = None,
     ):
         """按统一媒体身份优先级构造订阅历史查询条件。"""
         if media_source and media_id:
-            return (cls.media_source == media_source) & (cls.media_id == str(media_id))
+            condition = (cls.media_source == media_source) & (cls.media_id == str(media_id))
+            if music_type == "recording":
+                # 旧历史记录没有实体字段，历史语义等同单曲。
+                return condition & or_(cls.music_type == music_type, cls.music_type.is_(None))
+            if music_type:
+                return condition & (cls.music_type == music_type)
+            return condition
         if tmdbid is not None:
             return cls.tmdbid == tmdbid
         if doubanid:
@@ -162,10 +193,11 @@ class SubscribeHistory(Base):
             anilistid: Optional[int] = None, media_source: Optional[str] = None,
             media_id: Optional[str] = None, season: Optional[int] = None,
             episode_group: Optional[str] = None,
+            music_type: Optional[str] = None,
     ):
         """按媒体身份、季号及可选剧集组查询订阅历史。"""
         condition = cls._identity_condition(
-            media_source, media_id, tmdbid, doubanid, bangumiid, anilistid
+            media_source, media_id, tmdbid, doubanid, bangumiid, anilistid, music_type
         )
         if condition is None:
             return None
@@ -183,10 +215,11 @@ class SubscribeHistory(Base):
             anilistid: Optional[int] = None, media_source: Optional[str] = None,
             media_id: Optional[str] = None, season: Optional[int] = None,
             episode_group: Optional[str] = None,
+            music_type: Optional[str] = None,
     ):
         """异步按媒体身份、季号及可选剧集组查询订阅历史。"""
         condition = cls._identity_condition(
-            media_source, media_id, tmdbid, doubanid, bangumiid, anilistid
+            media_source, media_id, tmdbid, doubanid, bangumiid, anilistid, music_type
         )
         if condition is None:
             return None

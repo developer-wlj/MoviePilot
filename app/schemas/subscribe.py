@@ -48,6 +48,7 @@ class Subscribe(BaseModel):
     PUBLIC_WRITE_EXCLUDED_FIELDS: ClassVar[frozenset[str]] = frozenset({
         "id", "poster", "backdrop", "vote", "description", "lack_episode", "completed_episode",
         "note", "state", "last_update", "username", "current_priority", "episode_priority", "date",
+        "current_audio_format", "current_bitrate", "current_bit_depth", "current_sample_rate",
     })
 
     id: Optional[int] = None
@@ -66,6 +67,10 @@ class Subscribe(BaseModel):
     mediaid: Optional[str] = None
     media_source: Optional[str] = None
     media_id: Optional[str] = None
+    # 音乐实体类型：recording 单曲、album 专辑
+    music_type: Optional[str] = None
+    # 专辑预期总曲目数
+    total_tracks: Optional[int] = None
     # 季号
     season: Optional[int] = None
     # 海报
@@ -88,6 +93,16 @@ class Subscribe(BaseModel):
     resolution: Optional[str] = None
     # 特效
     effect: Optional[str] = None
+    # 音乐音质等级，可用 | 组合 hires/lossless/lossy
+    audio_quality: Optional[str] = None
+    # 音频格式正则，如 FLAC|ALAC
+    audio_format: Optional[str] = None
+    # 最低码率（bps）
+    min_bitrate: Optional[int] = None
+    # 最低位深（bit）
+    min_bit_depth: Optional[int] = None
+    # 最低采样率（Hz）
+    min_sample_rate: Optional[int] = None
     # 总集数
     total_episode: Optional[int] = 0
     # 开始集数
@@ -114,6 +129,14 @@ class Subscribe(BaseModel):
     best_version_full: Optional[int] = None
     # 当前优先级
     current_priority: Optional[int] = None
+    # 当前音乐版本格式
+    current_audio_format: Optional[str] = None
+    # 当前音乐版本码率（bps）
+    current_bitrate: Optional[int] = None
+    # 当前音乐版本位深（bit）
+    current_bit_depth: Optional[int] = None
+    # 当前音乐版本采样率（Hz）
+    current_sample_rate: Optional[int] = None
     # 洗版时已下载剧集的优先级状态
     episode_priority: Optional[Dict[str, int]] = None
     # 保存路径
@@ -132,6 +155,23 @@ class Subscribe(BaseModel):
     episode_group: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_empty_strings(cls, data: Any) -> Any:
+        """
+        将前端清空输入框后残留的空字符串视为未提供，移除该键由字段默认值兜底。
+
+        音乐等媒体类型的 tmdbid、season、total_episode、episode_priority 等数值或容器字段
+        在表单中常以空字符串提交，而 Pydantic 不会把空字符串自动转为 None，会直接抛出
+        校验异常导致接口返回 422。这里把空字符串键移除，等价于该字段未提供，从而复用字段
+        默认值（如 ``total_episode`` 回退为 0、``sites`` 回退为空列表）。
+        """
+        if isinstance(data, dict):
+            for key, value in list(data.items()):
+                if isinstance(value, str) and value == "":
+                    data.pop(key)
+        return data
 
     @model_validator(mode="after")
     def _fill_completed_episode(self) -> "Subscribe":
@@ -177,6 +217,10 @@ class SubscribeShare(BaseModel):
     anilistid: Optional[int] = None
     media_source: Optional[str] = None
     media_id: Optional[str] = None
+    # 音乐实体类型：recording 单曲、album 专辑
+    music_type: Optional[str] = None
+    # 专辑预期总曲目数
+    total_tracks: Optional[int] = None
     # 季号
     season: Optional[int] = None
     # 海报
@@ -197,6 +241,16 @@ class SubscribeShare(BaseModel):
     resolution: Optional[str] = None
     # 特效
     effect: Optional[str] = None
+    # 音乐音质等级
+    audio_quality: Optional[str] = None
+    # 音频格式
+    audio_format: Optional[str] = None
+    # 最低码率（bps）
+    min_bitrate: Optional[int] = None
+    # 最低位深（bit）
+    min_bit_depth: Optional[int] = None
+    # 最低采样率（Hz）
+    min_sample_rate: Optional[int] = None
     # 总集数
     total_episode: Optional[int] = 0
     # 时间

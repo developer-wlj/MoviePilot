@@ -9,10 +9,9 @@ from app.chain.media import MediaChain
 from app.chain.music import MusicChain
 from app.chain.tmdb import TmdbChain
 from app.core.config import settings
-from app.core.context import Context
-from app.core.music import MusicInfo
+from app.core.context import Context, MusicInfo
 from app.core.event import eventmanager
-from app.core.meta import MetaBase
+from app.core.meta import MetaBase, MetaMusic
 from app.core.metainfo import MetaInfo, MetaInfoPath
 from app.core.security import verify_token, verify_apitoken
 from app.db.models import User
@@ -123,6 +122,9 @@ async def recognize(
     """
     # 识别媒体信息，传入临时识别词时优先于系统配置的识别词生效
     metainfo = _build_recognize_metainfo(title, subtitle, custom_words)
+    # MusicBrainz 仅支持音乐识别，非音频后缀的标题统一按音乐元数据解析
+    if source == "musicbrainz" and not isinstance(metainfo, MetaMusic):
+        metainfo = MusicChain.parse_query(title)
     mediainfo = await MediaChain().async_recognize_by_meta(
         metainfo,
         source=source,
@@ -202,10 +204,10 @@ async def search(
     _: schemas.TokenPayload = Depends(verify_token),
 ) -> Any:
     """
-    模糊搜索媒体、合集或人物信息列表。
+    模糊搜索媒体、合集、人物或音乐信息列表。
 
     :param title: 搜索关键词
-    :param type: 搜索类型，支持 media、collection、person
+    :param type: 搜索类型，支持 media、music、collection、person
     :param page: 页码
     :param count: 每页数量
     :param source: 请求级搜索数据源
@@ -222,6 +224,13 @@ async def search(
         return obj.source
 
     media_chain = MediaChain()
+    if type == "music" or source == "musicbrainz":
+        # 音乐搜索统一入口，与影视搜索共用 /media/search
+        music_infos = await MusicChain().async_search(query=title, limit=count)
+        return [
+            info.to_dict()
+            for info in music_infos
+        ] if music_infos else []
     if type == "media":
         _, medias = await media_chain.async_search(title=title, source=source)
         result = [media.to_dict() for media in medias] if medias else []
@@ -288,13 +297,15 @@ def scrape(
             return schemas.Response(success=False, message="MusicBrainz 只能用于音乐刮削")
         music_info: Optional[MusicInfo] = None
         if normalized_media_id:
-            music_info = MusicChain().recognize(
+            # 音乐与影视共用统一识别入口，按媒体源和原生 ID 恢复音乐详情
+            music_info = MediaChain().recognize_media(
                 source=media_source or "musicbrainz",
-                media_id=normalized_media_id,
+                mediaid=normalized_media_id,
+                mtype=MediaType.MUSIC,
             )
             if not music_info:
                 return schemas.Response(success=False, message="刮削失败，无法识别音乐信息")
-        success, message = MusicChain().scrape_metadata(
+        success, message = MediaChain().scrape_music_metadata(
             fileitem=fileitem,
             mediainfo=music_info,
             overwrite=True,
@@ -513,6 +524,11 @@ async def detail(
     # 识别
     if mediainfo:
         await mediachain.async_obtain_images(mediainfo)
+        # 电视剧且有 TVDB ID 时，补充获取 slug 用于构建 TheTvDb 直达链接
+        if mediainfo.type == MediaType.TV and mediainfo.tvdb_id and not mediainfo.tvdb_slug:
+            slug = mediachain.tvdb_slug(mediainfo.tvdb_id)
+            if slug:
+                mediainfo.tvdb_slug = slug
         return mediainfo.to_dict()
 
     return schemas.MediaInfo()

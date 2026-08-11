@@ -15,9 +15,8 @@ from jinja2 import Template
 
 from app.core.cache import TTLCache
 from app.core.config import global_vars
-from app.core.context import MediaInfo, TorrentInfo
-from app.core.meta import MetaBase
-from app.core.music import MusicInfo, MusicMeta
+from app.core.context import MUSIC_ENTITY_ALBUM, MediaInfo, MusicInfo, TorrentInfo
+from app.core.meta import MetaBase, MetaMusic
 from app.db.systemconfig_oper import SystemConfigOper
 from app.log import logger
 from app.schemas.message import Notification
@@ -50,6 +49,7 @@ class TemplateContextBuilder:
             file_extension: Optional[str] = None,
             episodes_info: Optional[List[TmdbEpisode]] = None,
             include_raw_objects: bool = True,
+            aggregate_music_album: bool = False,
             **kwargs
     ) -> Dict[str, Any]:
         """
@@ -65,11 +65,14 @@ class TemplateContextBuilder:
         :param file_extension: 文件扩展名
         :param episodes_info: 当前季的全部集信息
         :param include_raw_objects: 是否在 dict 里附带原始对象引用（``__meta__`` 等）
+        :param aggregate_music_album: 是否按整专聚合（通知场景）：专辑实体
+            批量下载/入库只发一条通知，标题取专辑名且不展示单曲序号；
+            重命名等逐文件场景必须为 False 以保留每个文件的曲名和曲序
         :return: 渲染上下文字典
         """
         context: Dict[str, Any] = {}
         self._add_episode_details(context, meta, episodes_info)
-        self._add_media_info(context, mediainfo)
+        self._add_media_info(context, mediainfo, aggregate_music_album)
         self._add_transfer_info(context, transferinfo)
         self._add_torrent_info(context, torrentinfo)
         self._add_file_info(context, file_extension)
@@ -83,33 +86,81 @@ class TemplateContextBuilder:
         return {k: v for k, v in context.items() if v is not None}
 
     @classmethod
-    def _add_media_info(cls, context: Dict[str, Any], mediainfo: Optional[MediaInfo]) -> None:
+    def _add_media_info(
+            cls,
+            context: Dict[str, Any],
+            mediainfo: Optional[MediaInfo],
+            aggregate_music_album: bool = False,
+    ) -> None:
         """
         将 MediaInfo 中的标题、季年份、海报等业务字段就地写入 ``context``。
 
         会读取 ``context`` 中由 ``_add_episode_details`` 先填好的 ``season`` /
-        ``year`` / ``title_year`` 占位，保证电视剧场景下季/年优先沿用 meta 解析值。
+        ``year`` / ``title_year`` 占位，保证电视剧场景下季/年优先沿用 meta 解析值；
+        音乐场景保留文件标签解析出的曲目级字段，仅用识别结果补齐专辑级字段；
+        通知场景（``aggregate_music_album=True``）下整专批量以专辑为标题主体。
         """
         if not mediainfo:
             return
         if isinstance(mediainfo, MusicInfo):
+            # 专辑实体批量下载/入库只发一条通知：标题取专辑名、不展示单曲
+            # 序号；重命名等逐文件场景保持 False，继续使用文件自己的曲名和曲序。
+            is_album_context = (
+                    aggregate_music_album
+                    and mediainfo.music_type == MUSIC_ENTITY_ALBUM
+            )
+            if is_album_context and mediainfo.album:
+                title = cls.__convert_invalid_characters(mediainfo.album)
+            else:
+                title = context.get("title") or cls.__convert_invalid_characters(mediainfo.title)
+            artists = context.get("artists") or [
+                cls.__convert_invalid_characters(item) for item in mediainfo.artists
+            ]
+            artist = context.get("artist") or cls.__convert_invalid_characters(mediainfo.artist)
+            album = context.get("album") or cls.__convert_invalid_characters(mediainfo.album)
+            album_artist = context.get("album_artist") or cls.__convert_invalid_characters(
+                mediainfo.album_artist
+            )
+            year = (
+                mediainfo.year
+                if (is_album_context and mediainfo.year)
+                else (context.get("year") or mediainfo.year)
+            )
+            disc_number = context.get("disc_number") or mediainfo.disc_number
+            track_number = (
+                None
+                if is_album_context
+                else (context.get("track_number") or mediainfo.track_number)
+            )
             context.update({
                 "type": mediainfo.type.value,
-                "title": cls.__convert_invalid_characters(mediainfo.title),
-                "name": cls.__convert_invalid_characters(mediainfo.title),
-                "artists": [cls.__convert_invalid_characters(item) for item in mediainfo.artists],
-                "artist": cls.__convert_invalid_characters(mediainfo.artist),
-                "album": cls.__convert_invalid_characters(mediainfo.album),
-                "album_artist": cls.__convert_invalid_characters(mediainfo.album_artist),
-                "year": mediainfo.year or context.get("year"),
-                "title_year": mediainfo.title_year or context.get("title_year"),
-                "disc_number": mediainfo.disc_number,
-                "track_number": mediainfo.track_number,
-                "track": f"{mediainfo.track_number:02d}" if mediainfo.track_number else None,
-                "total_tracks": mediainfo.total_tracks,
-                "duration": mediainfo.duration,
-                "isrc": mediainfo.isrc,
-                "version": mediainfo.version,
+                "title": title,
+                "name": title if is_album_context else (context.get("name") or title),
+                "artists": artists,
+                "artist": artist,
+                "album": album,
+                "album_artist": album_artist,
+                "year": year,
+                "title_year": f"{title} ({year})" if title and year else title,
+                "disc_number": disc_number,
+                "track_number": track_number,
+                "track": f"{track_number:02d}" if track_number else None,
+                "total_tracks": context.get("total_tracks") or mediainfo.total_tracks,
+                "duration": context.get("duration") or mediainfo.duration,
+                "isrc": context.get("isrc") or mediainfo.isrc,
+                "version": context.get("version") or mediainfo.version,
+                "audio_format": context.get("audio_format") or mediainfo.audio_format,
+                "audio_lossless": context.get("audio_lossless")
+                if context.get("audio_lossless") is not None else mediainfo.audio_lossless,
+                "audio_quality": context.get("audio_quality") or mediainfo.audio_quality,
+                "audio_specs": context.get("audio_specs") or mediainfo.audio_specs,
+                "bit_depth": context.get("bit_depth") or mediainfo.bit_depth,
+                "sample_rate": context.get("sample_rate") or mediainfo.sample_rate,
+                "sample_rate_khz": context.get("sample_rate_khz")
+                or (f"{mediainfo.sample_rate / 1000:g}" if mediainfo.sample_rate else None),
+                "bitrate": context.get("bitrate") or mediainfo.bitrate,
+                "bitrate_kbps": context.get("bitrate_kbps")
+                or (round(mediainfo.bitrate / 1000) if mediainfo.bitrate else None),
                 "category": mediainfo.category,
                 "poster": mediainfo.get_poster_image(),
                 "backdrop": mediainfo.get_backdrop_image(),
@@ -196,7 +247,7 @@ class TemplateContextBuilder:
         """
         if not meta:
             return
-        if isinstance(meta, MusicMeta):
+        if isinstance(meta, MetaMusic):
             context.update({
                 "original_name": meta.org_string or meta.title,
                 "name": cls.__convert_invalid_characters(meta.title),
@@ -212,9 +263,14 @@ class TemplateContextBuilder:
                 "total_discs": meta.total_discs,
                 "total_tracks": meta.total_tracks,
                 "audio_format": meta.audio_format,
+                "audio_lossless": meta.audio_lossless,
+                "audio_quality": meta.audio_quality,
+                "audio_specs": meta.audio_specs,
                 "bit_depth": meta.bit_depth,
                 "sample_rate": meta.sample_rate,
+                "sample_rate_khz": f"{meta.sample_rate / 1000:g}" if meta.sample_rate else None,
                 "bitrate": meta.bitrate,
+                "bitrate_kbps": round(meta.bitrate / 1000) if meta.bitrate else None,
                 "duration": meta.duration,
                 "isrc": meta.isrc,
                 "version": meta.version,
@@ -459,19 +515,35 @@ class TemplateHelper(metaclass=SingletonClass):
             if not parsed:
                 raise ValueError("模板解析失败")
 
-            context = self.builder.build(**kwargs)
+            context = self.builder.build(aggregate_music_album=True, **kwargs)
             if not context:
                 raise ValueError("上下文构建失败")
 
-            rendered = self.render_with_context(parsed, context)
-            if not rendered:
-                raise ValueError("模板渲染失败")
+            if isinstance(parsed, dict):
+                # 字典模板按字段独立渲染，避免 JSON 序列化转义引号
+                # 破坏 {% if type == "音乐" %} 等带引号的 Jinja 表达式
+                rendered = json.dumps(
+                    {
+                        key: self.render_with_context(value, context)
+                        if isinstance(value, str) else value
+                        for key, value in parsed.items()
+                    },
+                    ensure_ascii=False,
+                )
+                if not rendered:
+                    raise ValueError("模板渲染失败")
+                processed = self.__process_formatted_string(rendered)
+            else:
+                rendered = self.render_with_context(parsed, context)
+                if not rendered:
+                    raise ValueError("模板渲染失败")
+                processed = rendered if template_type == 'string' else self.__process_formatted_string(rendered)
 
-            if rendered := rendered if template_type == 'string' else self.__process_formatted_string(rendered):
+            if processed:
                 # 缓存上下文
-                self.set_cache_context(rendered, context)
+                self.set_cache_context(processed, context)
                 # 返回渲染结果
-                return rendered
+                return processed
             return None
         except Exception as e:
             raise ValueError(f"模板处理失败: {str(e)}") from e
@@ -489,14 +561,14 @@ class TemplateHelper(metaclass=SingletonClass):
 
     @staticmethod
     def parse_template_content(template_content: Union[str, dict],
-                               template_type: Literal['string', 'dict', 'literal'] = None) -> Optional[str]:
+                               template_type: Literal['string', 'dict', 'literal'] = None) -> Optional[Union[str, dict]]:
         """
         解析模板字符
         :param template_content 模板格式字符
         :param template_type 模板字符类型
         """
 
-        def parse_literal(_template_content: str) -> str:
+        def parse_literal(_template_content: str) -> Union[dict, str]:
             """
             解析Python字面量
             """
@@ -505,7 +577,7 @@ class TemplateHelper(metaclass=SingletonClass):
                                                                                   str) else _template_content
                 if not isinstance(template_dict, dict):
                     raise ValueError("解析结果必须是一个字典")
-                return json.dumps(template_dict, ensure_ascii=False)
+                return template_dict
             except (ValueError, SyntaxError) as err:
                 raise ValueError(f"无效的Python字面量格式: {str(err)}")
 
@@ -513,14 +585,14 @@ class TemplateHelper(metaclass=SingletonClass):
             if template_type:
                 parse_map = {
                     'string': lambda x: str(x),
-                    'dict': lambda x: json.dumps(x, ensure_ascii=False),
+                    'dict': lambda x: x,
                     'literal': parse_literal
                 }
                 return parse_map[template_type](template_content)
 
             # 自动判断模板类型
             if isinstance(template_content, dict):
-                return json.dumps(template_content, ensure_ascii=False)
+                return template_content
             elif isinstance(template_content, str):
                 try:
                     json.loads(template_content)
@@ -631,7 +703,17 @@ class MessageTemplateHelper:
         """
         try:
             if template := MessageTemplateHelper._get_template(message):
-                rendered = TemplateHelper().render(template_content=template, *args, **kwargs)
+                try:
+                    rendered = TemplateHelper().render(
+                        template_content=template, *args, **kwargs
+                    )
+                except ValueError as err:
+                    logger.warning(
+                        f"通知模板 {message.ctype.value} 渲染失败，消息保持原样：{str(err)}"
+                    )
+                    return message
+                if not isinstance(rendered, dict):
+                    raise ValueError("通知模板渲染结果必须是字典")
                 for key, value in rendered.items():
                     if hasattr(message, key):
                         setattr(message, key, value)
@@ -645,8 +727,15 @@ class MessageTemplateHelper:
         """
         获取消息模板
         """
-        template_dict: dict[str, str] = SystemConfigOper().get(SystemConfigKey.NotificationTemplates)
-        return template_dict.get(message.ctype.value)
+        try:
+            template_dict = SystemConfigOper().get(SystemConfigKey.NotificationTemplates) or {}
+            if isinstance(template_dict, dict):
+                configured = template_dict.get(message.ctype.value)
+                if str(configured or "").strip() not in {"", "{}", "{ }"}:
+                    return configured
+        except Exception as err:
+            logger.warning(f"读取通知模板失败：{str(err)}")
+        return None
 
 
 class MessageQueueManager(metaclass=SingletonClass):

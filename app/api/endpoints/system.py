@@ -71,6 +71,7 @@ _PUBLIC_SYSTEM_CONFIG_KEYS = {
         SystemConfigKey.EpisodeFormatRuleTable,
         SystemConfigKey.DefaultMovieSubscribeConfig,
         SystemConfigKey.DefaultTvSubscribeConfig,
+        SystemConfigKey.DefaultMusicSubscribeConfig,
         SystemConfigKey.FollowSubscribers,
     )
 }

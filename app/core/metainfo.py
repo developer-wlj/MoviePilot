@@ -6,7 +6,7 @@ from typing import Tuple, List, Optional
 import regex as re
 
 from app.core.config import settings
-from app.core.meta import MetaAnime, MetaVideo, MetaBase
+from app.core.meta import MetaAnime, MetaMusic, MetaVideo, MetaBase
 from app.core.meta.infopath import (
     clear_parsed_title_for_parent_merge,
     should_use_parent_title_for_file_stem,
@@ -419,14 +419,25 @@ def _requires_python_metainfo(
     return contains_extended_id and not rust_accel.supports_extended_media_ids()
 
 
-def MetaInfo(title: str, subtitle: Optional[str] = None, custom_words: List[str] = None) -> MetaBase:
+def MetaInfo(title: str, subtitle: Optional[str] = None, custom_words: List[str] = None,
+             force_video: bool = False) -> MetaBase:
     """
     根据标题和副标题识别元数据
     :param title: 标题、种子名、文件名
     :param subtitle: 副标题、描述
     :param custom_words: 自定义识别词列表
-    :return: MetaAnime、MetaVideo
+    :param force_video: 音频后缀的影视附加轨（如评论音轨）强制按视频解析，用于影视整理场景
+    :return: MetaAnime、MetaVideo、MetaMusic
     """
+    # 音频文件名直接走音乐分支，避免进入影视季集解析，但影视附加音轨强制走视频解析
+    audio_suffix = Path(title).suffix.lower() if title else ""
+    if not force_video and audio_suffix in settings.RMT_AUDIOEXT:
+        return MetaMusic(
+            org_string=title,
+            title=Path(title).stem,
+            audio_format=audio_suffix.lstrip(".").upper() or None,
+            parse_title=True,
+        )
     rust_meta = None
     if not _requires_python_metainfo(title, custom_words):
         rust_meta = _meta_from_rust(
@@ -443,12 +454,24 @@ def MetaInfo(title: str, subtitle: Optional[str] = None, custom_words: List[str]
     return meta
 
 
-def MetaInfoPath(path: Path, custom_words: List[str] = None) -> MetaBase:
+def MetaInfoPath(path: Path, custom_words: List[str] = None, force_video: bool = False) -> MetaBase:
     """
     根据路径识别元数据
     :param path: 路径
     :param custom_words: 自定义识别词列表
+    :param force_video: 音频后缀的影视附加轨（如评论音轨）强制按视频解析，用于影视整理场景
     """
+    # 音频文件直接构造音乐元数据，不参与父目录季集合并，影视附加音轨强制走视频解析
+    audio_suffix = path.suffix.lower()
+    if not force_video and audio_suffix in settings.RMT_AUDIOEXT:
+        music_meta = MetaMusic(
+            org_string=path.name,
+            title=path.stem,
+            audio_format=audio_suffix.lstrip(".").upper() or None,
+            parse_title=True,
+        )
+        # 无标签音频只能依靠文件名和目录结构，补充曲序、碟号、歌手和专辑线索
+        return music_meta.apply_path_context(path)
     path_context = " ".join(
         [path.name, path.parent.name, path.parent.parent.name]
     )

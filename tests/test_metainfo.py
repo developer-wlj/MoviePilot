@@ -3,7 +3,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
+
 from app.core.metainfo import MetaInfo, MetaInfoPath, find_metainfo
+from app.core.meta import MetaBase, MetaMusic
 from app.core.meta.metaanime import MetaAnime
 from app.helper.torrent import TorrentHelper
 from app.schemas.types import MediaType
@@ -172,6 +175,99 @@ def test_python_metainfo_fallback_preserves_xxx_movie_title():
     assert meta.audio_encode == "DDP 5.1"
 
 
+RESOURCE_TYPE_CASES = [
+    (
+        "They.Will.Kill.You.2026.2160p.UHD.BluRay.Remux."
+        "HEVC.DV.TrueHD.7.1.Atmos.mkv",
+        "UHD BluRay REMUX",
+    ),
+    (
+        "Movie.2026.2160p.UHD.Blu-ray.Remux.BDRip.HEVC.mkv",
+        "UHD BluRay REMUX BDRIP",
+    ),
+    (
+        "Movie.2026.2160p.UHD.BluRay.UHD.Remux.Remux.HEVC.mkv",
+        "UHD BluRay REMUX",
+    ),
+    (
+        "Movie.2026.1080p.WEB-DL.WEBRip.Remux.H264.mkv",
+        "WEB-DL WEBRip REMUX",
+    ),
+]
+
+
+@pytest.mark.parametrize(("title", "expected"), RESOURCE_TYPE_CASES)
+def test_metainfo_preserves_all_resource_types(title, expected):
+    """默认解析入口应按顺序保留并去重所有受支持的资源类型。"""
+    meta = MetaInfo(title)
+
+    assert meta.resource_type == expected
+    assert meta.edition.startswith(expected)
+    assert expected in meta.resource_term
+
+
+@pytest.mark.parametrize(("title", "expected"), RESOURCE_TYPE_CASES)
+def test_python_metainfo_preserves_all_resource_types(title, expected):
+    """Python 兜底解析应按顺序保留并去重所有受支持的资源类型。"""
+    with patch("app.core.metainfo.rust_accel.parse_metainfo", return_value=None):
+        meta = MetaInfo(title)
+
+    assert meta.resource_type == expected
+    assert meta.edition.startswith(expected)
+    assert expected in meta.resource_term
+
+
+def test_metainfo_routes_audio_filename_to_music():
+    """音频文件名应直接走音乐分支并完成艺术家/曲名拆分，不再进入影视季集解析。"""
+    meta = MetaInfo("周杰伦 - 晴天.flac")
+
+    assert isinstance(meta, MetaMusic)
+    assert isinstance(meta, MetaBase)
+    assert meta.type == MediaType.MUSIC
+    assert meta.org_string == "周杰伦 - 晴天.flac"
+    assert meta.title == "晴天"
+    assert meta.artists == ["周杰伦"]
+    assert meta.audio_format == "FLAC"
+    # 音乐没有季集信息，兼容通用访问
+    assert meta.season is None
+    assert meta.episode is None
+    assert meta.apply_words == []
+
+
+def test_metainfo_routes_audio_path_to_music_without_parent_merge():
+    """音频路径应直接构造音乐元数据，不参与影视季集合并，并拆分歌手与曲名。"""
+    meta = MetaInfoPath(Path("/music/叶惠美/周杰伦 - 晴天.flac"))
+
+    assert isinstance(meta, MetaMusic)
+    assert meta.type == MediaType.MUSIC
+    assert meta.org_string == "周杰伦 - 晴天.flac"
+    # 文件名中的歌手与曲名应拆分，便于无标签音频搜索识别
+    assert meta.title == "晴天"
+    assert meta.artists == ["周杰伦"]
+    assert meta.audio_format == "FLAC"
+
+
+def test_metainfo_keeps_video_path_for_non_audio_files():
+    """非音频文件应继续走影视识别链，不受音频路由影响。"""
+    meta = MetaInfoPath(Path("/movies/Inception (2010)/Inception.2010.1080p.mkv"))
+
+    assert not isinstance(meta, MetaMusic)
+    assert meta.type != MediaType.MUSIC
+
+
+def test_metainfo_music_round_trip_preserves_fields():
+    """音频解析结果字典往返后应保留音乐字段。"""
+    meta = MetaInfoPath(Path("/music/周杰伦 - 晴天.flac"))
+    payload = meta.to_dict()
+    restored = MetaMusic.from_dict(payload)
+
+    assert restored.type == MediaType.MUSIC
+    assert restored.title == "晴天"
+    assert restored.artists == ["周杰伦"]
+    assert restored.audio_format == "FLAC"
+    assert payload["type"] == "音乐"
+
+
 def test_python_subtitle_episode_range_fin_with_chinese_season():
     """Python 兜底解析应识别副标题中 [01-26Fin] 格式的集数范围（#6103）。"""
     with patch("app.core.metainfo.rust_accel.parse_metainfo", return_value=None):
@@ -264,6 +360,21 @@ def test_custom_words_replace_then_episode_offset():
     assert meta.name == "新名"
     assert meta.episode == "E04"
     assert meta.apply_words == custom_words
+
+
+def test_get_torrent_episodes_applies_custom_words():
+    """种子文件集数解析应使用订阅识别词完成跨季集数映射。"""
+    custom_words = [
+        "A.Will.Eternal.S04 => 一念永恒{[tmdbid=107371;type=tv]}S01 "
+        "&& S01 <> 2160p >> EP+165"
+    ]
+
+    episodes = TorrentHelper.get_torrent_episodes(
+        ["A.Will.Eternal.S04E05.2026.2160p.WEB-DL.mkv"],
+        custom_words=custom_words,
+    )
+
+    assert episodes == [170]
 
 
 def test_custom_words_episode_offset_supports_multiplication_expression():

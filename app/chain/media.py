@@ -1,19 +1,31 @@
 import os
+import re
 from copy import deepcopy
+from dataclasses import dataclass
 from pathlib import Path
-from tempfile import NamedTemporaryFile
+from tempfile import NamedTemporaryFile, TemporaryDirectory
 from threading import Lock
-from typing import Optional, List, Tuple, Union
+from typing import TYPE_CHECKING, List, Optional, Tuple, Union
 
 from app import schemas
 from app.chain import ChainBase
 from app.chain.storage import StorageChain
+from app.core.cache import cached
 from app.core.config import settings
-from app.core.context import Context, MediaInfo
+from app.core.context import (
+    MUSIC_ENTITY_ALBUM,
+    MUSIC_ENTITY_RECORDING,
+    Context,
+    MediaInfo,
+    MusicAlbumInfo,
+    MusicInfo,
+    MusicLyrics,
+)
 from app.core.event import eventmanager, Event
-from app.core.meta import MetaBase
+from app.core.meta import MetaBase, MetaMusic
 from app.core.metainfo import MetaInfo, MetaInfoPath
 from app.db.systemconfig_oper import SystemConfigOper
+from app.helper.audio import AudioMetadataHelper
 from app.log import logger
 from app.schemas import FileItem
 from app.schemas.types import (
@@ -30,11 +42,22 @@ from app.utils.mixins import ConfigReloadMixin
 from app.utils.singleton import Singleton
 from app.utils.string import StringUtils
 
+if TYPE_CHECKING:
+    from app.chain.music import MusicChain
+
 recognize_lock = Lock()
 scraping_lock = Lock()
 
 current_umask = os.umask(0)
 os.umask(current_umask)
+
+
+@dataclass
+class _MusicScrapeFileResult:
+    """记录单个音轨的标签刮削结果和歌词处理状态。"""
+
+    metadata_success: bool = True
+    lyrics_status: str = "disabled"
 
 
 class ScrapingOption:
@@ -140,6 +163,7 @@ class ScrapingConfig:
                 ("tv", ["nfo", "poster", "backdrop", "logo", "banner", "thumb", "clearart", "landscape"]),
                 ("season", ["nfo", "poster", "backdrop", "banner", "thumb", "landscape"]),
                 ("episode", ["nfo", "thumb"]),
+                ("music", ["nfo", "poster", "lyrics"]),
             ]
             for md in mds
         ]
@@ -173,6 +197,12 @@ class MediaChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
         "thumb": ["landscape"],
         "landscape": ["thumb"],
     }
+
+    MUSIC_LYRICS_EXTENSIONS = (".lrc", ".txt")
+    _music_track_prefix_pattern = re.compile(
+        r"^\s*(?:(?:cd|disc)\s*\d+\s*[-_. ]+)?(?:\d+\s*[-_. ]+)+",
+        flags=re.IGNORECASE,
+    )
 
     def __init__(self):
         super().__init__()
@@ -557,7 +587,9 @@ class MediaChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
 
     @staticmethod
     def select_recognize_source(
-            log_name: str, log_context: str, native_fn, plugin_fn
+            log_name: str, log_context: str, native_fn, plugin_fn,
+            is_recognized=None,
+            plugin_event: ChainEventType = ChainEventType.NameRecognize,
     ) -> Optional[MediaInfo]:
         """
         选择识别模式，插件优先或原生优先
@@ -566,27 +598,39 @@ class MediaChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
         :param log_context: 用于日志“未识别到...的媒体信息”处的上下文（如 path 或 title）
         :param native_fn: 原生识别函数
         :param plugin_fn: 插件识别函数
+        :param is_recognized: 判定识别结果是否有效的谓词；音乐原生兜底结果无远端身份，
+            需视为未识别才会请求辅助识别，影视默认按非空判定
+        :param plugin_event: 辅助识别对应的链式事件类型，音乐使用音乐名称识别事件
         """
+        if is_recognized is None:
+            is_recognized = lambda result: bool(result)
         mediainfo = None
-        plugin_available = eventmanager.check(ChainEventType.NameRecognize)
+        plugin_available = eventmanager.check(plugin_event)
         if settings.RECOGNIZE_PLUGIN_FIRST and plugin_available:
             # 插件优先
             logger.info(f"插件识别优先模式已开启。请求辅助识别，标题：{log_name} ...")
-            mediainfo = plugin_fn()
-            if not mediainfo:
+            helped = plugin_fn()
+            if is_recognized(helped):
+                mediainfo = helped
+            else:
                 logger.info(
                     f"辅助识别未识别到 {log_context} 的媒体信息，尝试使用原生识别 ..."
                 )
                 mediainfo = native_fn()
+                # 辅助结果不采信时保留原生兜底，避免丢失已有识别结果（音乐原生兜底恒非空）
+                if helped and not mediainfo:
+                    mediainfo = helped
         else:
             # 原生优先
             logger.info(f"开始识别标题：{log_name} ...")
             mediainfo = native_fn()
-            if not mediainfo and plugin_available:
+            if not is_recognized(mediainfo) and plugin_available:
                 logger.info(
-                    f"未识别到 {log_context} 的媒体信息，尝试使用辅助识别 ..."
+                    f"原生识别未识别到 {log_context} 的媒体信息，尝试使用辅助识别 ..."
                 )
-                mediainfo = plugin_fn()
+                helped = plugin_fn()
+                if is_recognized(helped):
+                    mediainfo = helped
         return mediainfo
 
     def recognize_by_meta(
@@ -677,7 +721,7 @@ class MediaChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
             mediainfo.category = tmdb_media.category
         if not mediainfo.genre_ids:
             mediainfo.genre_ids = list(tmdb_media.genre_ids or [])
-        for field in ("imdb_id", "tvdb_id", "collection_id"):
+        for field in ("imdb_id", "tvdb_id", "tvdb_slug", "collection_id"):
             if not getattr(mediainfo, field, None):
                 setattr(mediainfo, field, getattr(tmdb_media, field, None))
         return mediainfo
@@ -743,6 +787,11 @@ class MediaChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
             return None
         title = metainfo.title
         share_meta = deepcopy(metainfo)
+        # 音乐原生兜底结果无远端身份，需按是否取得身份判定，才会请求辅助识别
+        is_music = isinstance(metainfo, MetaMusic)
+        is_recognized = (
+            (lambda result: bool(result and result.source)) if is_music else None
+        )
 
         def native_recognize() -> Optional[MediaInfo]:
             """使用请求级数据源执行原生识别。"""
@@ -763,12 +812,17 @@ class MediaChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
                 episode_group=episode_group,
             )
 
-        # 按 config 中设置的识别顺序识别
+        # 按 config 中设置的识别顺序识别，影视与音乐共用同一选择流程
         mediainfo = self.select_recognize_source(
             log_name=title,
             log_context=title,
             native_fn=native_recognize,
             plugin_fn=plugin_recognize,
+            is_recognized=is_recognized,
+            plugin_event=(
+                ChainEventType.MusicNameRecognize if is_music
+                else ChainEventType.NameRecognize
+            ),
         )
         if not mediainfo:
             return None
@@ -799,7 +853,7 @@ class MediaChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
             episode_group: Optional[str] = None,
     ) -> Optional[MediaInfo]:
         """
-        请求辅助识别，返回媒体信息
+        请求辅助识别，返回媒体信息；影视与音乐共用同一流程，仅要素事件与重组方式不同
 
         :param title: 标题
         :param org_meta: 原始元数据
@@ -807,6 +861,14 @@ class MediaChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
         :param source: 请求级识别数据源
         :param episode_group: 剧集组
         """
+        # 音乐标题要素（曲名/艺术家/专辑/年份）与影视不同，走专用名称识别事件
+        if isinstance(org_meta, MetaMusic):
+            return self._recognize_music_help(
+                title=title,
+                org_meta=org_meta,
+                share_meta=share_meta,
+                source=source,
+            )
         # 发送请求事件，等待结果
         result: Event = eventmanager.send_event(
             ChainEventType.NameRecognize,
@@ -851,6 +913,89 @@ class MediaChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
             share_meta=share_meta,
             episode_group=episode_group,
         )
+
+    def _recognize_music_help(
+            self,
+            title: str,
+            org_meta: MetaMusic,
+            share_meta: MetaBase = None,
+            source: Optional[str] = None,
+    ) -> Optional[MediaInfo]:
+        """
+        请求插件辅助识别音乐标题要素，并按修正后的要素重新匹配媒体信息
+
+        :param title: 原始音乐标题
+        :param org_meta: 原始音乐元数据
+        :param share_meta: 共享识别查询/上报使用的原始元数据
+        :param source: 请求级识别数据源
+        """
+        # 发送音乐名称识别事件，等待插件返回标题要素
+        result: Event = eventmanager.send_event(
+            ChainEventType.MusicNameRecognize,
+            {
+                "title": title,
+                "artist": org_meta.artist,
+                "album": org_meta.album,
+                "year": org_meta.year,
+            },
+        )
+        if not result:
+            return None
+        event_data = result.event_data or {}
+        logger.info(f"获取到音乐辅助识别结果：{event_data}")
+        name, artist, album, year = self._parse_music_recognize_event(event_data)
+        if not name:
+            return None
+        # 辅助识别要素与原始一致时无需重新匹配
+        if (
+                name == org_meta.title
+                and (not artist or artist in org_meta.artists)
+                and (not album or album == org_meta.album)
+                and (not year or year == org_meta.year)
+        ):
+            logger.info("音乐辅助识别与原始识别结果一致，无需重新匹配媒体信息")
+            return None
+        logger.info("音乐辅助识别结果与原始识别结果不一致，重新匹配媒体信息 ...")
+        new_meta = MetaMusic(
+            org_string=org_meta.org_string,
+            title=name,
+            artists=[artist] if artist else list(org_meta.artists or []),
+            album=album or org_meta.album,
+            album_artist=artist or org_meta.album_artist,
+            year=year or org_meta.year,
+            isrc=org_meta.isrc,
+        )
+        # 重新识别，仅采信取得远端身份的结果，否则由选择流程保留原生兜底
+        mediainfo = self.recognize_media(
+            meta=new_meta,
+            source=source,
+            share_meta=share_meta,
+        )
+        return mediainfo if mediainfo and mediainfo.source else None
+
+    @staticmethod
+    def _parse_music_recognize_event(
+            event_data: dict,
+    ) -> Tuple[Optional[str], Optional[str], Optional[str], Optional[int]]:
+        """
+        解析音乐辅助识别返回的标题要素，曲名为空或未知时返回 None
+        """
+        name = None
+        if event_data.get("name"):
+            name = str(event_data["name"]).split("/")[0].strip().replace(".", " ")
+        artist = None
+        if event_data.get("artist"):
+            artist = str(event_data["artist"]).split("/")[0].strip()
+        album = None
+        if event_data.get("album"):
+            album = str(event_data["album"]).split("/")[0].strip()
+        year = None
+        year_text = str(event_data.get("year") or "").split("/")[0].strip()
+        if year_text.isdigit():
+            year = int(year_text)
+        if not name or name == "Unknown":
+            name = None
+        return name, artist, album, year
 
     def recognize_by_path(
             self,
@@ -1057,6 +1202,16 @@ class MediaChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
 
         # 刮削锁
         with scraping_lock:
+            # 音乐刮削与影视共用 MediaChain 入口，按 ScrapingConfig 的音乐项写入标签与封面
+            if getattr(mediainfo, "type", None) == MediaType.MUSIC:
+                _, message = self.scrape_music_metadata(
+                    fileitem=fileitem,
+                    mediainfo=mediainfo,
+                    overwrite=overwrite,
+                )
+                if message:
+                    logger.info(f"音乐刮削：{message}")
+                return
             # 检查文件项是否存在
             if not self.storagechain.get_item(fileitem):
                 logger.warn(f"文件项不存在：{fileitem.path}")
@@ -1376,6 +1531,516 @@ class MediaChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
 
         logger.info(f"{filepath.name} 刮削完成")
 
+    def scrape_music_metadata(
+            self,
+            fileitem: schemas.FileItem,
+            mediainfo: Optional[MusicInfo] = None,
+            overwrite: bool = True,
+    ) -> tuple[bool, str]:
+        """为音频文件或目录写入音乐标签和封面，应用系统刮削策略，复用现有存储下载上传能力。
+
+        音乐刮削被收拢到 MediaChain 统一分发，避免音乐链反向依赖媒体链造成嵌套。
+        """
+        files = self._music_audio_fileitems(fileitem)
+        if not files:
+            return False, "刮削路径中没有支持的音频文件"
+        if (
+                mediainfo
+                and len(files) > 1
+                and mediainfo.music_type != MUSIC_ENTITY_ALBUM
+        ):
+            return False, "单曲 MusicBrainz ID 仅支持刮削单个音频文件，整目录请选择专辑"
+
+        # 三类音乐产物使用独立策略，允许只下载歌词而不改写音频标签。
+        nfo_option = self.scraping_policies.option("music", "nfo")
+        poster_option = self.scraping_policies.option("music", "poster")
+        lyrics_option = self.scraping_policies.option("music", "lyrics")
+        if nfo_option.is_skip and poster_option.is_skip and lyrics_option.is_skip:
+            return False, "音乐标签、封面和歌词刮削策略均为跳过"
+
+        with_cover = not poster_option.is_skip
+        shared_cover = (
+            self._download_music_cover(mediainfo.cover_url)
+            if mediainfo and with_cover
+            else None
+        )
+        music_chain = None
+        album_info = None
+        if not lyrics_option.is_skip:
+            # 延迟导入避免 MediaChain 与 MusicChain 在模块加载阶段形成双向依赖。
+            from app.chain.music import MusicChain
+
+            music_chain = MusicChain()
+            if (
+                    mediainfo
+                    and mediainfo.music_type == MUSIC_ENTITY_ALBUM
+                    and mediainfo.source
+                    and mediainfo.media_id
+            ):
+                album_info = music_chain.album(
+                    source=mediainfo.source,
+                    media_id=mediainfo.media_id,
+                )
+
+        failures: list[str] = []
+        lyrics_counts = {
+            "saved": 0,
+            "existing": 0,
+            "missing": 0,
+            "failed": 0,
+        }
+        metadata_failure_label = (
+            "音乐标签和封面"
+            if not nfo_option.is_skip and with_cover
+            else "音乐标签" if not nfo_option.is_skip else "封面"
+        )
+        for audio_item in files:
+            result = self._scrape_music_file(
+                audio_item,
+                mediainfo,
+                write_tags=not nfo_option.is_skip,
+                tag_overwrite=overwrite or nfo_option.is_overwrite,
+                with_cover=with_cover,
+                cover_overwrite=overwrite or poster_option.is_overwrite,
+                cover=shared_cover,
+                lyrics_option=lyrics_option,
+                lyrics_overwrite=overwrite or lyrics_option.is_overwrite,
+                music_chain=music_chain,
+                album_info=album_info,
+            )
+            if not result.metadata_success:
+                failures.append(
+                    f"{audio_item.name or audio_item.path} {metadata_failure_label}写入失败"
+                )
+            if result.lyrics_status in lyrics_counts:
+                lyrics_counts[result.lyrics_status] += 1
+            if result.lyrics_status == "failed":
+                failures.append(f"{audio_item.name or audio_item.path} 歌词保存失败")
+
+        message = f"已刮削 {len(files)} 个音频文件"
+        if not lyrics_option.is_skip:
+            message += (
+                f"，歌词新增 {lyrics_counts['saved']} 首"
+                f"、已存在 {lyrics_counts['existing']} 首"
+                f"、未匹配 {lyrics_counts['missing']} 首"
+            )
+            if lyrics_counts["failed"]:
+                message += f"、失败 {lyrics_counts['failed']} 首"
+        if failures:
+            return False, f"{message}；{'；'.join(failures[:3])}"
+        return True, message
+
+    @staticmethod
+    @cached(maxsize=64, ttl=settings.CONF.meta, skip_none=True)
+    def _request_music_cover(url: str) -> Optional[tuple[Optional[bytes], str]]:
+        """下载并缓存音乐封面；仅稳定 404 与成功响应进入有界缓存。"""
+        response = RequestUtils(
+            proxies=settings.PROXY,
+            ua=settings.NORMAL_USER_AGENT,
+            timeout=20,
+        ).get_res(url)
+        if response is None:
+            return None
+        try:
+            if response.status_code == 404:
+                return None, "image/jpeg"
+            if response.status_code != 200:
+                logger.warning(f"音乐封面下载失败：{response.status_code} {url}")
+                return None
+            mime = (response.headers.get("Content-Type") or "image/jpeg").split(";", 1)[0]
+            return response.content, mime
+        finally:
+            response.close()
+
+    @staticmethod
+    def _download_music_cover(url: Optional[str]) -> tuple[Optional[bytes], str]:
+        """通过有界缓存下载音乐封面，并统一返回图片内容与 MIME 类型。"""
+        if not url:
+            return None, "image/jpeg"
+        return MediaChain._request_music_cover(url) or (None, "image/jpeg")
+
+    @staticmethod
+    def _is_music_audio_file(path: str) -> bool:
+        """判断路径是否指向系统支持的音频文件。"""
+        return Path(path).suffix.lower() in settings.RMT_AUDIOEXT
+
+    def _music_audio_fileitems(self, fileitem: schemas.FileItem) -> list[schemas.FileItem]:
+        """展开待刮削目录并过滤系统支持的音频文件。"""
+        if fileitem.type != "dir":
+            return [fileitem] if self._is_music_audio_file(fileitem.path or "") else []
+        return [
+            item
+            for item in self.storagechain.list_files(fileitem, recursion=True) or []
+            if item.type == "file" and self._is_music_audio_file(item.path or "")
+        ]
+
+    def _scrape_music_file(
+            self,
+            fileitem: schemas.FileItem,
+            mediainfo: Optional[MusicInfo],
+            write_tags: bool,
+            tag_overwrite: bool,
+            with_cover: bool = True,
+            cover_overwrite: bool = True,
+            cover: Optional[tuple[Optional[bytes], str]] = None,
+            lyrics_option: Optional[ScrapingOption] = None,
+            lyrics_overwrite: bool = False,
+            music_chain: Optional["MusicChain"] = None,
+            album_info: Optional[MusicAlbumInfo] = None,
+    ) -> _MusicScrapeFileResult:
+        """下载单个音轨并执行标签、封面和歌词刮削，远端产物写回原目录。"""
+        storage = self.storagechain
+        download_failure = _MusicScrapeFileResult(
+            metadata_success=not (write_tags or with_cover),
+            lyrics_status=(
+                "failed"
+                if lyrics_option and not lyrics_option.is_skip and music_chain
+                else "disabled"
+            ),
+        )
+        if fileitem.storage == "local":
+            local_path = storage.download_file(fileitem)
+            if not local_path:
+                return download_failure
+            return self._apply_music_file_scrape(
+                fileitem=fileitem,
+                local_path=local_path,
+                mediainfo=mediainfo,
+                write_tags=write_tags,
+                tag_overwrite=tag_overwrite,
+                with_cover=with_cover,
+                cover_overwrite=cover_overwrite,
+                cover=cover,
+                lyrics_option=lyrics_option,
+                lyrics_overwrite=lyrics_overwrite,
+                music_chain=music_chain,
+                album_info=album_info,
+            )
+
+        with TemporaryDirectory(prefix="moviepilot-music-scrape-") as temp_dir:
+            local_path = storage.download_file(fileitem, path=Path(temp_dir))
+            if not local_path:
+                return download_failure
+            return self._apply_music_file_scrape(
+                fileitem=fileitem,
+                local_path=local_path,
+                mediainfo=mediainfo,
+                write_tags=write_tags,
+                tag_overwrite=tag_overwrite,
+                with_cover=with_cover,
+                cover_overwrite=cover_overwrite,
+                cover=cover,
+                lyrics_option=lyrics_option,
+                lyrics_overwrite=lyrics_overwrite,
+                music_chain=music_chain,
+                album_info=album_info,
+            )
+
+    def _apply_music_file_scrape(
+            self,
+            fileitem: schemas.FileItem,
+            local_path: Path,
+            mediainfo: Optional[MusicInfo],
+            write_tags: bool,
+            tag_overwrite: bool,
+            with_cover: bool,
+            cover_overwrite: bool,
+            cover: Optional[tuple[Optional[bytes], str]],
+            lyrics_option: Optional[ScrapingOption],
+            lyrics_overwrite: bool,
+            music_chain: Optional["MusicChain"],
+            album_info: Optional[MusicAlbumInfo],
+    ) -> _MusicScrapeFileResult:
+        """在本地音轨副本上执行刮削，并将变更后的音频和歌词写回目标存储。"""
+        scrape_info = self._resolve_music_scrape_info(local_path, mediainfo)
+        metadata_requested = write_tags or with_cover
+        metadata_success = True
+        if metadata_requested:
+            metadata_success = self._write_music_metadata(
+                local_path=local_path,
+                mediainfo=mediainfo,
+                tag_overwrite=tag_overwrite,
+                write_tags=write_tags,
+                with_cover=with_cover,
+                cover_overwrite=cover_overwrite,
+                cover=cover,
+                scrape_info=scrape_info,
+            )
+
+        lyrics_status = self._scrape_music_lyrics(
+            fileitem=fileitem,
+            local_path=local_path,
+            scrape_info=scrape_info,
+            lyrics_option=lyrics_option,
+            overwrite=lyrics_overwrite,
+            music_chain=music_chain,
+            album_info=album_info,
+        )
+
+        if fileitem.storage != "local" and metadata_requested and metadata_success:
+            parent = self.storagechain.get_parent_item(fileitem)
+            if not parent:
+                logger.warning(f"无法获取远端音频父目录：{fileitem.path}")
+                metadata_success = False
+            elif not self.storagechain.upload_file(
+                    parent,
+                    local_path,
+                    new_name=fileitem.name or local_path.name,
+            ):
+                metadata_success = False
+        return _MusicScrapeFileResult(
+            metadata_success=metadata_success,
+            lyrics_status=lyrics_status,
+        )
+
+    @staticmethod
+    def _merge_music_album_metadata(local_meta: MetaMusic, album: MusicInfo) -> MetaMusic:
+        """把专辑级字段合并到单个音轨标签，同时保留该文件自己的标题、艺术家和曲序。"""
+        merged = deepcopy(local_meta)
+        merged.artists = list(local_meta.artists or album.artists)
+        merged.album = album.album or album.title or local_meta.album
+        merged.album_artist = album.album_artist or album.artist or local_meta.album_artist
+        merged.year = album.year or local_meta.year
+        merged.total_tracks = album.total_tracks or local_meta.total_tracks
+        merged.media_source = album.source or local_meta.media_source
+        merged.media_id = album.media_id or local_meta.media_id
+        return merged
+
+    @classmethod
+    def _match_music_album_track(
+            cls,
+            local_meta: MetaMusic,
+            album_info: Optional[MusicAlbumInfo],
+    ) -> Optional[MusicInfo]:
+        """按碟号、曲序、标题、艺术家和时长为本地文件匹配专辑中的单个音轨。"""
+        if not album_info or not album_info.tracks:
+            return None
+        local_title = cls._normalize_music_track_title(local_meta.title)
+        local_artists = {
+            cls._normalize_music_track_title(artist)
+            for artist in local_meta.artists
+            if artist
+        }
+        ranked: list[tuple[int, MusicInfo]] = []
+        for track in album_info.tracks:
+            score = 0
+            if local_meta.track_number and track.track_number:
+                if local_meta.track_number == track.track_number:
+                    score += 6
+                else:
+                    continue
+            if local_meta.disc_number and track.disc_number:
+                if local_meta.disc_number == track.disc_number:
+                    score += 3
+                else:
+                    continue
+            if local_title and local_title == cls._normalize_music_track_title(track.title):
+                score += 8
+            track_artists = {
+                cls._normalize_music_track_title(artist)
+                for artist in track.artists
+                if artist
+            }
+            if local_artists and track_artists and local_artists.intersection(track_artists):
+                score += 3
+            if local_meta.duration and track.duration:
+                duration_delta = abs(local_meta.duration - track.duration)
+                if duration_delta <= 2:
+                    score += 4
+                elif duration_delta > 5:
+                    score -= 3
+            if score >= 8:
+                ranked.append((score, track))
+        if not ranked:
+            return None
+        ranked.sort(key=lambda pair: pair[0], reverse=True)
+        if len(ranked) > 1 and ranked[0][0] == ranked[1][0]:
+            return None
+        matched = deepcopy(ranked[0][1])
+        matched.duration = matched.duration or local_meta.duration
+        return matched
+
+    @classmethod
+    def _normalize_music_track_title(cls, value: Optional[str]) -> str:
+        """规范化音轨标题并移除常见文件名前置碟号和曲序。"""
+        title = cls._music_track_prefix_pattern.sub("", str(value or "").strip())
+        return re.sub(r"[^\w]+", "", title.casefold(), flags=re.UNICODE)
+
+    @classmethod
+    def _resolve_music_scrape_info(
+            cls,
+            local_path: Path,
+            mediainfo: Optional[MusicInfo],
+    ) -> Optional[MetaMusic | MusicInfo]:
+        """在文件已下载到本地后解析刮削信息，专辑场景只覆盖专辑级标签。"""
+        if mediainfo and mediainfo.music_type == MUSIC_ENTITY_ALBUM:
+            return cls._merge_music_album_metadata(
+                AudioMetadataHelper.read(local_path),
+                mediainfo,
+            )
+        if mediainfo and mediainfo.music_type in (MUSIC_ENTITY_RECORDING, None, ""):
+            return mediainfo
+        if mediainfo:
+            return None
+
+        # 延迟导入避免 MediaChain 与 MusicChain 在模块加载阶段形成双向依赖。
+        from app.chain.music import MusicChain
+        _, recognized = MusicChain().recognize_by_path(local_path, source="musicbrainz")
+        return recognized
+
+    def _write_music_metadata(
+            self,
+            local_path: Path,
+            mediainfo: Optional[MusicInfo],
+            tag_overwrite: bool,
+            write_tags: bool,
+            with_cover: bool,
+            cover_overwrite: bool,
+            cover: Optional[tuple[Optional[bytes], str]] = None,
+            scrape_info: Optional[MetaMusic | MusicInfo] = None,
+    ) -> bool:
+        """解析单个本地音轨并按独立策略写入标签和封面。"""
+        scrape_info = scrape_info or self._resolve_music_scrape_info(local_path, mediainfo)
+        if not scrape_info or not scrape_info.title:
+            logger.warning(f"无法识别音乐信息：{local_path}")
+            return False
+        if not with_cover:
+            cover_data, cover_mime = None, "image/jpeg"
+        elif cover is not None:
+            cover_data, cover_mime = cover
+        else:
+            cover_url = getattr(mediainfo, "cover_url", None) or getattr(scrape_info, "cover_url", None)
+            cover_data, cover_mime = self._download_music_cover(cover_url)
+        return AudioMetadataHelper.write(
+            local_path,
+            scrape_info,
+            cover_data=cover_data,
+            cover_mime=cover_mime,
+            overwrite=tag_overwrite,
+            write_tags=write_tags,
+            cover_overwrite=cover_overwrite,
+        )
+
+    def _scrape_music_lyrics(
+            self,
+            fileitem: schemas.FileItem,
+            local_path: Path,
+            scrape_info: Optional[MetaMusic | MusicInfo],
+            lyrics_option: Optional[ScrapingOption],
+            overwrite: bool,
+            music_chain: Optional["MusicChain"],
+            album_info: Optional[MusicAlbumInfo],
+    ) -> str:
+        """按歌词策略查询单个音轨并保存同名旁挂歌词文件。"""
+        if not lyrics_option or lyrics_option.is_skip or not music_chain:
+            return "disabled"
+        existing = self._find_music_lyrics_sidecar(fileitem)
+        if existing and not overwrite:
+            return "existing"
+        if not scrape_info:
+            return "missing"
+
+        lookup_info: MetaMusic | MusicInfo = scrape_info
+        if album_info:
+            local_meta = AudioMetadataHelper.read(local_path)
+            lookup_info = self._match_music_album_track(local_meta, album_info) or scrape_info
+        lyrics = music_chain.lyrics(lookup_info)
+        if not lyrics or lyrics.instrumental or not lyrics.content or not lyrics.extension:
+            return "missing"
+        return (
+            "saved"
+            if self._write_music_lyrics_sidecar(
+                fileitem=fileitem,
+                local_path=local_path,
+                lyrics=lyrics,
+                overwrite=overwrite,
+            )
+            else "failed"
+        )
+
+    def _find_music_lyrics_sidecar(
+            self,
+            fileitem: schemas.FileItem,
+    ) -> Optional[schemas.FileItem]:
+        """查找音轨旁已存在的同步或纯文本歌词文件。"""
+        audio_path = Path(fileitem.path)
+        for extension in self.MUSIC_LYRICS_EXTENSIONS:
+            item = self.storagechain.get_file_item(
+                storage=fileitem.storage,
+                path=audio_path.with_suffix(extension),
+            )
+            if item:
+                return item
+        return None
+
+    def _write_music_lyrics_sidecar(
+            self,
+            fileitem: schemas.FileItem,
+            local_path: Path,
+            lyrics: MusicLyrics,
+            overwrite: bool,
+    ) -> bool:
+        """原子写入本地歌词或上传远端歌词，并在覆盖时清理旧格式旁挂文件。"""
+        extension = lyrics.extension
+        content = lyrics.content
+        if not extension or not content:
+            return False
+        target_path = Path(fileitem.path).with_suffix(extension)
+        target_name = target_path.name
+        temp_path: Optional[Path] = None
+        try:
+            if fileitem.storage == "local":
+                with NamedTemporaryFile(
+                        mode="w",
+                        encoding="utf-8",
+                        dir=target_path.parent,
+                        prefix=f".{target_name}.",
+                        delete=False,
+                ) as temp_file:
+                    temp_file.write(f"{content.rstrip()}\n")
+                    temp_path = Path(temp_file.name)
+                temp_path.replace(target_path)
+            else:
+                parent = self.storagechain.get_parent_item(fileitem)
+                if not parent:
+                    logger.warning(f"无法获取远端歌词父目录：{fileitem.path}")
+                    return False
+                temp_path = local_path.with_suffix(extension)
+                temp_path.write_text(f"{content.rstrip()}\n", encoding="utf-8")
+                if not self.storagechain.upload_file(
+                        parent,
+                        temp_path,
+                        new_name=target_name,
+                ):
+                    return False
+
+            if overwrite:
+                self._remove_alternate_music_lyrics(fileitem, keep_extension=extension)
+            return True
+        except OSError as err:
+            logger.warning(f"保存音乐歌词失败：{target_path} - {err}")
+            return False
+        finally:
+            if temp_path and temp_path.exists() and temp_path != target_path:
+                self._cleanup_temp_file(temp_path)
+
+    def _remove_alternate_music_lyrics(
+            self,
+            fileitem: schemas.FileItem,
+            keep_extension: str,
+    ) -> None:
+        """覆盖歌词格式后删除同音轨的旧扩展名文件，避免播放器优先读取过期内容。"""
+        audio_path = Path(fileitem.path)
+        for extension in self.MUSIC_LYRICS_EXTENSIONS:
+            if extension == keep_extension:
+                continue
+            item = self.storagechain.get_file_item(
+                storage=fileitem.storage,
+                path=audio_path.with_suffix(extension),
+            )
+            if item and not self.storagechain.delete_file(item):
+                logger.warning(f"删除旧歌词文件失败：{item.path}")
+
     def _handle_movie_scraping(
             self,
             fileitem: schemas.FileItem,
@@ -1659,7 +2324,9 @@ class MediaChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
 
     @staticmethod
     async def async_select_recognize_source(
-            log_name: str, log_context: str, native_fn, plugin_fn
+            log_name: str, log_context: str, native_fn, plugin_fn,
+            is_recognized=None,
+            plugin_event: ChainEventType = ChainEventType.NameRecognize,
     ) -> Optional[MediaInfo]:
         """
         选择识别模式，插件优先或原生优先（异步版本）
@@ -1668,27 +2335,38 @@ class MediaChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
         :param log_context: 用于日志“未识别到...的媒体信息”处的上下文（如 path 或 title）
         :param native_fn: 原生识别函数
         :param plugin_fn: 插件识别函数
+        :param is_recognized: 判定识别结果是否有效的谓词，语义同同步版本
+        :param plugin_event: 辅助识别对应的链式事件类型，音乐使用音乐名称识别事件
         """
+        if is_recognized is None:
+            is_recognized = lambda result: bool(result)
         mediainfo = None
-        plugin_available = eventmanager.check(ChainEventType.NameRecognize)
+        plugin_available = eventmanager.check(plugin_event)
         if settings.RECOGNIZE_PLUGIN_FIRST and plugin_available:
             # 插件优先
             logger.info(f"插件优先模式已开启。请求辅助识别，标题：{log_name} ...")
-            mediainfo = await plugin_fn()
-            if not mediainfo:
+            helped = await plugin_fn()
+            if is_recognized(helped):
+                mediainfo = helped
+            else:
                 logger.info(
                     f"辅助识别未识别到 {log_context} 的媒体信息，尝试使用原生识别"
                 )
                 mediainfo = await native_fn()
+                # 辅助结果不采信时保留原生兜底，避免丢失已有识别结果（音乐原生兜底恒非空）
+                if helped and not mediainfo:
+                    mediainfo = helped
         else:
             # 原生优先
             logger.info(f"识别标题：{log_name} ...")
             mediainfo = await native_fn()
-            if not mediainfo and plugin_available:
+            if not is_recognized(mediainfo) and plugin_available:
                 logger.info(
                     f"原生识别未识别到 {log_context} 的媒体信息，尝试使用辅助识别"
                 )
-                mediainfo = await plugin_fn()
+                helped = await plugin_fn()
+                if is_recognized(helped):
+                    mediainfo = helped
         return mediainfo
 
     async def async_recognize_by_meta(
@@ -1737,6 +2415,11 @@ class MediaChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
             return None
         title = metainfo.title
         share_meta = deepcopy(metainfo)
+        # 音乐原生兜底结果无远端身份，需按是否取得身份判定，才会请求辅助识别
+        is_music = isinstance(metainfo, MetaMusic)
+        is_recognized = (
+            (lambda result: bool(result and result.source)) if is_music else None
+        )
 
         async def native_recognize() -> Optional[MediaInfo]:
             """异步使用请求级数据源执行原生识别。"""
@@ -1757,12 +2440,17 @@ class MediaChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
                 episode_group=episode_group,
             )
 
-        # 按 config 中设置的识别顺序识别
+        # 按 config 中设置的识别顺序识别，影视与音乐共用同一选择流程
         mediainfo = await self.async_select_recognize_source(
             log_name=title,
             log_context=title,
             native_fn=native_recognize,
             plugin_fn=plugin_recognize,
+            is_recognized=is_recognized,
+            plugin_event=(
+                ChainEventType.MusicNameRecognize if is_music
+                else ChainEventType.NameRecognize
+            ),
         )
         if not mediainfo:
             return None
@@ -1782,7 +2470,7 @@ class MediaChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
             episode_group: Optional[str] = None,
     ) -> Optional[MediaInfo]:
         """
-        请求辅助识别，返回媒体信息（异步版本）
+        请求辅助识别，返回媒体信息（异步版本）；影视与音乐共用同一流程
 
         :param title: 标题
         :param org_meta: 原始元数据
@@ -1790,6 +2478,14 @@ class MediaChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
         :param source: 请求级识别数据源
         :param episode_group: 剧集组
         """
+        # 音乐标题要素（曲名/艺术家/专辑/年份）与影视不同，走专用名称识别事件
+        if isinstance(org_meta, MetaMusic):
+            return await self._async_recognize_music_help(
+                title=title,
+                org_meta=org_meta,
+                share_meta=share_meta,
+                source=source,
+            )
         # 发送请求事件，等待结果
         result: Event = await eventmanager.async_send_event(
             ChainEventType.NameRecognize,
@@ -1834,6 +2530,65 @@ class MediaChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
             share_meta=share_meta,
             episode_group=episode_group,
         )
+
+    async def _async_recognize_music_help(
+            self,
+            title: str,
+            org_meta: MetaMusic,
+            share_meta: MetaBase = None,
+            source: Optional[str] = None,
+    ) -> Optional[MediaInfo]:
+        """
+        请求插件辅助识别音乐标题要素，并按修正后的要素重新匹配媒体信息（异步版本）
+
+        :param title: 原始音乐标题
+        :param org_meta: 原始音乐元数据
+        :param share_meta: 共享识别查询/上报使用的原始元数据
+        :param source: 请求级识别数据源
+        """
+        # 发送音乐名称识别事件，等待插件返回标题要素
+        result: Event = await eventmanager.async_send_event(
+            ChainEventType.MusicNameRecognize,
+            {
+                "title": title,
+                "artist": org_meta.artist,
+                "album": org_meta.album,
+                "year": org_meta.year,
+            },
+        )
+        if not result:
+            return None
+        event_data = result.event_data or {}
+        logger.info(f"获取到音乐辅助识别结果：{event_data}")
+        name, artist, album, year = self._parse_music_recognize_event(event_data)
+        if not name:
+            return None
+        # 辅助识别要素与原始一致时无需重新匹配
+        if (
+                name == org_meta.title
+                and (not artist or artist in org_meta.artists)
+                and (not album or album == org_meta.album)
+                and (not year or year == org_meta.year)
+        ):
+            logger.info("音乐辅助识别与原始识别结果一致，无需重新匹配媒体信息")
+            return None
+        logger.info("音乐辅助识别结果与原始识别结果不一致，重新匹配媒体信息 ...")
+        new_meta = MetaMusic(
+            org_string=org_meta.org_string,
+            title=name,
+            artists=[artist] if artist else list(org_meta.artists or []),
+            album=album or org_meta.album,
+            album_artist=artist or org_meta.album_artist,
+            year=year or org_meta.year,
+            isrc=org_meta.isrc,
+        )
+        # 重新识别，仅采信取得远端身份的结果，否则由选择流程保留原生兜底
+        mediainfo = await self.async_recognize_media(
+            meta=new_meta,
+            source=source,
+            share_meta=share_meta,
+        )
+        return mediainfo if mediainfo and mediainfo.source else None
 
     async def async_recognize_by_path(
             self,

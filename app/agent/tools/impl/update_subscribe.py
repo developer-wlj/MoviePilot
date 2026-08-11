@@ -11,7 +11,7 @@ from app.core.event import eventmanager
 from app.db.subscribe_oper import SubscribeOper
 from app.log import logger
 from app.schemas.event import SubscribeModifiedEventData
-from app.schemas.types import EventType
+from app.schemas.types import EventType, media_type_to_agent
 
 
 class UpdateSubscribeInput(BaseModel):
@@ -47,6 +47,11 @@ class UpdateSubscribeInput(BaseModel):
         None,
         description="Effect filter as regular expression (optional, e.g., 'HDR|DV|SDR')",
     )
+    audio_quality: Optional[str] = Field(None, description="Music quality tier filter")
+    audio_format: Optional[str] = Field(None, description="Music audio-format regular expression")
+    min_bitrate: Optional[int] = Field(None, description="Minimum music bitrate in bits per second")
+    min_bit_depth: Optional[int] = Field(None, description="Minimum music bit depth")
+    min_sample_rate: Optional[int] = Field(None, description="Minimum music sample rate in Hz")
     include: Optional[str] = Field(
         None, description="Include filter as regular expression (optional)"
     )
@@ -87,13 +92,19 @@ class UpdateSubscribeInput(BaseModel):
 
 
 class UpdateSubscribeTool(MoviePilotTool):
+    """更新影视、单曲或专辑订阅的运行参数。"""
+
     name: str = "update_subscribe"
     tags: list[str] = [
         ToolTag.Write,
         ToolTag.Subscription,
         ToolTag.Admin,
     ]
-    description: str = "Update subscription properties including filters, episode counts, state, and other settings. Supports updating quality/resolution filters, episode tracking, subscription state, and download configuration."
+    description: str = (
+        "Update subscription filters, state, sites, downloader, save path, and other runtime settings. "
+        "Episode fields are TV-only; music recording/album identity and expected album track count are metadata "
+        "facts and are not changed by this tool."
+    )
     args_schema: Type[BaseModel] = UpdateSubscribeInput
     require_admin: bool = True
 
@@ -138,6 +149,11 @@ class UpdateSubscribeTool(MoviePilotTool):
         quality: Optional[str] = None,
         resolution: Optional[str] = None,
         effect: Optional[str] = None,
+        audio_quality: Optional[str] = None,
+        audio_format: Optional[str] = None,
+        min_bitrate: Optional[int] = None,
+        min_bit_depth: Optional[int] = None,
+        min_sample_rate: Optional[int] = None,
         include: Optional[str] = None,
         exclude: Optional[str] = None,
         filter: Optional[str] = None,
@@ -152,6 +168,7 @@ class UpdateSubscribeTool(MoviePilotTool):
         episode_group: Optional[str] = None,
         **kwargs,
     ) -> str:
+        """更新可变订阅字段并发送订阅调整事件。"""
         logger.info(f"执行工具: {self.name}, 参数: subscribe_id={subscribe_id}")
 
         try:
@@ -160,6 +177,32 @@ class UpdateSubscribeTool(MoviePilotTool):
             if not subscribe:
                 return json.dumps(
                     {"success": False, "message": f"订阅不存在: {subscribe_id}"},
+                    ensure_ascii=False,
+                )
+            if media_type_to_agent(subscribe.type) == "music" and any(
+                value is not None
+                for value in (
+                    season,
+                    total_episode,
+                    lack_episode,
+                    start_episode,
+                    best_version_full,
+                    episode_group,
+                )
+            ):
+                return json.dumps(
+                    {
+                        "success": False,
+                        "message": "音乐订阅不能更新季集、整季洗版或剧集组字段",
+                    },
+                    ensure_ascii=False,
+                )
+            if media_type_to_agent(subscribe.type) != "music" and any(
+                    value is not None
+                    for value in (audio_quality, audio_format, min_bitrate, min_bit_depth, min_sample_rate)
+            ):
+                return json.dumps(
+                    {"success": False, "message": "音质等级、音频格式和音频技术参数仅用于音乐订阅"},
                     ensure_ascii=False,
                 )
 
@@ -206,6 +249,16 @@ class UpdateSubscribeTool(MoviePilotTool):
                 subscribe_dict["resolution"] = resolution
             if effect is not None:
                 subscribe_dict["effect"] = effect
+            if audio_quality is not None:
+                subscribe_dict["audio_quality"] = audio_quality
+            if audio_format is not None:
+                subscribe_dict["audio_format"] = audio_format
+            if min_bitrate is not None:
+                subscribe_dict["min_bitrate"] = min_bitrate
+            if min_bit_depth is not None:
+                subscribe_dict["min_bit_depth"] = min_bit_depth
+            if min_sample_rate is not None:
+                subscribe_dict["min_sample_rate"] = min_sample_rate
             if include is not None:
                 subscribe_dict["include"] = include
             if exclude is not None:
@@ -285,7 +338,11 @@ class UpdateSubscribeTool(MoviePilotTool):
                     "id": updated_subscribe.id,
                     "name": updated_subscribe.name,
                     "year": updated_subscribe.year,
-                    "type": updated_subscribe.type,
+                    "type": media_type_to_agent(updated_subscribe.type),
+                    "music_type": updated_subscribe.music_type,
+                    "total_tracks": updated_subscribe.total_tracks,
+                    "media_source": updated_subscribe.media_source,
+                    "media_id": updated_subscribe.media_id,
                     "season": updated_subscribe.season,
                     "state": updated_subscribe.state,
                     "total_episode": updated_subscribe.total_episode,

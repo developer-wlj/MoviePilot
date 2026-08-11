@@ -77,6 +77,9 @@ def _load_subscribe_chain_class():
     context_module.TorrentInfo = SimpleNamespace
     context_module.Context = SimpleNamespace
     context_module.MediaInfo = SimpleNamespace
+    context_module.MusicInfo = SimpleNamespace
+    context_module.MUSIC_ENTITY_ALBUM = "album"
+    context_module.MUSIC_ENTITY_RECORDING = "recording"
 
     event_module = ensure_module("app.core.event", types.ModuleType("app.core.event"))
 
@@ -106,6 +109,7 @@ def _load_subscribe_chain_class():
 
     meta_module = ensure_module("app.core.meta", types.ModuleType("app.core.meta"))
     meta_module.MetaBase = SimpleNamespace
+    meta_module.MetaMusic = SimpleNamespace
 
     metainfo_module = ensure_module("app.core.metainfo", types.ModuleType("app.core.metainfo"))
 
@@ -163,6 +167,8 @@ def _load_subscribe_chain_class():
             "custom_words",
             "media_category",
             "filter_groups",
+            "music_type",
+            "total_tracks",
         }
 
         def __init__(self, **kwargs):
@@ -297,6 +303,8 @@ def _load_subscribe_chain_class():
             self.media_source = None
             self.media_id = None
             self.mediaid = None
+            self.music_type = None
+            self.total_tracks = None
             self.episode_group = None
             for key, value in kwargs.items():
                 setattr(self, key, value)
@@ -349,6 +357,7 @@ def _load_subscribe_chain_class():
         "app.chain.download": "DownloadChain",
         "app.chain.media": "MediaChain",
         "app.chain.mediaserver": "MediaServerChain",
+        "app.chain.music": "MusicChain",
         "app.chain.search": "SearchChain",
         "app.chain.tmdb": "TmdbChain",
         "app.chain.torrents": "TorrentsChain",

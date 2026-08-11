@@ -16,9 +16,10 @@ from app.chain.music import MusicChain
 from app.core.config import global_vars, settings
 from app.core.context import Context
 from app.core.context import MediaInfo, SubtitleInfo, TorrentInfo
-from app.core.music import MusicInfo, MusicMeta
 from app.core.event import eventmanager, Event
+from app.core.meta import MetaMusic
 from app.core.metainfo import MetaInfo
+from app.core.context import MusicInfo
 from app.db.systemconfig_oper import SystemConfigOper
 from app.helper.progress import ProgressHelper
 from app.helper.sites import SitesHelper  # noqa
@@ -546,16 +547,11 @@ class SearchChain(ChainBase):
                 season=season,
                 sites=sites,
             )
-        if mtype == MediaType.MUSIC:
-            mediainfo = MusicChain().recognize(
-                source=source,
-                media_id=str(mediaid) if mediaid is not None else "",
-            )
-        else:
-            mediainfo = self.recognize_media(
-                source=source, mediaid=mediaid, tmdbid=tmdbid, doubanid=doubanid,
-                bangumiid=bangumiid, anilistid=anilistid, mtype=mtype,
-            )
+        # 音乐统一在 recognize_media 内路由到 MusicChain
+        mediainfo = self.recognize_media(
+            source=source, mediaid=mediaid, tmdbid=tmdbid, doubanid=doubanid,
+            bangumiid=bangumiid, anilistid=anilistid, mtype=mtype,
+        )
         if not mediainfo:
             logger.error(f'{self._build_search_keyword(source, mediaid, tmdbid, doubanid, bangumiid, anilistid)} 媒体信息识别失败！')
             return []
@@ -879,16 +875,11 @@ class SearchChain(ChainBase):
                 season=season,
                 sites=sites,
             )
-        if mtype == MediaType.MUSIC:
-            mediainfo = await MusicChain().async_recognize(
-                source=source,
-                media_id=str(mediaid) if mediaid is not None else "",
-            )
-        else:
-            mediainfo = await self.async_recognize_media(
-                source=source, mediaid=mediaid, tmdbid=tmdbid, doubanid=doubanid,
-                bangumiid=bangumiid, anilistid=anilistid, mtype=mtype,
-            )
+        # 音乐统一在 async_recognize_media 内路由到 MusicChain
+        mediainfo = await self.async_recognize_media(
+            source=source, mediaid=mediaid, tmdbid=tmdbid, doubanid=doubanid,
+            bangumiid=bangumiid, anilistid=anilistid, mtype=mtype,
+        )
         if not mediainfo:
             logger.error(
                 f'{self._build_search_keyword(source, mediaid, tmdbid, doubanid, bangumiid, anilistid)} '
@@ -985,11 +976,14 @@ class SearchChain(ChainBase):
             logger.info(f'开始渐进式浏览资源，站点：{sites} ...')
 
         contexts: List[Context] = []
+        # 记录过滤前的候选资源数，供前端在全部被过滤时给出友好提示
+        candidate_count = 0
         if rule_groups is None:
             rule_groups = SystemConfigOper().get(SystemConfigKey.SearchFilterRuleGroups) or []
         async for event in self.__async_search_all_sites_stream(
                 keyword=title, sites=sites, page=page, mtype=mtype):
             result = event.pop("items", []) or []
+            candidate_count += len(result)
             result = await run_in_threadpool(
                 self.__filter_title_search_torrents,
                 torrents=result,
@@ -1021,7 +1015,8 @@ class SearchChain(ChainBase):
             "type": "done",
             "text": f"搜索完成，共 {len(contexts)} 个资源",
             "items": [context.to_dict() for context in contexts],
-            "total_items": len(contexts)
+            "total_items": len(contexts),
+            "candidate_items": candidate_count
         }
 
     @staticmethod
@@ -1031,10 +1026,12 @@ class SearchChain(ChainBase):
     ) -> Any:
         """根据限定媒体类型构造模糊搜索结果的上下文元数据。"""
         if mtype == MediaType.MUSIC:
-            return MusicMeta(
+            meta = MetaMusic(
                 org_string=torrent.title,
                 title=torrent.title,
             )
+            meta.apply_audio_quality(f"{torrent.title} {torrent.description or ''}")
+            return meta
         return MetaInfo(title=torrent.title, subtitle=torrent.description)
 
     def __filter_title_search_torrents(self,
@@ -1082,16 +1079,11 @@ class SearchChain(ChainBase):
                 season=season,
                 sites=sites,
             )
-        if mtype == MediaType.MUSIC:
-            mediainfo = await MusicChain().async_recognize(
-                source=source,
-                media_id=str(mediaid) if mediaid is not None else "",
-            )
-        else:
-            mediainfo = await self.async_recognize_media(
-                source=source, mediaid=mediaid, tmdbid=tmdbid, doubanid=doubanid,
-                bangumiid=bangumiid, anilistid=anilistid, mtype=mtype,
-            )
+        # 音乐统一在 async_recognize_media 内路由到 MusicChain
+        mediainfo = await self.async_recognize_media(
+            source=source, mediaid=mediaid, tmdbid=tmdbid, doubanid=doubanid,
+            bangumiid=bangumiid, anilistid=anilistid, mtype=mtype,
+        )
         if not mediainfo:
             logger.error(
                 f'{self._build_search_keyword(source, mediaid, tmdbid, doubanid, bangumiid, anilistid)} '
@@ -1376,11 +1368,7 @@ class SearchChain(ChainBase):
             filter_params: Optional[Dict[str, str]] = None,
     ) -> List[Context]:
         """过滤音乐分类资源并组装携带目标音乐身份的下载上下文。"""
-        torrents = [
-            torrent
-            for torrent in torrents
-            if torrent.category in (MediaType.MUSIC, MediaType.MUSIC.value)
-        ]
+        torrents = self._matching_music_torrents(torrents, mediainfo)
         if filter_params:
             torrenthelper = TorrentHelper()
             torrents = [
@@ -1401,6 +1389,7 @@ class SearchChain(ChainBase):
         for torrent in torrents:
             meta = MusicChain.to_meta(mediainfo)
             meta.org_string = torrent.title
+            meta.apply_audio_quality(f"{torrent.title} {torrent.description or ''}", overwrite=True)
             contexts.append(
                 Context(
                     torrent_info=torrent,
@@ -1413,6 +1402,19 @@ class SearchChain(ChainBase):
                 )
             )
         return self.__remove_duplicate(TorrentHelper.sort_torrents(contexts))
+
+    @staticmethod
+    def _matching_music_torrents(
+            torrents: Optional[List[TorrentInfo]],
+            mediainfo: MusicInfo,
+    ) -> List[TorrentInfo]:
+        """筛出音乐分类且标题包含目标单曲或专辑名称的站点资源。"""
+        return [
+            torrent
+            for torrent in torrents or []
+            if torrent.category in (MediaType.MUSIC, MediaType.MUSIC.value)
+            and MusicChain.matches_site_resource(mediainfo, torrent.title)
+        ]
 
     def _process_music(
             self,
@@ -1428,15 +1430,17 @@ class SearchChain(ChainBase):
         for index, search_word in enumerate(keywords or [mediainfo.title]):
             if index:
                 time.sleep(random.randint(1, 10))
-            torrents.extend(
+            matched_torrents = self._matching_music_torrents(
                 self.__search_all_sites(
                     keyword=search_word,
                     mediainfo=mediainfo,
                     sites=sites,
                     mtype=MediaType.MUSIC,
-                ) or []
+                ),
+                mediainfo,
             )
-            if torrents and not settings.SEARCH_MULTIPLE_NAME:
+            torrents.extend(matched_torrents)
+            if matched_torrents and not settings.SEARCH_MULTIPLE_NAME:
                 break
         return self._build_music_contexts(
             torrents=torrents,
@@ -1459,15 +1463,17 @@ class SearchChain(ChainBase):
         for index, search_word in enumerate(keywords or [mediainfo.title]):
             if index:
                 await asyncio.sleep(random.randint(1, 10))
-            torrents.extend(
+            matched_torrents = self._matching_music_torrents(
                 await self.__async_search_all_sites(
                     keyword=search_word,
                     mediainfo=mediainfo,
                     sites=sites,
                     mtype=MediaType.MUSIC,
-                ) or []
+                ),
+                mediainfo,
             )
-            if torrents and not settings.SEARCH_MULTIPLE_NAME:
+            torrents.extend(matched_torrents)
+            if matched_torrents and not settings.SEARCH_MULTIPLE_NAME:
                 break
         return await run_in_threadpool(
             self._build_music_contexts,
@@ -1790,7 +1796,8 @@ class SearchChain(ChainBase):
             "value": 100,
             "text": f"过滤匹配完成，共 {len(contexts)} 个资源",
             "items": final_items,
-            "total_items": len(contexts)
+            "total_items": len(contexts),
+            "candidate_items": len(candidate_contexts)
         }
         yield {
             "type": "done",
@@ -1798,6 +1805,7 @@ class SearchChain(ChainBase):
             "text": f"搜索完成，共 {len(contexts)} 个资源",
             "items": final_items,
             "total_items": len(contexts),
+            "candidate_items": len(candidate_contexts),
             "contexts": contexts
         }
 

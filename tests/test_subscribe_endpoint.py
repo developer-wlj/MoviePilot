@@ -220,6 +220,53 @@ class SubscribeEndpointTest(TestCase):
         self.assertNotIn("username", payload["fields"])
         self.assertEqual(payload["subscribe_info"]["username"], "alice")
 
+    def test_update_subscribe_preserves_recognized_music_entity(self):
+        """普通编辑不得把专辑改为单曲或覆盖整专完成判定所需的曲目总数。"""
+        from app.api.endpoints.subscribe import update_subscribe
+
+        subscribe = _EndpointSubscribe(
+            id=23,
+            username="alice",
+            name="叶惠美",
+            type=MediaType.MUSIC.value,
+            music_type="album",
+            total_tracks=11,
+            total_episode=0,
+            lack_episode=0,
+            vote=0.0,
+            sites=[],
+            search_imdbid=0,
+            filter_groups=[],
+            start_episode=0,
+        )
+        subscribe_in = Subscribe(
+            id=23,
+            name="叶惠美",
+            type=MediaType.MUSIC.value,
+            music_type="recording",
+            total_tracks=1,
+        )
+
+        with patch(
+            "app.api.endpoints.subscribe.Subscribe.async_get",
+            new=AsyncMock(side_effect=[subscribe, subscribe]),
+        ), patch(
+            "app.api.endpoints.subscribe.eventmanager.async_send_event",
+            new=AsyncMock(),
+        ):
+            response = asyncio.run(
+                update_subscribe(
+                    subscribe_in=subscribe_in,
+                    db=object(),
+                    current_user=_EndpointUser(name="alice", is_superuser=False),
+                )
+            )
+
+        self.assertTrue(response.success)
+        self.assertEqual(subscribe.type, MediaType.MUSIC.value)
+        self.assertEqual(subscribe.music_type, "album")
+        self.assertEqual(subscribe.total_tracks, 11)
+
     def test_superuser_can_update_other_and_legacy_subscribe(self):
         """
         超级用户可以管理他人和 legacy 订阅。
@@ -311,6 +358,43 @@ class SubscribeEndpointTest(TestCase):
 
         self.assertEqual(result.id, 14)
 
+    def test_subscribe_mediaid_distinguishes_recording_and_album_entities(self):
+        """同一来源身份下查询专辑时不能返回单曲订阅。"""
+        from app.api.endpoints.subscribe import subscribe_mediaid
+
+        recording = _EndpointSubscribe(
+            id=21,
+            username="alice",
+            type=MediaType.MUSIC.value,
+            music_type="recording",
+            media_source="musicbrainz",
+            media_id="shared-id",
+        )
+        album = _EndpointSubscribe(
+            id=22,
+            username="alice",
+            type=MediaType.MUSIC.value,
+            music_type="album",
+            media_source="musicbrainz",
+            media_id="shared-id",
+        )
+
+        with patch(
+            "app.api.endpoints.subscribe.Subscribe.async_list_by_media_identity",
+            new=AsyncMock(return_value=[recording, album]),
+        ) as list_by_identity:
+            result = asyncio.run(
+                subscribe_mediaid(
+                    mediaid="musicbrainz:shared-id",
+                    music_type="album",
+                    db=object(),
+                    current_user=_EndpointUser(name="alice", is_superuser=False),
+                )
+            )
+
+        self.assertEqual(result.id, 22)
+        self.assertEqual(list_by_identity.await_args.kwargs["music_type"], "album")
+
     def test_delete_subscribe_by_mediaid_deletes_owner_when_other_douban_match_first(self):
         """
         按媒体删除订阅时，应在候选集合中删除当前用户自己的订阅。
@@ -346,6 +430,32 @@ class SubscribeEndpointTest(TestCase):
         self.assertTrue(response.success)
         self.assertEqual(db.deleted, [own])
         send_event.assert_awaited_once()
+
+    def test_delete_subscribe_by_mediaid_forwards_music_entity(self):
+        """取消专辑订阅时必须把实体类型传给统一身份查询。"""
+        from app.api.endpoints.subscribe import delete_subscribe_by_mediaid
+
+        db = _EndpointAsyncDb()
+        with patch(
+            "app.api.endpoints.subscribe.list_subscribes_by_media_key",
+            new=AsyncMock(return_value=[]),
+        ) as list_by_key:
+            response = asyncio.run(
+                delete_subscribe_by_mediaid(
+                    mediaid="musicbrainz:release-group-1",
+                    music_type="album",
+                    db=db,
+                    current_user=_EndpointUser(name="alice", is_superuser=False),
+                )
+            )
+
+        self.assertTrue(response.success)
+        list_by_key.assert_awaited_once_with(
+            db,
+            "musicbrainz:release-group-1",
+            None,
+            "album",
+        )
 
     def test_search_subscribes_regular_user_schedules_only_owned_rows(self):
         """
@@ -1066,3 +1176,95 @@ class _EndpointSubscribe:
 
     async def async_update(self, _db, payload):
         self.__dict__.update(payload)
+
+
+def test_subscribe_accepts_empty_strings_for_numeric_fields():
+    """前端提交音乐订阅时常以空字符串填充数值字段，不应触发 422。"""
+    subscribe = Subscribe(
+        name="Random Access Memories",
+        type=MediaType.MUSIC.value,
+        tmdbid="",
+        bangumiid="",
+        anilistid="",
+        season="",
+        total_episode="",
+        start_episode="",
+        best_version="",
+        best_version_full="",
+        current_priority="",
+        search_imdbid="",
+        vote="",
+        episode_priority="",
+        sites="",
+        filter_groups="",
+    )
+
+    assert subscribe.tmdbid is None
+    assert subscribe.season is None
+    assert subscribe.best_version is None
+    assert subscribe.episode_priority is None
+    # 空字符串视为未提供，应回退到字段默认值而非 None
+    assert subscribe.total_episode == 0
+    assert subscribe.start_episode == 0
+    assert subscribe.search_imdbid == 0
+    assert subscribe.vote == 0.0
+    assert subscribe.sites == []
+    assert subscribe.filter_groups == []
+    assert subscribe.type == MediaType.MUSIC.value
+
+
+def test_subscribe_preserves_explicit_zero_and_numeric_string_values():
+    """显式 0 和数字字符串应保持原有行为，不被空字符串归一化影响。"""
+    subscribe = Subscribe(
+        name="测试剧集",
+        type=MediaType.TV.value,
+        season="2",
+        tmdbid="123",
+        total_episode=0,
+        start_episode=0,
+        search_imdbid=0,
+        vote=0.0,
+    )
+
+    assert subscribe.season == 2
+    assert subscribe.tmdbid == 123
+    assert subscribe.total_episode == 0
+    assert subscribe.start_episode == 0
+    assert subscribe.search_imdbid == 0
+    assert subscribe.vote == 0.0
+
+
+def test_create_subscribe_accepts_music_payload_with_empty_strings():
+    """带空字符串的音乐订阅应能通过新增订阅接口，不返回 422。"""
+    subscribe_in = Subscribe(
+        name="Random Access Memories",
+        type=MediaType.MUSIC.value,
+        music_type="album",
+        total_tracks=13,
+        tmdbid="",
+        season="",
+        total_episode="",
+        episode_priority="",
+        sites="",
+    )
+
+    with patch(
+        "app.api.endpoints.subscribe.SubscribeChain.async_add",
+        new=AsyncMock(return_value=(1, "新增订阅成功")),
+    ) as async_add:
+        response = asyncio.run(
+            create_subscribe(
+                subscribe_in=subscribe_in,
+                current_user=_EndpointUser(name="moviepilot-user", is_superuser=False),
+            )
+        )
+
+    assert response.success is True
+    payload = async_add.await_args.kwargs
+    # 空字符串回退默认值后应正确传入持久化链路
+    assert payload["tmdbid"] is None
+    assert payload["total_episode"] == 0
+    assert payload["sites"] == []
+    assert payload["type"] == MediaType.MUSIC.value
+    assert payload["music_type"] == "album"
+    assert payload["total_tracks"] == 13

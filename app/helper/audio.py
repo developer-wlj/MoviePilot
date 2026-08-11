@@ -6,7 +6,8 @@ from mutagen.flac import FLAC, Picture
 from mutagen.id3 import APIC
 from mutagen.mp4 import MP4, MP4Cover
 
-from app.core.music import MusicInfo, MusicMeta
+from app.core.context import MusicInfo
+from app.core.meta import MetaMusic
 from app.log import logger
 
 
@@ -14,9 +15,9 @@ class AudioMetadataHelper:
     """读取和写入音频标签，并转换为标准音乐元数据。"""
 
     @classmethod
-    def read(cls, path: Path) -> MusicMeta:
+    def read(cls, path: Path) -> MetaMusic:
         """读取本地音频文件标签；读取失败时返回基于文件名的最小元数据。"""
-        fallback = MusicMeta(
+        fallback = MetaMusic(
             org_string=path.name,
             title=path.stem,
             audio_format=path.suffix.lstrip(".").upper() or None,
@@ -33,7 +34,7 @@ class AudioMetadataHelper:
         track_number, total_tracks = cls._number_pair(cls._first(tags, "tracknumber"))
         disc_number, total_discs = cls._number_pair(cls._first(tags, "discnumber"))
         info = getattr(audio, "info", None)
-        return MusicMeta(
+        return MetaMusic(
             org_string=path.name,
             title=cls._first(tags, "title") or path.stem,
             artists=cls._values(tags, "artist"),
@@ -57,35 +58,42 @@ class AudioMetadataHelper:
     def write(
             cls,
             path: Path,
-            music: Union[MusicMeta, MusicInfo],
+            music: Union[MetaMusic, MusicInfo],
             cover_data: Optional[bytes] = None,
             cover_mime: str = "image/jpeg",
             overwrite: bool = True,
+            write_tags: bool = True,
+            cover_overwrite: Optional[bool] = None,
     ) -> bool:
-        """把标准音乐字段写入音频标签，并为常见格式嵌入专辑封面。"""
+        """按独立策略写入标准音乐标签，并为常见格式嵌入专辑封面。"""
         try:
             audio = MutagenFile(path, easy=True)
             if not audio:
                 logger.warning(f"无法写入音频标签：{path}")
                 return False
-            if audio.tags is None:
-                audio.add_tags()
-            for key, value in cls._tag_values(music).items():
-                if value in (None, "", []):
-                    continue
-                if not overwrite and audio.tags.get(key):
-                    continue
-                try:
-                    audio[key] = value if isinstance(value, list) else [str(value)]
-                except (KeyError, TypeError, ValueError) as err:
-                    logger.debug(f"音频格式不支持标签 {key}：{path} - {err}")
-            audio.save()
+            if write_tags:
+                if audio.tags is None:
+                    audio.add_tags()
+                for key, value in cls._tag_values(music).items():
+                    if value in (None, "", []):
+                        continue
+                    if not overwrite and audio.tags.get(key):
+                        continue
+                    try:
+                        audio[key] = value if isinstance(value, list) else [str(value)]
+                    except (KeyError, TypeError, ValueError) as err:
+                        logger.debug(f"音频格式不支持标签 {key}：{path} - {err}")
+                audio.save()
             if cover_data:
                 cls._write_cover(
                     path=path,
                     cover_data=cover_data,
                     cover_mime=cover_mime,
-                    overwrite=overwrite,
+                    overwrite=(
+                        overwrite
+                        if cover_overwrite is None
+                        else cover_overwrite
+                    ),
                 )
             return True
         except Exception as err:
@@ -93,7 +101,7 @@ class AudioMetadataHelper:
             return False
 
     @classmethod
-    def _tag_values(cls, music: Union[MusicMeta, MusicInfo]) -> dict[str, Any]:
+    def _tag_values(cls, music: Union[MetaMusic, MusicInfo]) -> dict[str, Any]:
         """把标准音乐对象转换为 Mutagen Easy 标签字典。"""
         track_number = cls._number_text(
             getattr(music, "track_number", None),

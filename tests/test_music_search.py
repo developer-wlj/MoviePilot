@@ -1,7 +1,8 @@
 from unittest.mock import Mock, patch
 
 from app.chain.search import SearchChain
-from app.core.music import MusicInfo, MusicMeta
+from app.core.meta import MetaMusic
+from app.core.context import MusicInfo
 from app.schemas.context import TorrentInfo
 from app.schemas.types import MediaType
 
@@ -18,7 +19,12 @@ def test_music_context_builder_keeps_only_music_category():
     )
     torrents = [
         TorrentInfo(
-            title="Daft Punk - Random Access Memories FLAC",
+            title="Daft Punk - Get Lucky - Random Access Memories FLAC",
+            category=MediaType.MUSIC.value,
+            site_name="MusicSite",
+        ),
+        TorrentInfo(
+            title="Daft Punk - Discovery FLAC",
             category=MediaType.MUSIC.value,
             site_name="MusicSite",
         ),
@@ -38,13 +44,46 @@ def test_music_context_builder_keeps_only_music_category():
 
     assert len(contexts) == 1
     assert contexts[0].media_info is music
-    assert isinstance(contexts[0].meta_info, MusicMeta)
+    assert isinstance(contexts[0].meta_info, MetaMusic)
     assert contexts[0].meta_info.media_id == "recording-1"
     assert contexts[0].torrent_info.category == MediaType.MUSIC.value
 
 
-def test_search_by_id_routes_music_identity_to_music_chain():
-    """MusicBrainz 精确身份搜索应使用 MusicChain 识别并进入现有搜索处理链。"""
+def test_music_search_continues_after_unrelated_first_keyword_results():
+    """首组关键词只命中其它专辑时应继续尝试后续关键词，不能提前返回空结果。"""
+    chain = SearchChain()
+    music = MusicInfo(
+        source="musicbrainz",
+        media_id="recording-1",
+        title="Get Lucky",
+        artists=["Daft Punk"],
+        album="Random Access Memories",
+    )
+    unrelated = TorrentInfo(
+        title="Daft Punk - Discovery FLAC",
+        category=MediaType.MUSIC.value,
+        site_name="MusicSite",
+    )
+    matched = TorrentInfo(
+        title="Daft Punk - Get Lucky FLAC",
+        category=MediaType.MUSIC.value,
+        site_name="MusicSite",
+    )
+
+    with patch.object(
+            chain,
+            "_SearchChain__search_all_sites",
+            side_effect=[[unrelated], [matched]],
+    ) as search_sites, patch("app.chain.search.time.sleep"):
+        contexts = chain._process_music(music, rule_groups=[])
+
+    assert search_sites.call_count == 2
+    assert len(contexts) == 1
+    assert contexts[0].torrent_info.title == matched.title
+
+
+def test_search_by_id_routes_music_identity_to_recognize_and_process():
+    """MusicBrainz 精确身份搜索应经统一识别入口识别后进入现有搜索处理链。"""
     chain = SearchChain()
     music = MusicInfo(
         source="musicbrainz",
@@ -55,10 +94,9 @@ def test_search_by_id_routes_music_identity_to_music_chain():
     expected = [Mock()]
 
     with (
-        patch("app.chain.search.MusicChain") as music_chain,
+        patch.object(chain, "recognize_media", return_value=music) as recognize,
         patch.object(chain, "process", return_value=expected) as process,
     ):
-        music_chain.return_value.recognize.return_value = music
         result = chain.search_by_id(
             source="musicbrainz",
             mediaid="recording-1",
@@ -67,9 +105,14 @@ def test_search_by_id_routes_music_identity_to_music_chain():
         )
 
     assert result == expected
-    music_chain.return_value.recognize.assert_called_once_with(
+    recognize.assert_called_once_with(
         source="musicbrainz",
-        media_id="recording-1",
+        mediaid="recording-1",
+        tmdbid=None,
+        doubanid=None,
+        bangumiid=None,
+        anilistid=None,
+        mtype=MediaType.MUSIC,
     )
     process.assert_called_once_with(
         mediainfo=music,

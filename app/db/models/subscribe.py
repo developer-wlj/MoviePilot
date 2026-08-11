@@ -1,7 +1,7 @@
 import time
 from typing import Optional
 
-from sqlalchemy import Column, Integer, String, Float, JSON, Index, select
+from sqlalchemy import Column, Integer, String, Float, JSON, Index, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
@@ -30,6 +30,10 @@ class Subscribe(Base):
     mediaid = Column(String, index=True)
     media_source = Column(String, index=True)
     media_id = Column(String, index=True)
+    # 音乐实体类型：recording 单曲、album 专辑
+    music_type = Column(String)
+    # 专辑预期总曲目数，供整专资源完整性判断
+    total_tracks = Column(Integer)
     # 季号
     season = Column(Integer)
     # 海报
@@ -52,6 +56,16 @@ class Subscribe(Base):
     resolution = Column(String)
     # 特效
     effect = Column(String)
+    # 音乐音质等级：hires/lossless/lossy，可用正则组合
+    audio_quality = Column(String)
+    # 音频格式，可用正则组合
+    audio_format = Column(String)
+    # 最低码率（bps）
+    min_bitrate = Column(Integer)
+    # 最低位深（bit）
+    min_bit_depth = Column(Integer)
+    # 最低采样率（Hz）
+    min_sample_rate = Column(Integer)
     # 总集数
     total_episode = Column(Integer)
     # 开始集数
@@ -78,6 +92,14 @@ class Subscribe(Base):
     best_version_full = Column(Integer, default=0)
     # 当前优先级
     current_priority = Column(Integer)
+    # 当前音乐版本格式
+    current_audio_format = Column(String)
+    # 当前音乐版本码率（bps）
+    current_bitrate = Column(Integer)
+    # 当前音乐版本位深（bit）
+    current_bit_depth = Column(Integer)
+    # 当前音乐版本采样率（Hz）
+    current_sample_rate = Column(Integer)
     # 洗版时已下载剧集的优先级状态，格式：{"1": 90, "2": 100}
     episode_priority = Column(JSON)
     # 保存路径
@@ -109,10 +131,17 @@ class Subscribe(Base):
             doubanid: Optional[str] = None,
             bangumiid: Optional[int] = None,
             anilistid: Optional[int] = None,
+            music_type: Optional[str] = None,
     ):
         """按统一媒体身份优先级构造订阅查询条件。"""
         if media_source and media_id:
-            return (cls.media_source == media_source) & (cls.media_id == str(media_id))
+            condition = (cls.media_source == media_source) & (cls.media_id == str(media_id))
+            if music_type == "recording":
+                # 旧音乐订阅没有实体字段，历史语义等同单曲，查询时保持向后兼容。
+                return condition & or_(cls.music_type == music_type, cls.music_type.is_(None))
+            if music_type:
+                return condition & (cls.music_type == music_type)
+            return condition
         if tmdbid is not None:
             return cls.tmdbid == tmdbid
         if doubanid:
@@ -131,10 +160,11 @@ class Subscribe(Base):
             anilistid: Optional[int] = None, media_source: Optional[str] = None,
             media_id: Optional[str] = None, season: Optional[int] = None,
             episode_group: Optional[str] = None,
+            music_type: Optional[str] = None,
     ):
         """按媒体身份、季号与剧集组查询已有订阅。"""
         condition = cls._identity_condition(
-            media_source, media_id, tmdbid, doubanid, bangumiid, anilistid
+            media_source, media_id, tmdbid, doubanid, bangumiid, anilistid, music_type
         )
         if condition is None:
             return None
@@ -152,10 +182,11 @@ class Subscribe(Base):
             anilistid: Optional[int] = None, media_source: Optional[str] = None,
             media_id: Optional[str] = None, season: Optional[int] = None,
             episode_group: Optional[str] = None,
+            music_type: Optional[str] = None,
     ):
         """异步按媒体身份、季号与剧集组查询已有订阅。"""
         condition = cls._identity_condition(
-            media_source, media_id, tmdbid, doubanid, bangumiid, anilistid
+            media_source, media_id, tmdbid, doubanid, bangumiid, anilistid, music_type
         )
         if condition is None:
             return None
@@ -174,6 +205,7 @@ class Subscribe(Base):
             anilistid: Optional[int] = None, media_source: Optional[str] = None,
             media_id: Optional[str] = None, season: Optional[int] = None,
             episode_group: Optional[str] = None,
+            music_type: Optional[str] = None,
     ):
         """
         按订阅 owner、媒体身份、季号与剧集组查询订阅行。
@@ -181,7 +213,7 @@ class Subscribe(Base):
         if not username:
             return None
         condition = cls._identity_condition(
-            media_source, media_id, tmdbid, doubanid, bangumiid, anilistid
+            media_source, media_id, tmdbid, doubanid, bangumiid, anilistid, music_type
         )
         if condition is None:
             return None
@@ -199,6 +231,7 @@ class Subscribe(Base):
             anilistid: Optional[int] = None, media_source: Optional[str] = None,
             media_id: Optional[str] = None, season: Optional[int] = None,
             episode_group: Optional[str] = None,
+            music_type: Optional[str] = None,
     ):
         """
         异步按订阅 owner、媒体身份、季号与剧集组查询订阅行。
@@ -206,7 +239,7 @@ class Subscribe(Base):
         if not username:
             return None
         condition = cls._identity_condition(
-            media_source, media_id, tmdbid, doubanid, bangumiid, anilistid
+            media_source, media_id, tmdbid, doubanid, bangumiid, anilistid, music_type
         )
         if condition is None:
             return None
@@ -360,14 +393,15 @@ class Subscribe(Base):
     @async_db_query
     async def async_list_by_media_identity(
             cls, db: AsyncSession, media_source: str, media_id: str,
+            music_type: Optional[str] = None,
     ):
         """异步按统一媒体身份查询候选订阅列表。"""
-        result = await db.execute(
-            select(cls).filter(
-                cls.media_source == media_source,
-                cls.media_id == str(media_id),
-            )
+        condition = cls._identity_condition(
+            media_source=media_source,
+            media_id=media_id,
+            music_type=music_type,
         )
+        result = await db.execute(select(cls).filter(condition))
         return result.scalars().all()
 
     @classmethod
@@ -401,12 +435,13 @@ class Subscribe(Base):
             tmdbid: Optional[int] = None, doubanid: Optional[str] = None,
             bangumiid: Optional[int] = None, anilistid: Optional[int] = None,
             media_source: Optional[str] = None, media_id: Optional[str] = None,
+            music_type: Optional[str] = None,
     ):
         """
         根据条件查询订阅
         """
         condition = cls._identity_condition(
-            media_source, media_id, tmdbid, doubanid, bangumiid, anilistid
+            media_source, media_id, tmdbid, doubanid, bangumiid, anilistid, music_type
         )
         if condition is None:
             return None
@@ -422,12 +457,13 @@ class Subscribe(Base):
             tmdbid: Optional[int] = None, doubanid: Optional[str] = None,
             bangumiid: Optional[int] = None, anilistid: Optional[int] = None,
             media_source: Optional[str] = None, media_id: Optional[str] = None,
+            music_type: Optional[str] = None,
     ):
         """
         根据条件查询订阅
         """
         condition = cls._identity_condition(
-            media_source, media_id, tmdbid, doubanid, bangumiid, anilistid
+            media_source, media_id, tmdbid, doubanid, bangumiid, anilistid, music_type
         )
         if condition is None:
             return None

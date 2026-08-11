@@ -30,11 +30,16 @@ class MediaType(Enum):
 
 
 def media_type_to_agent(value) -> Optional[str]:
-    """将 MediaType 枚举或字符串统一转换为 Agent 媒体类型。"""
+    """将枚举、Agent 键或数据库枚举值统一转换为 Agent 媒体类型。"""
     if isinstance(value, MediaType):
         return value.to_agent()
     if isinstance(value, str):
         mt = MediaType.from_agent(value)
+        if not mt:
+            try:
+                mt = MediaType(value)
+            except ValueError:
+                pass
         return mt.to_agent() if mt else value
     return None
 
@@ -176,6 +181,12 @@ class ChainEventType(Enum):
     PluginDataReset = "plugin.data.reset"
     # 名称识别
     NameRecognize = "name.recognize"
+    # 音乐名称识别：插件辅助解析音乐标题中的曲名、艺术家、专辑、年份要素
+    MusicNameRecognize = "music.name.recognize"
+    # 媒体识别：原生识别未取得远端身份时，插件按已知要素匹配补充电影、电视剧媒体信息
+    MediaRecognize = "media.recognize"
+    # 音乐媒体识别：原生识别未取得远端身份时，插件按已知要素匹配补充音乐媒体信息
+    MusicMediaRecognize = "music.media.recognize"
     # 认证验证
     AuthVerification = "auth.verification"
     # 认证拦截
@@ -268,6 +279,8 @@ class SystemConfigKey(Enum):
     DefaultMovieSubscribeConfig = "DefaultMovieSubscribeConfig"
     # 默认电视剧订阅规则
     DefaultTvSubscribeConfig = "DefaultTvSubscribeConfig"
+    # 默认音乐订阅规则
+    DefaultMusicSubscribeConfig = "DefaultMusicSubscribeConfig"
     # 用户站点认证参数
     UserSiteAuthParams = "UserSiteAuthParams"
     # Follow订阅分享者
@@ -392,6 +405,8 @@ class MediaServerType(Enum):
     TrimeMedia = "TrimeMedia"
     # 绿联影视
     Ugreen = "Ugreen"
+    # Navidrome 音乐服务器
+    Navidrome = "Navidrome"
 
 
 # 识别器类型
@@ -424,6 +439,7 @@ class StorageSchema(Enum):
     U115 = "u115"
     Rclone = "rclone"
     Alist = "alist"
+    AlistGo = "alistgo"
     SMB = "smb"
 
 
@@ -461,6 +477,8 @@ class OtherModulesType(Enum):
     Redis = "Redis"
     # ListenBrainz
     ListenBrainz = "ListenBrainz"
+    # LRCLIB 歌词
+    Lrclib = "LRCLIB"
 
 
 class NameValueEnum(Enum):
@@ -488,6 +506,7 @@ class ScrapingTarget(NameValueEnum):
     TV = "电视剧"
     SEASON = "季"
     EPISODE = "集"
+    MUSIC = "音乐"
 
 
 # 刮削元数据类型
@@ -501,3 +520,4 @@ class ScrapingMetadata(NameValueEnum):
     DISC = "光盘图"
     CLEARART = "透明艺术图"
     LANDSCAPE = "横版缩略图"
+    LYRICS = "歌词"

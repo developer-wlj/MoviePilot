@@ -13,15 +13,13 @@ from app import schemas
 from app.agent import ReplyMode, prompt_manager, agent_manager
 from app.chain import ChainBase
 from app.chain.media import MediaChain
-from app.chain.music import MusicChain
 from app.chain.storage import StorageChain
 from app.chain.subscribe import SubscribeChain
 from app.chain.tmdb import TmdbChain
 from app.core.config import settings, global_vars
-from app.core.context import MediaInfo
-from app.core.music import MusicInfo, MusicMeta
+from app.core.context import MUSIC_ENTITY_ALBUM, MediaInfo, MusicInfo
 from app.core.event import eventmanager
-from app.core.meta import MetaBase
+from app.core.meta import MetaBase, MetaMusic
 from app.core.metainfo import MetaInfoPath
 from app.db.downloadhistory_oper import DownloadHistoryOper
 from app.db.models.downloadhistory import DownloadHistory, DownloadFiles
@@ -205,7 +203,7 @@ class JobManager:
         """
         获取元数据
         """
-        if isinstance(task.meta, MusicMeta):
+        if isinstance(task.meta, MetaMusic):
             return schemas.MusicMeta(**task.meta.to_dict())
         return schemas.MetaInfo(**task.meta.to_dict())
 
@@ -1046,7 +1044,7 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
         )
 
     @staticmethod
-    def _music_info_from_meta(meta: MusicMeta) -> MusicInfo:
+    def _music_info_from_meta(meta: MetaMusic) -> MusicInfo:
         """将音频文件标签解析结果转换为可整理的最小音乐信息。"""
         return MusicInfo(
             source=meta.media_source,
@@ -1066,69 +1064,137 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
         )
 
     @classmethod
+    def _match_music_album_context(
+            cls,
+            file_item: FileItem,
+            file_path: Path,
+            file_meta: MetaMusic,
+    ) -> tuple[MetaMusic, Optional[MusicInfo]]:
+        """为缺少远端身份的本地音频尝试目录级专辑匹配，命中后回填文件元数据。
+
+        WAV 等无标签文件只能依靠目录结构和曲目特征识别；匹配结果在 MusicChain
+        内按目录缓存，同一专辑目录内的后续文件不会重复请求远端。
+        """
+        # 目录级匹配需要读取本地音频时长，远端存储文件无法参与
+        if file_meta.media_id or getattr(file_item, "storage", "local") != "local":
+            return file_meta, None
+        try:
+            from app.chain.music import MusicChain
+            matched = MusicChain().recognize_album_directory(file_path.parent)
+        except Exception as err:
+            logger.debug(f"音乐专辑目录匹配失败：{file_path} - {err}")
+            return file_meta, None
+        info = matched.get(str(file_path.resolve()))
+        if not info or not info.media_id:
+            return file_meta, None
+        logger.info(f"{file_path.name} 通过专辑目录匹配识别为：{info.artist} - {info.title}")
+        merged_meta = deepcopy(file_meta)
+        # 保留本地音频的实际技术参数，仅回填身份和名称字段
+        if info.title:
+            merged_meta.title = info.title
+        if info.artists:
+            merged_meta.artists = list(info.artists)
+        if info.album:
+            merged_meta.album = info.album
+        if info.album_artist:
+            merged_meta.album_artist = info.album_artist
+        if info.year:
+            merged_meta.year = info.year
+        if info.disc_number:
+            merged_meta.disc_number = info.disc_number
+        if info.track_number:
+            merged_meta.track_number = info.track_number
+        if info.total_tracks:
+            merged_meta.total_tracks = info.total_tracks
+        merged_meta.media_source = info.source
+        merged_meta.media_id = info.media_id
+        merged_info = cls._music_info_from_meta(merged_meta)
+        # 补齐曲目级远端信息，供后续刮削和展示使用
+        merged_info.music_type = info.music_type
+        merged_info.artist_ids = list(info.artist_ids)
+        merged_info.album_id = info.album_id
+        merged_info.album_type = info.album_type
+        merged_info.release_date = info.release_date
+        merged_info.cover_url = info.cover_url
+        merged_info.category = info.category
+        merged_info.genres = list(info.genres)
+        merged_info.detail_link = info.detail_link
+        return merged_meta, merged_info
+
+    @classmethod
     def _restore_music_download_context(
             cls,
             download_history: Optional[DownloadHistory],
             file_path: Path,
-    ) -> tuple[Optional[MusicMeta], Optional[MusicInfo]]:
+    ) -> tuple[Optional[MetaMusic], Optional[MusicInfo]]:
         """从下载历史恢复音乐上下文，并用当前音频标签覆盖曲目级字段。"""
         note = getattr(download_history, "note", None)
         music_note = note.get("music") if isinstance(note, dict) else None
         if not isinstance(music_note, dict) or music_note.get("version") != 1:
             return None, None
         try:
-            saved_meta = MusicMeta.from_dict(music_note.get("meta") or {})
+            saved_meta = MetaMusic.from_dict(music_note.get("meta") or {})
             saved_info = MusicInfo.from_dict(music_note.get("media") or {})
         except (TypeError, ValueError):
             return None, None
 
-        file_tags = AudioMetadataHelper.read(file_path) if file_path.exists() else None
+        file_tags = (
+            AudioMetadataHelper.read(file_path)
+            if file_path.exists()
+            else MetaMusic(
+                org_string=file_path.name,
+                title=file_path.stem,
+                audio_format=file_path.suffix.lstrip(".").upper() or None,
+            )
+        )
         file_meta = deepcopy(saved_meta)
         file_meta.org_string = file_path.name
-        if file_tags:
-            has_tag_identity = bool(
-                file_tags.artists
-                or file_tags.album
-                or file_tags.track_number
-                or file_tags.isrc
-            )
-            for field_name in (
-                "artists",
-                "album",
-                "album_artist",
-                "year",
-                "disc_number",
-                "track_number",
-                "total_discs",
-                "total_tracks",
-                "version",
-                "isrc",
-            ):
-                if getattr(file_tags, field_name, None):
-                    setattr(file_meta, field_name, deepcopy(getattr(file_tags, field_name)))
-            if has_tag_identity and file_tags.title:
-                file_meta.title = file_tags.title
-            for field_name in (
-                "audio_format",
-                "bit_depth",
-                "sample_rate",
-                "bitrate",
-                "duration",
-            ):
-                if getattr(file_tags, field_name, None):
-                    setattr(file_meta, field_name, getattr(file_tags, field_name))
-        elif not file_meta.audio_format:
-            file_meta.audio_format = file_path.suffix.lstrip(".").upper() or None
+        # 曲目标题始终优先使用当前文件自身的标签（缺失时回退为文件名），
+        # 防止整包目录继续沿用订阅/下载标题（单曲名、专辑名等）导致所有文件重名。
+        if file_tags.title:
+            file_meta.title = file_tags.title
+        is_album_context = saved_info.music_type == MUSIC_ENTITY_ALBUM
+        for field_name in (
+            "artists",
+            "disc_number",
+            "track_number",
+            "total_discs",
+            "version",
+            "isrc",
+        ):
+            if getattr(file_tags, field_name, None):
+                setattr(file_meta, field_name, deepcopy(getattr(file_tags, field_name)))
+        for field_name in ("album", "album_artist", "year", "total_tracks"):
+            file_value = getattr(file_tags, field_name, None)
+            # 整专下载以订阅选中的专辑字段为准，避免单个错误标签把曲目拆到其它专辑目录。
+            if file_value and (not is_album_context or not getattr(file_meta, field_name, None)):
+                setattr(file_meta, field_name, deepcopy(file_value))
+        for field_name in (
+            "audio_format",
+            "bit_depth",
+            "sample_rate",
+            "bitrate",
+            "duration",
+        ):
+            if getattr(file_tags, field_name, None):
+                setattr(file_meta, field_name, getattr(file_tags, field_name))
         file_meta.media_source = saved_info.source or saved_meta.media_source
         file_meta.media_id = saved_info.media_id or saved_meta.media_id
 
         file_info = cls._music_info_from_meta(file_meta)
         file_info.source = saved_info.source
         file_info.media_id = saved_info.media_id
+        file_info.music_type = saved_info.music_type
+        file_info.artist_ids = list(saved_info.artist_ids)
+        file_info.album_id = saved_info.album_id
+        file_info.album_type = saved_info.album_type
+        file_info.release_date = saved_info.release_date
         file_info.cover_url = saved_info.cover_url
         file_info.lyrics = saved_info.lyrics
         file_info.category = saved_info.category
+        file_info.genres = list(saved_info.genres)
         file_info.detail_link = saved_info.detail_link
+        file_info.listen_count = saved_info.listen_count
         return file_meta, file_info
 
     def __is_allowed_file(self, fileitem: FileItem) -> bool:
@@ -1592,7 +1658,6 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
                 or not transferinfo
                 or not transferinfo.need_scrape
                 or not self._is_primary_media_file(task.fileitem, task.mediainfo)
-                or task.mediainfo.type == MediaType.MUSIC
         ):
             return
 
@@ -1656,7 +1721,6 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
                 or not transferinfo
                 or not transferinfo.need_scrape
                 or not self._is_primary_media_file(task.fileitem, task.mediainfo)
-                or task.mediainfo.type == MediaType.MUSIC
         ):
             return
 
@@ -3155,8 +3219,9 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
             if mtype == MediaType.MUSIC and source_path.suffix.lower() in self._audio_exts:
                 path_meta = AudioMetadataHelper.read(source_path)
             else:
+                # 影视场景附加音轨（如评论音轨）强制按视频解析，保留季集归属
                 path_meta = MetaInfoPath(
-                    source_path, custom_words=custom_word_list
+                    source_path, custom_words=custom_word_list, force_video=True
                 )
             if not path_meta:
                 return None
@@ -3618,8 +3683,13 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
 
                 # 自动整理预载的媒体信息来自整条下载历史；电影合集内文件年份冲突时逐文件识别。
                 task_mediainfo = mediainfo or history_music_info
-                if not task_mediainfo and isinstance(file_meta, MusicMeta):
-                    task_mediainfo = self._music_info_from_meta(file_meta)
+                if not task_mediainfo and isinstance(file_meta, MetaMusic):
+                    # 无标签音频按目录级专辑匹配补齐曲目身份，命中结果带缓存不会逐文件重复请求
+                    file_meta, task_mediainfo = self._match_music_album_context(
+                        file_item, file_path, file_meta
+                    )
+                    if not task_mediainfo:
+                        task_mediainfo = self._music_info_from_meta(file_meta)
                 if (
                         not manual
                         and self._is_movie_year_conflict(file_meta, task_mediainfo)
@@ -4056,24 +4126,17 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
         """
         logger.info(f"手动整理：{fileitem.path} ...")
         if tmdbid or doubanid or bangumiid or anilistid or media_id:
-            # 有输入媒体ID时单个识别
-            # 识别媒体信息
-            if mtype == MediaType.MUSIC and media_source and media_id:
-                mediainfo = MusicChain().recognize(
-                    source=media_source,
-                    media_id=media_id,
-                )
-            else:
-                mediainfo = MediaChain().recognize_media(
-                    tmdbid=tmdbid,
-                    doubanid=doubanid,
-                    bangumiid=bangumiid,
-                    anilistid=anilistid,
-                    source=media_source,
-                    mediaid=media_id,
-                    mtype=mtype,
-                    episode_group=episode_group,
-                )
+            # 有输入媒体ID时预先识别，音乐与影视统一走 recognize_media 按类型分发
+            mediainfo = MediaChain().recognize_media(
+                tmdbid=tmdbid,
+                doubanid=doubanid,
+                bangumiid=bangumiid,
+                anilistid=anilistid,
+                source=media_source,
+                mediaid=media_id,
+                mtype=mtype,
+                episode_group=episode_group,
+            )
             if not mediainfo:
                 return (
                     False,
@@ -4081,11 +4144,10 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
                     f"tmdbid：{tmdbid}，doubanid：{doubanid}，"
                     f"type: {mtype.value if mtype else None}",
                 )
-            else:
-                if media_source and not isinstance(mediainfo, MusicInfo):
-                    mediainfo.scrape_source = media_source
-                if not isinstance(mediainfo, MusicInfo):
-                    self.obtain_images(mediainfo=mediainfo)
+            if media_source and not isinstance(mediainfo, MusicInfo):
+                mediainfo.scrape_source = media_source
+            if not isinstance(mediainfo, MusicInfo):
+                self.obtain_images(mediainfo=mediainfo)
 
             # 开始整理
             state, errmsg = self.do_transfer(
@@ -4118,7 +4180,7 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
             logger.info(f"{fileitem.path} 整理完成")
             return True, errmsg if preview else ""
         else:
-            # 没有输入TMDBID时，按文件识别
+            # 没有输入媒体ID时，按文件识别
             state, errmsg = self.do_transfer(
                 fileitem=fileitem,
                 target_storage=target_storage,

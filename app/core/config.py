@@ -42,6 +42,10 @@ class SystemConfModel(BaseModel):
     anilist: int = 0
     # Fanart请求缓存数量
     fanart: int = 0
+    # MusicBrainz请求缓存数量
+    musicbrainz: int = 0
+    # ListenBrainz请求缓存数量
+    listenbrainz: int = 0
     # 元数据缓存过期时间（秒）
     meta: int = 0
     # 调度器数量
@@ -221,6 +225,10 @@ class ConfigModel(BaseModel):
     TMDB_SCRAP_ORIGINAL_IMAGE: bool = False
     # TMDB API Key
     TMDB_API_KEY: str = "db55323b8d3e4154498498a75642b381"
+
+    # ==================== 音乐配置 ====================
+    # 音乐封面代理地址（用于解决 coverartarchive.org 无法访问导致的封面不显示问题，留空则使用官方地址）
+    MUSIC_COVER_PROXY: str = ""
 
     # ==================== TVDB配置 ====================
     # TVDB API Key
@@ -519,6 +527,8 @@ class ConfigModel(BaseModel):
             "anilist.co",
             "coverartarchive.org",
             "archive.org",
+            "commons.wikimedia.org",
+            "upload.wikimedia.org",
         ]
     )
     # 图片代理允许访问的非公网 IP/CIDR，默认不放行任何非公网解析结果
@@ -988,6 +998,8 @@ class Settings(BaseSettings, ConfigModel, LogConfigModel):
                 douban=512,
                 bangumi=512,
                 fanart=512,
+                musicbrainz=512,
+                listenbrainz=256,
                 meta=(self.META_CACHE_EXPIRE or 72) * 3600,
                 scheduler=100,
                 threadpool=100,
@@ -999,6 +1011,8 @@ class Settings(BaseSettings, ConfigModel, LogConfigModel):
             douban=256,
             bangumi=256,
             fanart=128,
+            musicbrainz=256,
+            listenbrainz=128,
             meta=(self.META_CACHE_EXPIRE or 24) * 3600,
             scheduler=50,
             threadpool=50,
