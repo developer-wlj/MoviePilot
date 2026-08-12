@@ -14,10 +14,11 @@ import anyio
 import pillow_avif  # noqa 用于自动注册AVIF支持
 from anyio import Path as AsyncPath
 from app.helper.sites import SitesHelper  # noqa  # noqa
-from fastapi import APIRouter, Body, Depends, HTTPException, Header, Request, Response
+from fastapi import Body, Depends, HTTPException, Header, Request, Response
 from fastapi.responses import StreamingResponse
 
 from app import schemas
+from app.api.response import ResponseAPIRouter
 from app.chain.media import MediaChain
 from app.chain.mediaserver import MediaServerChain
 from app.chain.search import SearchChain
@@ -59,7 +60,7 @@ from app.utils.system import SystemUtils
 from app.utils.url import UrlUtils
 from version import APP_VERSION
 
-router = APIRouter()
+router = ResponseAPIRouter()
 
 _NETTEST_REDIRECT_STATUS_CODES = {301, 302, 303, 307, 308}
 _PUBLIC_SYSTEM_CONFIG_KEYS = {
@@ -582,7 +583,23 @@ async def fetch_image(
     return None
 
 
-@router.get("/img/{proxy}", summary="图片代理")
+@router.get(
+    "/img/{proxy}",
+    summary="图片代理",
+    response_model=None,
+    response_class=Response,
+    responses={
+        200: {
+            "description": "代理图片内容",
+            "content": {
+                "image/jpeg": {"schema": {"type": "string", "format": "binary"}},
+                "image/png": {"schema": {"type": "string", "format": "binary"}},
+                "image/webp": {"schema": {"type": "string", "format": "binary"}},
+            },
+        },
+        304: {"description": "图片缓存未修改"},
+    },
+)
 async def proxy_img(
     imgurl: str,
     proxy: bool = False,
@@ -610,7 +627,23 @@ async def proxy_img(
     )
 
 
-@router.get("/cache/image", summary="图片缓存")
+@router.get(
+    "/cache/image",
+    summary="图片缓存",
+    response_model=None,
+    response_class=Response,
+    responses={
+        200: {
+            "description": "缓存图片内容",
+            "content": {
+                "image/jpeg": {"schema": {"type": "string", "format": "binary"}},
+                "image/png": {"schema": {"type": "string", "format": "binary"}},
+                "image/webp": {"schema": {"type": "string", "format": "binary"}},
+            },
+        },
+        304: {"description": "图片缓存未修改"},
+    },
+)
 async def cache_img(
     url: str,
     if_none_match: Annotated[str | None, Header()] = None,
@@ -625,7 +658,11 @@ async def cache_img(
     )
 
 
-@router.get("/global", summary="查询非敏感系统设置", response_model=schemas.Response)
+@router.get(
+    "/global",
+    summary="查询非敏感系统设置",
+    response_model=schemas.Response[schemas.JsonObject],
+)
 def get_global_setting(token: str):
     """
     查询非敏感系统设置（默认鉴权）
@@ -656,7 +693,9 @@ def get_global_setting(token: str):
 
 
 @router.get(
-    "/global/user", summary="查询用户相关系统设置", response_model=schemas.Response
+    "/global/user",
+    summary="查询用户相关系统设置",
+    response_model=schemas.Response[schemas.JsonObject],
 )
 async def get_user_global_setting(_: User = Depends(get_current_active_user_async)):
     """
@@ -693,7 +732,11 @@ async def get_user_global_setting(_: User = Depends(get_current_active_user_asyn
     return schemas.Response(success=True, data=info)
 
 
-@router.get("/env", summary="查询系统配置", response_model=schemas.Response)
+@router.get(
+    "/env",
+    summary="查询系统配置",
+    response_model=schemas.Response[schemas.JsonObject],
+)
 async def get_env_setting(
     _: User = Depends(get_current_active_superuser_async),
 ) -> schemas.Response:
@@ -714,7 +757,11 @@ async def get_env_setting(
     return schemas.Response(success=True, data=info)
 
 
-@router.get("/usage/statistic", summary="查询安装版本统计报表", response_model=schemas.Response)
+@router.get(
+    "/usage/statistic",
+    summary="查询安装版本统计报表",
+    response_model=schemas.Response[schemas.JsonObject],
+)
 async def usage_statistic(_: User = Depends(get_current_active_user_async)):
     """
     查询安装版本统计报表
@@ -722,7 +769,7 @@ async def usage_statistic(_: User = Depends(get_current_active_user_async)):
     return schemas.Response(success=True, data=await MoviePilotServerHelper.async_get_usage_statistic())
 
 
-@router.get("/ping", summary="服务存活检测", response_model=schemas.Response)
+@router.get("/ping", summary="服务存活检测", response_model=schemas.Response[None])
 async def ping(_: User = Depends(get_current_active_user_async)) -> schemas.Response:
     """
     检测服务是否可用
@@ -730,7 +777,11 @@ async def ping(_: User = Depends(get_current_active_user_async)) -> schemas.Resp
     return schemas.Response(success=True)
 
 
-@router.post("/env", summary="更新系统配置", response_model=schemas.Response)
+@router.post(
+    "/env",
+    summary="更新系统配置",
+    response_model=schemas.Response[schemas.SystemEnvironmentUpdateData],
+)
 async def set_env_setting(
     env: dict, _: User = Depends(get_current_active_superuser_async)
 ):
@@ -769,7 +820,18 @@ async def set_env_setting(
     )
 
 
-@router.get("/progress/{process_type}", summary="实时进度")
+@router.get(
+    "/progress/{process_type}",
+    summary="实时进度",
+    response_model=None,
+    response_class=StreamingResponse,
+    responses={
+        200: {
+            "description": "处理进度 SSE 事件流",
+            "content": {"text/event-stream": {"schema": {"type": "string"}}},
+        }
+    },
+)
 async def get_progress(
     request: Request,
     process_type: str,
@@ -795,7 +857,11 @@ async def get_progress(
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
-@router.get("/setting/public/{key}", summary="查询公开系统设置", response_model=schemas.Response)
+@router.get(
+    "/setting/public/{key}",
+    summary="查询公开系统设置",
+    response_model=schemas.Response[schemas.ValueData],
+)
 async def get_public_setting(
     key: str, _: User = Depends(get_current_active_user_async)
 ) -> schemas.Response:
@@ -813,7 +879,7 @@ async def get_public_setting(
 @router.post(
     "/setting/PLUGIN_MARKET/sync-wiki",
     summary="从Wiki同步插件市场仓库",
-    response_model=schemas.Response,
+    response_model=schemas.Response[schemas.PluginMarketSyncData],
 )
 async def sync_plugin_market_from_wiki(
     request: Optional[schemas.PluginMarketSyncRequest] = Body(default=None),
@@ -877,7 +943,11 @@ async def sync_plugin_market_from_wiki(
     )
 
 
-@router.get("/setting/{key}", summary="查询系统设置", response_model=schemas.Response)
+@router.get(
+    "/setting/{key}",
+    summary="查询系统设置",
+    response_model=schemas.Response[schemas.ValueData],
+)
 async def get_setting(
     key: str, _: User = Depends(get_current_active_superuser_async)
 ) -> schemas.Response:
@@ -891,7 +961,7 @@ async def get_setting(
     return schemas.Response(success=True, data={"value": value})
 
 
-@router.post("/setting/{key}", summary="更新系统设置", response_model=schemas.Response)
+@router.post("/setting/{key}", summary="更新系统设置", response_model=schemas.Response[None])
 async def set_setting(
     key: str,
     value: Annotated[Union[list, dict, bool, int, str] | None, Body()] = None,
@@ -927,7 +997,18 @@ async def set_setting(
         return schemas.Response(success=False, message=f"配置项 '{key}' 不存在")
 
 
-@router.get("/message", summary="实时消息")
+@router.get(
+    "/message",
+    summary="实时消息",
+    response_model=None,
+    response_class=StreamingResponse,
+    responses={
+        200: {
+            "description": "系统消息 SSE 事件流",
+            "content": {"text/event-stream": {"schema": {"type": "string"}}},
+        }
+    },
+)
 async def get_message(
     request: Request,
     role: Optional[str] = "system",
@@ -952,7 +1033,21 @@ async def get_message(
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
-@router.get("/logging", summary="实时日志")
+@router.get(
+    "/logging",
+    summary="实时日志",
+    response_model=None,
+    response_class=StreamingResponse,
+    responses={
+        200: {
+            "description": "实时日志流或完整日志文本",
+            "content": {
+                "text/event-stream": {"schema": {"type": "string"}},
+                "text/plain": {"schema": {"type": "string"}},
+            },
+        }
+    },
+)
 async def get_logging(
     request: Request,
     length: Optional[int] = 50,
@@ -1066,7 +1161,22 @@ async def get_logging(
         return StreamingResponse(log_generator(), media_type="text/event-stream")
 
 
-@router.get("/logging/download/{name}", summary="下载日志")
+@router.get(
+    "/logging/download/{name}",
+    summary="下载日志",
+    response_model=None,
+    response_class=StreamingResponse,
+    responses={
+        200: {
+            "description": "日志 ZIP 文件",
+            "content": {
+                "application/zip": {
+                    "schema": {"type": "string", "format": "binary"}
+                }
+            },
+        }
+    },
+)
 async def download_logging(
     name: str,
     _: schemas.TokenPayload = Depends(_verify_log_resource_superuser),
@@ -1078,7 +1188,9 @@ async def download_logging(
 
 
 @router.get(
-    "/versions", summary="查询Github所有Release版本", response_model=schemas.Response
+    "/versions",
+    summary="查询Github所有Release版本",
+    response_model=schemas.Response[schemas.JsonObjectList],
 )
 async def latest_version(_: schemas.TokenPayload = Depends(verify_token)):
     """
@@ -1094,7 +1206,11 @@ async def latest_version(_: schemas.TokenPayload = Depends(verify_token)):
     return schemas.Response(success=False)
 
 
-@router.get("/ruletest", summary="过滤规则测试", response_model=schemas.Response)
+@router.get(
+    "/ruletest",
+    summary="过滤规则测试",
+    response_model=schemas.Response[schemas.RuleTestData],
+)
 def ruletest(
     title: str,
     rulegroup_name: str,
@@ -1166,7 +1282,9 @@ def ruletest(
 
 
 @router.get(
-    "/nettest/targets", summary="获取网络测试目标", response_model=schemas.Response
+    "/nettest/targets",
+    summary="获取网络测试目标",
+    response_model=schemas.Response[list[schemas.NetTestTarget]],
 )
 async def nettest_targets(_: schemas.TokenPayload = Depends(verify_token)):
     """
@@ -1188,7 +1306,11 @@ async def nettest_targets(_: schemas.TokenPayload = Depends(verify_token)):
     )
 
 
-@router.get("/nettest", summary="测试网络连通性")
+@router.get(
+    "/nettest",
+    summary="测试网络连通性",
+    response_model=schemas.Response[schemas.TimeData],
+)
 async def nettest(
     target_id: Optional[str] = None,
     url: Optional[str] = None,
@@ -1279,7 +1401,9 @@ async def nettest(
 
 
 @router.get(
-    "/modulelist", summary="查询已加载的模块ID列表", response_model=schemas.Response
+    "/modulelist",
+    summary="查询已加载的模块ID列表",
+    response_model=schemas.Response[schemas.SystemModuleListData],
 )
 def modulelist(_: schemas.TokenPayload = Depends(verify_token)):
     """
@@ -1303,7 +1427,7 @@ def modulelist(_: schemas.TokenPayload = Depends(verify_token)):
 
 
 @router.get(
-    "/moduletest/{moduleid}", summary="模块可用性测试", response_model=schemas.Response
+    "/moduletest/{moduleid}", summary="模块可用性测试", response_model=schemas.Response[None]
 )
 def moduletest(moduleid: str, _: schemas.TokenPayload = Depends(verify_token)):
     """
@@ -1313,7 +1437,7 @@ def moduletest(moduleid: str, _: schemas.TokenPayload = Depends(verify_token)):
     return schemas.Response(success=state, message=errmsg)
 
 
-@router.get("/restart", summary="重启系统", response_model=schemas.Response)
+@router.get("/restart", summary="重启系统", response_model=schemas.Response[None])
 def restart_system(_: User = Depends(get_current_active_superuser)):
     """
     重启系统（仅管理员）
@@ -1323,7 +1447,7 @@ def restart_system(_: User = Depends(get_current_active_superuser)):
     return schemas.Response(success=ret, message=msg)
 
 
-@router.post("/upgrade", summary="升级并重启系统", response_model=schemas.Response)
+@router.post("/upgrade", summary="升级并重启系统", response_model=schemas.Response[None])
 def upgrade_system(
     mode: Annotated[str | None, Body()] = None,
     _: User = Depends(get_current_active_superuser),
@@ -1341,7 +1465,7 @@ def upgrade_system(
     return schemas.Response(success=ret, message=msg)
 
 
-@router.get("/runscheduler", summary="运行服务", response_model=schemas.Response)
+@router.get("/runscheduler", summary="运行服务", response_model=schemas.Response[None])
 def run_scheduler(jobid: str, _: User = Depends(get_current_active_superuser)):
     """
     执行命令（仅管理员）
@@ -1356,7 +1480,7 @@ def run_scheduler(jobid: str, _: User = Depends(get_current_active_superuser)):
 
 
 @router.get(
-    "/runscheduler2", summary="运行服务（API_TOKEN）", response_model=schemas.Response
+    "/runscheduler2", summary="运行服务（API_TOKEN）", response_model=schemas.Response[None]
 )
 def run_scheduler2(jobid: str, _: Annotated[str, Depends(verify_apitoken)]):
     """
