@@ -2,6 +2,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+from app.chain.media import MediaChain
+from app.chain.music import MusicChain
 from app.core.context import MusicInfo
 from app.core.meta.metamusic import (
     audio_quality_score,
@@ -10,6 +12,9 @@ from app.core.meta.metamusic import (
     parse_audio_quality,
 )
 from app.helper.audio import AudioMetadataHelper
+
+
+RECORDING_ID = "38035858-f990-4fbb-b3b2-f2f8b958eeba"
 
 
 def test_read_audio_metadata_maps_easy_tags(monkeypatch):
@@ -24,6 +29,7 @@ def test_read_audio_metadata_maps_easy_tags(monkeypatch):
             "tracknumber": ["8/13"],
             "discnumber": ["1/1"],
             "isrc": ["USQX91300105"],
+            "musicbrainz_trackid": [RECORDING_ID],
         },
         info=SimpleNamespace(
             length=369.4,
@@ -47,6 +53,8 @@ def test_read_audio_metadata_maps_easy_tags(monkeypatch):
     assert meta.audio_lossless is True
     assert meta.audio_quality == "lossless"
     assert meta.audio_specs == "FLAC · 16-bit · 44.1 kHz · 1,411 kbps"
+    assert meta.media_source == "musicbrainz"
+    assert meta.media_id == RECORDING_ID
 
 
 def test_parse_declared_hires_audio_quality_from_resource_title():
@@ -90,6 +98,36 @@ def test_music_info_serialization_exposes_derived_audio_quality():
     assert payload["audio_specs"] == "FLAC · 24-bit · 96 kHz · 2,304 kbps"
 
 
+def test_music_info_from_meta_preserves_track_and_audio_evidence():
+    """核心元数据转换应保留整理、刮削和通知依赖的曲序与实际音频参数。"""
+    from app.core.meta import MetaMusic
+
+    info = MusicInfo.from_meta(MetaMusic(
+        title="Get Lucky",
+        artists=["Daft Punk"],
+        album="Random Access Memories",
+        disc_number=1,
+        track_number=8,
+        total_tracks=13,
+        audio_format="FLAC",
+        bit_depth=24,
+        sample_rate=96_000,
+        bitrate=2_304_000,
+        duration=369,
+        isrc="USQX91300105",
+    ))
+
+    assert info.track_number == 8
+    assert info.total_tracks == 13
+    assert info.audio_format == "FLAC"
+    assert info.audio_lossless is True
+    assert info.bit_depth == 24
+    assert info.sample_rate == 96_000
+    assert info.bitrate == 2_304_000
+    assert info.duration == 369
+    assert info.isrc == "USQX91300105"
+
+
 def test_parse_compact_audio_quality_tokens_without_false_sample_bitrate():
     """紧凑资源命名中的 FLAC24bit 和 320K 应可识别，96kHz 不得误判为码率。"""
     lossless = parse_audio_quality("Album.FLAC24bit.96kHz")
@@ -110,6 +148,53 @@ def test_read_audio_metadata_falls_back_to_filename(monkeypatch):
 
     assert meta.title == "Unknown Track"
     assert meta.audio_format == "MP3"
+
+
+def test_read_audio_tags_does_not_fill_from_filename(monkeypatch):
+    """标签识别层应只使用标签证据，避免把文件名线索提前混入。"""
+    audio = SimpleNamespace(
+        tags={"title": ["Tagged Title"]},
+        info=SimpleNamespace(length=180),
+    )
+    monkeypatch.setattr("app.helper.audio.MutagenFile", lambda *_args, **_kwargs: audio)
+
+    meta = AudioMetadataHelper.read_tags(Path("/music/Daft Punk - Get Lucky 2013.flac"))
+
+    assert meta.title == "Tagged Title"
+    assert meta.artists == []
+    assert meta.year is None
+
+
+def test_read_audio_tags_ignores_invalid_musicbrainz_id(monkeypatch):
+    """异常 MusicBrainz 标签不得进入 ID 详情路径。"""
+    audio = SimpleNamespace(
+        tags={
+            "title": ["Tagged Title"],
+            "musicbrainz_trackid": ["../../unexpected"],
+        },
+        info=SimpleNamespace(length=180),
+    )
+    monkeypatch.setattr("app.helper.audio.MutagenFile", lambda *_args, **_kwargs: audio)
+
+    meta = AudioMetadataHelper.read_tags(Path("/music/track.flac"))
+
+    assert meta.media_source is None
+    assert meta.media_id is None
+
+
+def test_remote_path_meta_parses_track_prefix_once(tmp_path):
+    """远程或尚未落盘的音频路径应先剥离曲序，不能把 08 误识别成艺术家。"""
+    audio_path = tmp_path / "Daft Punk - Random Access Memories (2013)" / "08 - Get Lucky.flac"
+
+    music_meta = MusicChain.read_path_meta(audio_path)
+    media_meta = MediaChain.read_path_meta(audio_path)
+
+    assert music_meta.title == "Get Lucky"
+    assert music_meta.artists == ["Daft Punk"]
+    assert music_meta.album == "Random Access Memories"
+    assert music_meta.track_number == 8
+    assert music_meta.audio_format == "FLAC"
+    assert media_meta.to_dict() == music_meta.to_dict()
 
 
 def test_read_audio_metadata_fallback_uses_dynamic_filename_parser(tmp_path, monkeypatch):
@@ -155,6 +240,28 @@ def test_read_audio_metadata_partial_tags_use_filename_for_missing_fields(
     assert meta.sample_rate == 44100
 
 
+def test_read_audio_metadata_distinguishes_alac_inside_m4a(monkeypatch):
+    """M4A 容器应依据实际流编码区分 ALAC 与 AAC，避免把无损音频降级。"""
+    audio = SimpleNamespace(
+        tags={"title": ["Lossless Track"]},
+        info=SimpleNamespace(
+            codec="alac",
+            codec_description="Apple Lossless Audio Codec",
+            length=180,
+            bitrate=900000,
+            bits_per_sample=24,
+            sample_rate=96000,
+        ),
+    )
+    monkeypatch.setattr("app.helper.audio.MutagenFile", lambda *_args, **_kwargs: audio)
+
+    meta = AudioMetadataHelper.read(Path("/music/Lossless Track.m4a"))
+
+    assert meta.audio_format == "ALAC"
+    assert meta.audio_lossless is True
+    assert meta.audio_quality == "hires"
+
+
 def test_write_audio_metadata_maps_music_info_to_easy_tags(monkeypatch):
     """音乐刮削应把标准歌曲、专辑和曲序字段写回音频标签。"""
     class FakeAudio:
@@ -176,6 +283,8 @@ def test_write_audio_metadata_maps_music_info_to_easy_tags(monkeypatch):
     success = AudioMetadataHelper.write(
         Path("/music/08 - Get Lucky.flac"),
         MusicInfo(
+            source="musicbrainz",
+            media_id=RECORDING_ID,
             title="Get Lucky",
             artists=["Daft Punk", "Pharrell Williams"],
             album="Random Access Memories",
@@ -192,6 +301,7 @@ def test_write_audio_metadata_maps_music_info_to_easy_tags(monkeypatch):
     assert audio.tags["title"] == ["Get Lucky"]
     assert audio.tags["artist"] == ["Daft Punk", "Pharrell Williams"]
     assert audio.tags["tracknumber"] == ["8/13"]
+    assert audio.tags["musicbrainz_trackid"] == [RECORDING_ID]
 
 
 def test_write_audio_metadata_can_embed_cover_without_rewriting_tags(monkeypatch):

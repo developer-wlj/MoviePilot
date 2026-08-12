@@ -2,20 +2,20 @@
 
 覆盖 MediaChain 同步/异步 ``recognize_by_meta`` 与 ``recognize_by_path`` 按
 ``MetaMusic`` 路由到音乐模块，以及 MusicBrainz 模块 ``recognize_media`` /
-``async_recognize_media`` 对音乐请求的详情、搜索匹配与兜底分支，ChainBase
+``async_recognize_media`` 对音乐请求的详情、搜索匹配与兜底分支，MediaChain
 对 MusicInfo 结果与影视统一走共享识别上报。
 """
 import asyncio
 from unittest.mock import AsyncMock, Mock, patch
 
-from app.chain import ChainBase
 from app.chain.media import MediaChain
 from app.chain.music import MusicChain
-from app.core.context import MusicInfo
+from app.core.context import MUSIC_ENTITY_ALBUM, MusicInfo
 from app.core.meta import MetaMusic
 from app.modules.anilist import AniListModule
 from app.modules.bangumi import BangumiModule
 from app.modules.musicbrainz import MusicBrainzModule
+from app.modules.theaudiodb import TheAudioDbModule
 from app.modules.themoviedb import TheMovieDbModule
 from app.schemas.types import MediaType
 
@@ -104,10 +104,6 @@ def test_media_chain_recognize_by_path_routes_musicbrainz_source_to_music_chain(
 
 def test_async_recognize_music_by_path_reads_local_audio_tags(tmp_path, monkeypatch):
     """本地音频识别应使用内嵌标签补全艺术家、专辑并保留音频质量参数。"""
-    from unittest.mock import AsyncMock
-
-    from app.helper.audio import AudioMetadataHelper
-
     audio_path = tmp_path / "02. 眼泪成诗.m4a"
     audio_path.write_bytes(b"audio")
     meta = MetaMusic(
@@ -120,7 +116,17 @@ def test_async_recognize_music_by_path_reads_local_audio_tags(tmp_path, monkeypa
     info = _music_info()
     chain = MediaChain()
     recognize = AsyncMock(return_value=info)
-    monkeypatch.setattr(AudioMetadataHelper, "read", lambda path: meta)
+    filename_meta = MetaMusic(title="02. 眼泪成诗")
+    monkeypatch.setattr(
+        MusicChain,
+        "read_path_evidence",
+        Mock(return_value=(meta, meta, filename_meta)),
+    )
+    monkeypatch.setattr(
+        MusicChain,
+        "async_identify_by_fingerprint",
+        AsyncMock(return_value=None),
+    )
     monkeypatch.setattr(chain, "async_recognize_media", recognize)
 
     recognized_meta, recognized_info = asyncio.run(
@@ -129,7 +135,150 @@ def test_async_recognize_music_by_path_reads_local_audio_tags(tmp_path, monkeypa
 
     assert recognized_meta is meta
     assert recognized_info is info
-    recognize.assert_awaited_once_with(meta=meta, source=None)
+    recognize.assert_awaited_once_with(
+        meta=meta,
+        source=None,
+        music_type="recording",
+    )
+
+
+def test_recognize_music_by_path_fingerprint_mbid_skips_later_tiers(monkeypatch):
+    """AcoustID 命中后应按 MBID 直查，且不再执行标签和文件名匹配。"""
+    recording_id = "38035858-f990-4fbb-b3b2-f2f8b958eeba"
+    merged = MetaMusic(title="Get Lucky", audio_format="FLAC")
+    tag_meta = MetaMusic(title="Tagged Title")
+    filename_meta = MetaMusic(title="Filename Title")
+    expected = MusicInfo(
+        source="musicbrainz",
+        media_id=recording_id,
+        title="Get Lucky",
+    )
+    chain = MediaChain()
+    direct = Mock(return_value=expected)
+    later_tier = Mock()
+    monkeypatch.setattr(
+        MusicChain,
+        "read_path_evidence",
+        Mock(return_value=(merged, tag_meta, filename_meta)),
+    )
+    monkeypatch.setattr(
+        MusicChain,
+        "identify_by_fingerprint",
+        Mock(return_value=recording_id),
+    )
+    monkeypatch.setattr(chain, "_recognize_musicbrainz_recording", direct)
+    monkeypatch.setattr(chain, "_recognize_music_meta_tier", later_tier)
+
+    recognized_meta, recognized_info = chain.recognize_music_by_path("track.flac")
+
+    assert recognized_meta is merged
+    assert recognized_info is expected
+    direct.assert_called_once_with(merged, recording_id)
+    later_tier.assert_not_called()
+
+
+def test_recognize_music_by_path_tag_mbid_skips_multi_source_matching(monkeypatch):
+    """指纹未命中但标签含 MBID 时应直查详情，不进入多来源标题匹配。"""
+    recording_id = "38035858-f990-4fbb-b3b2-f2f8b958eeba"
+    tag_meta = MetaMusic(
+        title="Tagged Title",
+        media_source="musicbrainz",
+        media_id=recording_id,
+    )
+    filename_meta = MetaMusic(title="Filename Title")
+    expected = MusicInfo(
+        source="musicbrainz",
+        media_id=recording_id,
+        title="Tagged Title",
+    )
+    chain = MediaChain()
+    direct = Mock(return_value=expected)
+    generic = Mock()
+    tier = Mock(wraps=chain._recognize_music_meta_tier)
+    monkeypatch.setattr(
+        MusicChain,
+        "read_path_evidence",
+        Mock(return_value=(tag_meta, tag_meta, filename_meta)),
+    )
+    monkeypatch.setattr(MusicChain, "identify_by_fingerprint", Mock(return_value=None))
+    monkeypatch.setattr(chain, "_recognize_musicbrainz_recording", direct)
+    monkeypatch.setattr(chain, "recognize_media", generic)
+    monkeypatch.setattr(chain, "_recognize_music_meta_tier", tier)
+
+    _, recognized_info = chain.recognize_music_by_path("track.flac")
+
+    assert recognized_info is expected
+    direct.assert_called_once_with(meta=tag_meta, recording_id=recording_id)
+    generic.assert_not_called()
+    assert tier.call_count == 1
+    assert tier.call_args.kwargs["tier_name"] == "文件标签"
+
+
+def test_recognize_music_by_path_falls_back_from_tags_to_filename(monkeypatch):
+    """标签层未获得远端身份时应继续使用文件名层，且顺序不可反转。"""
+    tag_meta = MetaMusic(title="Tagged Title")
+    filename_meta = MetaMusic(title="Filename Title")
+    expected = MusicInfo(
+        source="musicbrainz",
+        media_id="recording-from-filename",
+        title="Filename Title",
+    )
+    chain = MediaChain()
+    recognize = Mock(side_effect=[MusicInfo(title="Offline Tag"), expected])
+    monkeypatch.setattr(
+        MusicChain,
+        "read_path_evidence",
+        Mock(return_value=(tag_meta, tag_meta, filename_meta)),
+    )
+    monkeypatch.setattr(MusicChain, "identify_by_fingerprint", Mock(return_value=None))
+    monkeypatch.setattr(chain, "recognize_media", recognize)
+
+    _, recognized_info = chain.recognize_music_by_path("track.flac")
+
+    assert recognized_info is expected
+    assert [call.kwargs["meta"] for call in recognize.call_args_list] == [
+        tag_meta,
+        filename_meta,
+    ]
+    assert all(
+        call.kwargs["music_type"] == "recording"
+        for call in recognize.call_args_list
+    )
+
+
+def test_async_recognize_music_by_path_fingerprint_mbid_skips_later_tiers(monkeypatch):
+    """异步路径也应在 AcoustID 命中后直查 MBID 并停止后续层级。"""
+    recording_id = "38035858-f990-4fbb-b3b2-f2f8b958eeba"
+    merged = MetaMusic(title="Get Lucky")
+    expected = MusicInfo(
+        source="musicbrainz",
+        media_id=recording_id,
+        title="Get Lucky",
+    )
+    chain = MediaChain()
+    direct = AsyncMock(return_value=expected)
+    later_tier = AsyncMock()
+    monkeypatch.setattr(
+        MusicChain,
+        "read_path_evidence",
+        Mock(return_value=(merged, MetaMusic(), MetaMusic())),
+    )
+    monkeypatch.setattr(
+        MusicChain,
+        "async_identify_by_fingerprint",
+        AsyncMock(return_value=recording_id),
+    )
+    monkeypatch.setattr(chain, "_async_recognize_musicbrainz_recording", direct)
+    monkeypatch.setattr(chain, "_async_recognize_music_meta_tier", later_tier)
+
+    recognized_meta, recognized_info = asyncio.run(
+        chain.async_recognize_music_by_path("track.flac")
+    )
+
+    assert recognized_meta is merged
+    assert recognized_info is expected
+    direct.assert_awaited_once_with(merged, recording_id)
+    later_tier.assert_not_awaited()
 
 
 def test_musicbrainz_module_recognize_media_ignores_non_music():
@@ -143,7 +292,7 @@ def test_musicbrainz_module_recognize_media_ignores_non_music():
 def test_chain_explicit_music_source_bypasses_generic_module_dispatch(monkeypatch):
     """显式音乐类型和来源应只调用对应音乐模块，不遍历通用影视模块。"""
     expected = _music_info()
-    chain = ChainBase()
+    chain = MediaChain()
     recognize_source = Mock(return_value=expected)
     generic_dispatch = Mock()
     monkeypatch.setattr(MusicChain, "recognize_from_source", recognize_source)
@@ -169,9 +318,41 @@ def test_chain_explicit_music_source_bypasses_generic_module_dispatch(monkeypatc
     generic_dispatch.assert_not_called()
 
 
+def test_music_chain_rejects_cross_entity_detail_result(monkeypatch):
+    """指定专辑实体时，即使来源返回同 ID 的单曲也不得采信。"""
+    chain = MusicChain()
+    recognize_source = Mock(return_value=_music_info())
+    monkeypatch.setattr(chain, "_recognize_from_source", recognize_source)
+
+    result = chain.recognize_from_source(
+        source="musicbrainz",
+        mediaid="recording-1",
+        music_type=MUSIC_ENTITY_ALBUM,
+    )
+
+    assert result is None
+    assert recognize_source.call_args.kwargs["music_type"] == MUSIC_ENTITY_ALBUM
+
+
+def test_music_chain_rejects_replaced_explicit_identity(monkeypatch):
+    """显式 ID 识别不得用标题搜索得到的另一 ID 替换请求目标。"""
+    chain = MusicChain()
+    replaced = _music_info()
+    replaced.media_id = "recording-other"
+    monkeypatch.setattr(chain, "_recognize_from_source", Mock(return_value=replaced))
+
+    result = chain.recognize_from_source(
+        source="musicbrainz",
+        mediaid="recording-requested",
+        music_type="recording",
+    )
+
+    assert result is None
+
+
 def test_chain_music_type_rejects_video_source_before_module_dispatch(monkeypatch):
     """音乐状态即使携带错误影视来源，也不得调用 TMDB 等通用识别模块。"""
-    chain = ChainBase()
+    chain = MediaChain()
     generic_dispatch = Mock()
     async_generic_dispatch = AsyncMock()
     monkeypatch.setattr(chain, "run_module", generic_dispatch)
@@ -324,22 +505,49 @@ def test_musicbrainz_module_recognize_media_by_music_type_and_media_id(monkeypat
 
 
 def test_musicbrainz_module_async_recognize_media(monkeypatch):
-    """异步模块入口应在线程池中调用同步实现。"""
+    """异步 MusicBrainz 识别应直接调用异步检索而不进入同步入口。"""
     module = MusicBrainzModule()
     expected = _music_info()
-    sync_mock = Mock(return_value=expected)
+    async_search = AsyncMock(return_value=[expected])
+    sync_mock = Mock(side_effect=AssertionError("异步识别不应调用同步入口"))
+    monkeypatch.setattr(module, "_async_search_recordings", async_search)
     monkeypatch.setattr(module, "recognize_media", sync_mock)
 
     result = asyncio.run(module.async_recognize_media(
         meta=MetaMusic(title="晴天"), mtype=MediaType.MUSIC
     ))
 
-    sync_mock.assert_called_once()
+    async_search.assert_awaited_once()
+    sync_mock.assert_not_called()
+    assert result is expected
+
+
+def test_theaudiodb_module_async_recognize_media(monkeypatch):
+    """异步 TheAudioDB 识别应直接调用异步检索而不进入同步入口。"""
+    module = TheAudioDbModule()
+    expected = MusicInfo(
+        source="theaudiodb",
+        media_id="track-1",
+        title="晴天",
+    )
+    async_search = AsyncMock(return_value=[expected])
+    sync_mock = Mock(side_effect=AssertionError("异步识别不应调用同步入口"))
+    monkeypatch.setattr(module, "_async_search_tracks", async_search)
+    monkeypatch.setattr(module, "recognize_media", sync_mock)
+
+    result = asyncio.run(module.async_recognize_media(
+        meta=MetaMusic(title="晴天"),
+        mtype=MediaType.MUSIC,
+        source="theaudiodb",
+    ))
+
+    async_search.assert_awaited_once()
+    sync_mock.assert_not_called()
     assert result is expected
 
 
 def test_chain_recognize_media_returns_musicinfo_and_reports_share():
-    """自动多源识别最终选出的 MusicInfo 应只上报一次共享识别。"""
+    """MusicBrainz 自动识别返回的 MusicInfo 应只上报一次共享识别。"""
     expected = _music_info()
     chain = MediaChain()
     with patch.object(MusicChain, "recognize_best", return_value=expected), patch(
@@ -353,7 +561,7 @@ def test_chain_recognize_media_returns_musicinfo_and_reports_share():
 
 
 def test_chain_async_recognize_media_returns_musicinfo_and_reports_share():
-    """异步多源识别最终选出的 MusicInfo 应只上报一次共享识别。"""
+    """异步 MusicBrainz 自动识别结果应只上报一次共享识别。"""
     expected = _music_info()
     chain = MediaChain()
     with patch.object(

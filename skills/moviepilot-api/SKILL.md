@@ -111,6 +111,8 @@ All endpoints are under the base URL `{MP_HOST}`. Path parameters are shown as `
 
 ### Media Search (13 endpoints)
 
+When recognition omits `source`, MoviePilot uses TMDB exclusively for video and MusicBrainz exclusively for music. A miss does not trigger another metadata source. Providing `source` or a source-native ID keeps recognition strict to that manually selected source.
+
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/v1/media/search` | Search media, collections, or people by title. Params: `title` (required), `type`, `page`, `count`, optional `source`. Supported sources: `media` = `themoviedb`, `douban`, `bangumi`, `anilist`; `collection` = `themoviedb`; `person` = `themoviedb`, `douban` |
