@@ -1,6 +1,8 @@
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
+import pytest
+
 from app.chain.music import MusicChain
 from app.chain.subscribe import SubscribeChain, build_subscribe_meta
 from app.core.context import (
@@ -8,17 +10,17 @@ from app.core.context import (
     MUSIC_ENTITY_ARTIST,
     MUSIC_ENTITY_RECORDING,
     Context,
+    MusicInfo,
     TorrentInfo,
 )
 from app.core.meta import MetaMusic
-from app.core.context import MusicInfo
 from app.schemas.types import MediaType
 
 
 def _music_info() -> MusicInfo:
     """构造音乐订阅测试使用的标准目标。"""
     return MusicInfo(
-        source="musicbrainz",
+        media_source="musicbrainz",
         media_id="recording-1",
         title="晴天",
         artists=["周杰伦"],
@@ -319,7 +321,7 @@ def test_album_best_version_requires_confirmed_full_coverage():
         current_priority=90,
     )
     album = MusicInfo(
-        source="musicbrainz",
+        media_source="musicbrainz",
         media_id="release-group-1",
         music_type=MUSIC_ENTITY_ALBUM,
         title="叶惠美",
@@ -541,7 +543,7 @@ def test_legacy_music_subscription_rejects_artist_recognition_result():
     """旧订阅缺少实体类型时不得把艺术家识别结果迁移成可下载订阅。"""
     subscribe = _subscribe(music_type=None)
     artist = MusicInfo(
-        source="musicbrainz",
+        media_source="musicbrainz",
         media_id="artist-1",
         music_type=MUSIC_ENTITY_ARTIST,
         title="周杰伦",
@@ -565,7 +567,7 @@ def test_album_subscription_preserves_track_count_snapshot_when_remote_omits_it(
         media_id="release-group-1",
     )
     remote = MusicInfo(
-        source="musicbrainz",
+        media_source="musicbrainz",
         media_id="release-group-1",
         music_type=MUSIC_ENTITY_ALBUM,
         title="叶惠美",
@@ -616,7 +618,7 @@ def test_music_subscribe_target_validation_enforces_entity_semantics():
     recording = _music_info()
     recording.total_tracks = 11
     album = MusicInfo(
-        source="musicbrainz",
+        media_source="musicbrainz",
         media_id="release-group-1",
         music_type=MUSIC_ENTITY_ALBUM,
         title="叶惠美",
@@ -660,7 +662,7 @@ def test_album_target_sync_does_not_clear_stable_track_count():
         total_tracks=11,
     )
     album = MusicInfo(
-        source="musicbrainz",
+        media_source="musicbrainz",
         media_id="release-group-1",
         music_type=MUSIC_ENTITY_ALBUM,
         title="叶惠美",
@@ -684,7 +686,7 @@ def test_prepare_music_subscription_rejects_album_without_track_count():
         total_tracks=None,
     )
     album = MusicInfo(
-        source="musicbrainz",
+        media_source="musicbrainz",
         media_id="release-group-unknown",
         music_type=MUSIC_ENTITY_ALBUM,
         title="未知专辑",
@@ -733,6 +735,57 @@ def test_subscribe_add_music_uses_explicit_entity_recognize():
     assert routed_meta.media_id == "recording-1"
     assert media_chain.recognize_media.call_args.kwargs["source"] == "musicbrainz"
     assert media_chain.recognize_media.call_args.kwargs["music_type"] == MUSIC_ENTITY_RECORDING
+    media_chain.recognize_by_meta.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("source", "media_id", "title"),
+    [
+        ("theaudiodb", "2109619", "Parachutes"),
+        ("doubanmusic", "1401853", "范特西"),
+    ],
+)
+def test_subscribe_add_music_routes_new_album_sources(
+        source: str,
+        media_id: str,
+        title: str,
+):
+    """新增音乐源的专辑订阅应保留来源、原生 ID 与实体类型。"""
+    target = MusicInfo(
+        source=source,
+        media_id=media_id,
+        music_type=MUSIC_ENTITY_ALBUM,
+        title=title,
+        album=title,
+        total_tracks=10,
+    )
+    media_chain = Mock()
+    media_chain.recognize_media = Mock(return_value=target)
+    subscribe_oper = Mock()
+    subscribe_oper.add.return_value = (1, "")
+
+    with patch("app.chain.subscribe.MediaChain", return_value=media_chain), \
+            patch("app.chain.subscribe.SubscribeOper", return_value=subscribe_oper), \
+            patch("app.chain.subscribe.MoviePilotServerHelper"), \
+            patch("app.chain.subscribe.eventmanager"):
+        sid, err_msg = SubscribeChain().add(
+            title=title,
+            year="2000",
+            mtype=MediaType.MUSIC,
+            media_source=source,
+            media_id=media_id,
+            music_type=MUSIC_ENTITY_ALBUM,
+            message=False,
+        )
+
+    assert sid == 1
+    assert err_msg == ""
+    media_chain.recognize_media.assert_called_once()
+    assert media_chain.recognize_media.call_args.kwargs["source"] == source
+    assert media_chain.recognize_media.call_args.kwargs["mediaid"] == media_id
+    assert media_chain.recognize_media.call_args.kwargs["music_type"] == MUSIC_ENTITY_ALBUM
+    assert subscribe_oper.add.call_args.kwargs["media_source"] == source
+    assert subscribe_oper.add.call_args.kwargs["media_id"] == media_id
     media_chain.recognize_by_meta.assert_not_called()
 
 
