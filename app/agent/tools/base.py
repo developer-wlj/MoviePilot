@@ -255,6 +255,10 @@ class MoviePilotTool(BaseTool, metaclass=ABCMeta):
 
         permission_result = await self._check_permission()
         if permission_result:
+            # 工具被权限门禁拦截时，模型在调用前可能已输出一段引导文本，且这里
+            # 不会产生工具消息或统计摘要；补一个换行分隔符，避免随后的失败说明
+            # 与引导文本直接连在一起。
+            self._ensure_tool_boundary_separator()
             return permission_result
 
         # 获取工具执行提示消息
@@ -397,6 +401,21 @@ class MoviePilotTool(BaseTool, metaclass=ABCMeta):
         # 独立的新 dict，跨工具状态（例如质量门槛拒绝标记）无法传播。
         self._agent_context = {} if agent_context is None else agent_context
 
+    def _ensure_tool_boundary_separator(self) -> None:
+        """
+        在流式缓冲中为工具边界补一个换行分隔符。
+
+        工具被权限门禁等前置检查拦截时不产生工具消息或统计摘要，若模型在调用前
+        已输出文本，后续内容会直接粘在前文后面；这里保证缓冲以换行结尾，让工具
+        前后的内容分行展示。缓冲为空或已以换行结尾时无需处理。
+        """
+        if (
+            self._stream_handler
+            and self._stream_handler.is_streaming
+            and self._stream_handler.last_buffer_char not in ("", "\n")
+        ):
+            self._stream_handler.emit("\n")
+
     async def is_admin_user(self) -> bool:
         """
         判断当前工具调用者是否拥有管理员级权限。
@@ -536,55 +555,25 @@ class MoviePilotTool(BaseTool, metaclass=ABCMeta):
         """
         检查当前消息渠道身份是否具备管理员权限。
 
-        :return: 当前渠道稳定用户 ID 位于显式管理员名单时返回 True
+        :return: 当前渠道稳定用户 ID 位于显式管理员名单或等于渠道主ID时返回 True
         """
         if not self._channel or not self._source:
             return False
 
         user_id_str = str(self._user_id) if self._user_id else None
 
-        channel_type_map = {
-            MessageChannel.Telegram: "telegram",
-            MessageChannel.Discord: "discord",
-            MessageChannel.Wechat: "wechat",
-            MessageChannel.Feishu: "feishu",
-            MessageChannel.WechatClawBot: "wechatclawbot",
-            MessageChannel.Slack: "slack",
-            MessageChannel.VoceChat: "vocechat",
-            MessageChannel.SynologyChat: "synologychat",
-            MessageChannel.QQ: "qqbot",
-        }
-
-        channel_type = None
-        for key, value in channel_type_map.items():
-            if self._channel == key.value:
-                channel_type = value
-                break
-
-        if not channel_type:
+        try:
+            channel = MessageChannel(self._channel)
+        except ValueError:
             return False
-
-        admin_key_map = {
-            "telegram": "TELEGRAM_ADMINS",
-            "discord": "DISCORD_ADMINS",
-            "wechat": "WECHAT_ADMINS",
-            "feishu": "FEISHU_ADMINS",
-            "wechatclawbot": "WECHATCLAWBOT_ADMINS",
-            "slack": "SLACK_ADMINS",
-            "vocechat": "VOCECHAT_ADMINS",
-            "synologychat": "SYNOLOGYCHAT_ADMINS",
-            "qqbot": "QQBOT_ADMINS",
-        }
-
-        admin_key = admin_key_map.get(channel_type)
 
         try:
             configs = ServiceConfigHelper.get_notification_configs()
             for config in configs:
                 if config.name == self._source and config.config:
                     return matches_channel_admin(
+                        channel,
                         config.config,
-                        admin_key,
                         user_id_str,
                     )
         except Exception as e:
