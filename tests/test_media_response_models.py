@@ -1,7 +1,9 @@
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app import schemas
+from app.api.endpoints import mediaserver as mediaserver_endpoint
 from app.api.response import ResponseAPIRouter
 from app.core.context import MediaInfo as CoreMediaInfo
 from app.schemas.types import MediaSource, MediaType
@@ -48,3 +50,94 @@ def test_media_search_response_preserves_core_collection_fields() -> None:
     assert "douban_info" in result
     assert "bangumi_info" in result
     assert "anilist_info" in result
+
+
+def test_media_response_accepts_cross_source_credit_shapes() -> None:
+    """媒体响应应同时保留豆瓣姓名字符串和 TMDB 演职员对象。"""
+    router = ResponseAPIRouter()
+
+    @router.get("/recommend", response_model=list[schemas.MediaInfo])
+    def recommend_media() -> list[dict]:
+        """返回跨来源的演职员字段形态。"""
+        return [
+            {
+                "media_source": MediaSource.Douban,
+                "media_id": "1292052",
+                "title": "示例电影",
+                "actors": ["演员甲", {"id": 2, "name": "演员乙"}],
+                "directors": ["导演甲", {"id": 3, "name": "导演乙"}],
+            }
+        ]
+
+    app = FastAPI()
+    app.include_router(router)
+    response = TestClient(app).get("/recommend")
+
+    assert response.status_code == 200
+    media = response.json()["data"][0]
+    assert media["actors"][0] == "演员甲"
+    assert media["actors"][1]["id"] == 2
+    assert media["actors"][1]["name"] == "演员乙"
+    assert media["directors"][0] == "导演甲"
+    assert media["directors"][1]["id"] == 3
+    assert media["directors"][1]["name"] == "导演乙"
+
+
+def test_media_response_accepts_legacy_source_key() -> None:
+    """媒体身份重构前缓存的旧格式条目（source + media_id）应被归一化并正常响应。"""
+    router = ResponseAPIRouter()
+
+    @router.get("/recommend", response_model=list[schemas.MediaInfo])
+    def recommend_media() -> list[dict]:
+        """返回媒体身份重构前缓存的旧格式推荐条目。"""
+        return [
+            {
+                "source": "themoviedb",
+                "media_id": "1368337",
+                "type": "电影",
+                "title": "奥德赛",
+                "year": "2026",
+                "tmdb_id": 1368337,
+            }
+        ]
+
+    app = FastAPI()
+    app.include_router(router)
+    response = TestClient(app).get("/recommend")
+
+    assert response.status_code == 200
+    media = response.json()["data"][0]
+    assert media["media_source"] == "themoviedb"
+    assert media["media_id"] == "1368337"
+
+
+@pytest.mark.asyncio
+async def test_media_exists_not_found_is_a_successful_query(monkeypatch) -> None:
+    """媒体库未命中是查询结果，不应被统一客户端识别为接口失败。"""
+
+    class EmptyMediaServerOper:
+        """返回未命中的媒体库查询桩。"""
+
+        async def async_exists(self, **_kwargs):
+            """模拟媒体库中不存在目标媒体。"""
+            return None
+
+    monkeypatch.setattr(
+        mediaserver_endpoint,
+        "MediaServerOper",
+        lambda _db: EmptyMediaServerOper(),
+    )
+
+    response = await mediaserver_endpoint.exists_local(
+        title="未入库电影",
+        year="2026",
+        mtype="电影",
+        media_source=None,
+        media_id=None,
+        season=None,
+        db=object(),
+        _=None,
+    )
+
+    assert response.success is True
+    assert response.data == {"item": {}}

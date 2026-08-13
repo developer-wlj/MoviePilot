@@ -66,6 +66,7 @@ from app.agent.tools.impl.mcp import (
     create_external_mcp_tools,
     select_legacy_mcp_tools,
 )
+from app.agent.tools.impl.query_system_settings import QuerySystemSettingsTool
 from app.chain import ChainBase
 from app.core.config import settings
 from app.core.event import eventmanager
@@ -301,6 +302,21 @@ AGENT_CHAT_TITLE_PROMPT = (
 )
 AGENT_CHAT_TITLE_MAX_LENGTH = 36
 AGENT_CHAT_TITLE_MAX_CJK_CHARS = 18
+SECRET_CONFIRMATION_TTL = timedelta(minutes=5)
+SECRET_CONFIRM_TEXT = "确认"
+SECRET_CANCEL_TEXT = "取消"
+
+
+@dataclass
+class _PendingSecretConfirmation:
+    """保存当前会话中一次待确认的敏感设置读取。"""
+
+    tool: QuerySystemSettingsTool
+    arguments: Dict[str, Any]
+    created_at: datetime
+    user_id: str
+    channel: str
+    source: str
 
 
 class MoviePilotAgent:
@@ -322,6 +338,7 @@ class MoviePilotAgent:
             replay_mode: ReplyMode = ReplyMode.DISPATCH,
             allow_message_tools: bool = True,
             output_callback: Optional[Callable[[str], None]] = None,
+            protected_output_callback: Optional[Callable[[str], Optional[bool]]] = None,
     ):
         self.session_id = session_id
         self.user_id = user_id
@@ -333,7 +350,9 @@ class MoviePilotAgent:
         self.reply_mode = replay_mode
         self.allow_message_tools = allow_message_tools
         self.output_callback = output_callback
+        self.protected_output_callback = protected_output_callback
         self._tool_context: Dict[str, object] = {}
+        self._pending_secret_confirmation: Optional[_PendingSecretConfirmation] = None
         self._streamed_output = ""
         self._session_usage = _SessionUsageSnapshot()
         self._llm_runtime_config: Optional[Dict[str, Any]] = None
@@ -742,10 +761,218 @@ class MoviePilotAgent:
             "reply_mode": None,
             "should_dispatch_reply": should_dispatch_reply,
             "is_admin": await self._is_system_admin_context(),
+            "require_secret_confirmation": True,
+            "secret_confirmation_handler": self._register_secret_confirmation,
             # 工具回调消息需要发回原会话（群聊@机器人时按钮选择等卡片不能发到私聊），
             # 后台任务无渠道上下文时置空，交由通知链广播。
             "original_chat_id": None if self.is_background else self.original_chat_id,
         }
+
+    def set_protected_output_callback(
+            self,
+            protected_output_callback: Optional[Callable[[str], Optional[bool]]],
+    ) -> None:
+        """更新仅供当前请求接收的受保护文本输出回调。"""
+        self.protected_output_callback = protected_output_callback
+
+    def has_pending_secret_confirmation(self) -> bool:
+        """判断当前会话是否存在仍在有效期内的敏感设置确认。"""
+        pending = self._pending_secret_confirmation
+        if not pending:
+            return False
+        if datetime.now() - pending.created_at <= SECRET_CONFIRMATION_TTL:
+            return True
+        self._pending_secret_confirmation = None
+        return False
+
+    def _can_confirm_secret_read(self) -> bool:
+        """判断当前渠道能否把密钥结果直接交付给原用户。"""
+        if self.channel == MessageChannel.WebAgent.value:
+            return callable(self.protected_output_callback)
+        return bool(self.user_id and self.source) and self.channel in {
+            MessageChannel.Telegram.value,
+            MessageChannel.Feishu.value,
+        }
+
+    async def _register_secret_confirmation(
+            self,
+            tool: QuerySystemSettingsTool,
+            arguments: Dict[str, Any],
+    ) -> str:
+        """校验并冻结一次待用户确认的敏感设置读取。"""
+        if self.has_pending_secret_confirmation():
+            return "当前会话已有待确认的敏感设置读取，请先回复“确认”或“取消”。"
+        if not self._can_confirm_secret_read():
+            self._pending_secret_confirmation = None
+            return "当前入口不支持安全交付敏感设置，未执行读取。"
+
+        if not isinstance(tool, QuerySystemSettingsTool):
+            self._pending_secret_confirmation = None
+            return "当前工具不支持敏感设置确认。"
+
+        args_schema = tool.args_schema
+        if args_schema is None:
+            self._pending_secret_confirmation = None
+            return "敏感设置读取参数无法校验，未执行读取。"
+        try:
+            validated_arguments = args_schema.model_validate(arguments).model_dump()
+        except Exception:
+            self._pending_secret_confirmation = None
+            return "敏感设置读取参数无效，未执行读取。"
+        if validated_arguments.get("show_secrets") is not True:
+            self._pending_secret_confirmation = None
+            return "当前操作不需要敏感设置确认。"
+
+        permission_result = None
+        if not await self._is_system_admin_context():
+            permission_result = await tool._check_permission()
+        if permission_result:
+            self._pending_secret_confirmation = None
+            return permission_result
+
+        target = validated_arguments.get("setting_key") or (
+            validated_arguments.get("group") or "all"
+        )
+        confirmation_message = (
+            f"即将读取系统设置 {target} 的未脱敏值。"
+            "结果会直接发送给您，不会交给模型或写入对话历史。"
+            "请在 5 分钟内回复“确认”继续，或回复“取消”放弃。"
+        )
+        if self.channel == MessageChannel.WebAgent.value:
+            self._pending_secret_confirmation = _PendingSecretConfirmation(
+                tool=tool,
+                arguments=validated_arguments,
+                created_at=datetime.now(),
+                user_id=str(self.user_id or ""),
+                channel=str(self.channel or ""),
+                source=str(self.source or ""),
+            )
+            self._emit_output(confirmation_message)
+        else:
+            delivered = await self._deliver_private_channel_message(
+                confirmation_message
+            )
+            if not delivered:
+                self._pending_secret_confirmation = None
+                return "无法向当前用户建立私聊，未执行敏感设置读取。"
+            self._pending_secret_confirmation = _PendingSecretConfirmation(
+                tool=tool,
+                arguments=validated_arguments,
+                created_at=datetime.now(),
+                user_id=str(self.user_id or ""),
+                channel=str(self.channel or ""),
+                source=str(self.source or ""),
+            )
+            self._tool_context["user_reply_sent"] = True
+        return confirmation_message
+
+    async def _deliver_private_channel_message(self, content: str) -> bool:
+        """按渠道用户身份私聊投递，禁止回退群聊或广播。"""
+        if self.channel not in {
+            MessageChannel.Telegram.value,
+            MessageChannel.Feishu.value,
+        }:
+            return False
+        try:
+            response = await run_in_threadpool(
+                AgentChain().send_direct_message,
+                Notification(
+                    channel=self.channel,
+                    source=self.source,
+                    mtype=NotificationType.Agent,
+                    userid=self.user_id,
+                    username=self.username,
+                    text=content,
+                    private_delivery=True,
+                    parse_mode="plain",
+                    save_history=False,
+                ),
+            )
+        except Exception as error:
+            logger.error(
+                f"Agent私聊投递失败: channel={self.channel}, "
+                f"error_type={type(error).__name__}"
+            )
+            return False
+        return bool(response and response.success)
+
+    async def _deliver_protected_output(self, content: str) -> bool:
+        """绕过模型与会话历史，把敏感结果直接交付给当前用户。"""
+        if callable(self.protected_output_callback):
+            try:
+                delivered = self.protected_output_callback(content)
+            except Exception as e:
+                logger.error(f"受保护输出回调失败: {e}")
+                return False
+            return delivered is not False
+        return await self._deliver_private_channel_message(content)
+
+    async def _handle_secret_confirmation_control(
+            self,
+            message: str,
+            images: Optional[List[str]],
+            files: Optional[List[dict]],
+            has_audio_input: bool,
+    ) -> Optional[str]:
+        """在进入模型前消费当前会话的确认或取消文本。"""
+        command = str(message or "").strip()
+        if command not in {SECRET_CONFIRM_TEXT, SECRET_CANCEL_TEXT}:
+            return None
+        if images or files or has_audio_input:
+            return None
+
+        pending = self._pending_secret_confirmation
+        if not pending:
+            return None
+        if (
+            pending.user_id != str(self.user_id or "")
+            or pending.channel != str(self.channel or "")
+            or pending.source != str(self.source or "")
+        ):
+            return None
+        if datetime.now() - pending.created_at > SECRET_CONFIRMATION_TTL:
+            self._pending_secret_confirmation = None
+            message_text = "敏感设置读取确认已过期，请重新发起。"
+            await self._deliver_protected_output(message_text)
+            return message_text
+        self._pending_secret_confirmation = None
+        if command == SECRET_CANCEL_TEXT:
+            message_text = "已取消敏感设置读取。"
+            await self._deliver_protected_output(message_text)
+            return message_text
+
+        if not self._can_confirm_secret_read():
+            return "当前入口不支持安全交付敏感设置，未执行读取。"
+
+        async def _execute_confirmed() -> str:
+            permission_result = await pending.tool._check_permission()
+            if permission_result:
+                return permission_result
+            return await pending.tool._run_confirmed(**pending.arguments)
+
+        policy = AgentPolicyMiddleware(
+            context=self._build_policy_context(),
+            tools=[pending.tool],
+        )
+        try:
+            _, result = await policy.execute_tool_call(
+                tool=pending.tool,
+                arguments=pending.arguments,
+                invocation_id=f"secret-confirmation-{uuid.uuid4().hex}",
+                handler=_execute_confirmed,
+            )
+        except Exception:
+            message_text = "敏感设置读取失败，请稍后重试。"
+            await self._deliver_protected_output(message_text)
+            return message_text
+        delivered = await self._deliver_protected_output(result)
+        if not delivered:
+            message_text = "敏感设置读取已完成，但结果投递失败，请重新发起。"
+            self._emit_output(message_text)
+            if self.should_dispatch_reply:
+                await self.send_agent_message(message_text)
+            return message_text
+        return "敏感设置确认已处理。"
 
     def _build_policy_context(self) -> ToolPolicyContext:
         """根据宿主入口建立模型参数无法伪造的策略上下文。"""
@@ -1304,6 +1531,7 @@ class MoviePilotAgent:
                 "reply_mode": None,
                 "should_dispatch_reply": False,
                 "is_admin": bool(self._tool_context.get("is_admin")),
+                "require_secret_confirmation": True,
             },
             allow_message_tools=False,
         )
@@ -1505,6 +1733,7 @@ class MoviePilotAgent:
                 AgentPolicyMiddleware(
                     context=policy_context,
                     catalog=tool_catalog,
+                    tools=tools,
                 ),
                 # Skills
                 skills_middleware,
@@ -1594,6 +1823,15 @@ class MoviePilotAgent:
                 )
             )
             self._streamed_output = ""
+
+            confirmation_result = await self._handle_secret_confirmation_control(
+                message=message,
+                images=images,
+                files=files,
+                has_audio_input=has_audio_input,
+            )
+            if confirmation_result is not None:
+                return confirmation_result
 
             # 获取历史消息
             messages = list(memory_manager.get_agent_messages(
@@ -1902,7 +2140,7 @@ class MoviePilotAgent:
             logger.info(f"Agent执行被取消: session_id={self.session_id}")
             self._compiled_agent_bundle = None
             execution_error = "任务已取消"
-            return "任务已取消", {}
+            raise
         except Exception as e:
             self._compiled_agent_bundle = None
             execution_error = str(e)
@@ -1950,6 +2188,8 @@ class MoviePilotAgent:
         """
         清理智能体资源
         """
+        self._pending_secret_confirmation = None
+        self.protected_output_callback = None
         self._compiled_agent_bundle = None
         logger.info(f"MoviePilot智能体已清理: session_id={self.session_id}")
 
@@ -1975,6 +2215,7 @@ class _MessageTask:
     reply_mode: ReplyMode = ReplyMode.DISPATCH
     allow_message_tools: bool = True
     output_callback: Optional[Callable[[str], None]] = None
+    protected_output_callback: Optional[Callable[[str], Optional[bool]]] = None
     notification_callback: Optional[Callable[[Any], None]] = None
     agent_factory: Optional[Callable[..., MoviePilotAgent]] = None
     completion_future: Optional[asyncio.Future] = None
@@ -2028,6 +2269,24 @@ class AgentManager:
                 and not self._session_workers[session_id].done()
         )
         return status
+
+    def matches_secret_confirmation(
+            self,
+            session_id: str,
+            user_id: str,
+            channel: Optional[str] = None,
+            source: Optional[str] = None,
+    ) -> bool:
+        """判断指定用户是否可继续当前会话的敏感设置确认。"""
+        agent = self.active_agents.get(session_id)
+        pending = agent._pending_secret_confirmation if agent else None
+        return bool(
+            agent
+            and pending
+            and str(agent.user_id) == str(user_id)
+            and (channel is None or pending.channel == str(channel))
+            and (source is None or pending.source == str(source))
+        )
 
     async def initialize(self):
         """
@@ -2130,6 +2389,7 @@ class AgentManager:
             reply_mode: ReplyMode = ReplyMode.DISPATCH,
             allow_message_tools: bool = True,
             output_callback: Optional[Callable[[str], None]] = None,
+            protected_output_callback: Optional[Callable[[str], Optional[bool]]] = None,
             notification_callback: Optional[Callable[[Any], None]] = None,
             agent_factory: Optional[Callable[..., MoviePilotAgent]] = None,
             wait_for_completion: bool = False,
@@ -2156,6 +2416,7 @@ class AgentManager:
             reply_mode=reply_mode,
             allow_message_tools=allow_message_tools,
             output_callback=output_callback,
+            protected_output_callback=protected_output_callback,
             notification_callback=notification_callback,
             agent_factory=agent_factory,
             completion_future=completion_future,
@@ -2219,9 +2480,9 @@ class AgentManager:
                     result = await self._process_message_internal(task)
                     if task.completion_future and not task.completion_future.done():
                         task.completion_future.set_result(result)
-                except asyncio.CancelledError as err:
+                except asyncio.CancelledError:
                     if task.completion_future and not task.completion_future.done():
-                        task.completion_future.set_exception(err)
+                        task.completion_future.cancel()
                     raise
                 except Exception as e:
                     logger.error(f"处理会话 {session_id} 的消息失败: {e}")
@@ -2235,13 +2496,27 @@ class AgentManager:
             logger.info(f"会话 {session_id} 的worker被取消")
         finally:
             # 清理已完成的worker记录
-            self._session_workers.pop(session_id, None)  # noqa
+            current_worker = asyncio.current_task()
+            if self._session_workers.get(session_id) is current_worker:
+                self._session_workers.pop(session_id, None)  # noqa
             # 如果队列为空，清理队列
             if (
-                    session_id in self._session_queues
-                    and self._session_queues[session_id].empty()
+                    self._session_queues.get(session_id) is queue
+                    and queue.empty()
             ):
                 self._session_queues.pop(session_id, None)
+
+    @staticmethod
+    def _discard_queued_messages(queue: asyncio.Queue) -> None:
+        """丢弃会话队列时同步结束等待任务完成的调用方。"""
+        while not queue.empty():
+            try:
+                task = queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            if task.completion_future and not task.completion_future.done():
+                task.completion_future.cancel()
+            queue.task_done()
 
     @staticmethod
     async def _start_task_processing_status(task: _MessageTask) -> None:
@@ -2291,6 +2566,7 @@ class AgentManager:
                 "replay_mode": task.reply_mode,
                 "allow_message_tools": task.allow_message_tools,
                 "output_callback": task.output_callback,
+                "protected_output_callback": task.protected_output_callback,
             }
             if task.notification_callback is not None and task.agent_factory:
                 agent_kwargs["notification_callback"] = task.notification_callback
@@ -2312,6 +2588,7 @@ class AgentManager:
                 agent.set_output_callback(task.output_callback)
             else:
                 agent.output_callback = task.output_callback
+            agent.set_protected_output_callback(task.protected_output_callback)
             if task.notification_callback is not None and hasattr(agent, "set_notification_callback"):
                 agent.set_notification_callback(task.notification_callback)
 
@@ -2331,27 +2608,37 @@ class AgentManager:
         """
         stopped = False
 
-        # 取消该会话的worker（会触发 _execute_agent 中的 CancelledError）
-        if session_id in self._session_workers:
-            self._session_workers[session_id].cancel()
+        worker = self._session_workers.get(session_id)
+        queue = self._session_queues.get(session_id)
+        if queue and self._session_queues.get(session_id) is queue:
+            self._session_queues.pop(session_id, None)
+
+        # 先摘下旧队列；清理期间的新消息进入新队列，但等待旧 worker 完全退出后再执行。
+        if worker:
+            worker.cancel()
+        if queue:
+            self._discard_queued_messages(queue)
+        if worker:
             try:
-                await self._session_workers[session_id]
+                await worker
             except asyncio.CancelledError:
                 pass
-            self._session_workers.pop(session_id, None)  # noqa
+            if self._session_workers.get(session_id) is worker:
+                self._session_workers.pop(session_id, None)  # noqa
+            stopped = True
+        if queue:
             stopped = True
 
-        # 清空队列中待处理的消息
-        if session_id in self._session_queues:
-            queue = self._session_queues[session_id]
-            while not queue.empty():
-                try:
-                    queue.get_nowait()
-                    queue.task_done()
-                except asyncio.QueueEmpty:
-                    break
-            self._session_queues.pop(session_id, None)
-            stopped = True
+        new_queue = self._session_queues.get(session_id)
+        current_worker = self._session_workers.get(session_id)
+        if (
+                new_queue
+                and not new_queue.empty()
+                and (not current_worker or current_worker.done())
+        ):
+            self._session_workers[session_id] = asyncio.create_task(
+                self._session_worker(session_id)
+            )
 
         if stopped:
             logger.info(f"会话 {session_id} 的Agent推理已应急停止")
@@ -2464,6 +2751,10 @@ class AgentManager:
             success = not result_text.startswith(
                 (AGENT_EXECUTION_ERROR_PREFIX, "处理消息时发生错误")
             )
+        except asyncio.CancelledError:
+            success = False
+            result = "Agent 定时任务已取消"
+            raise
         except Exception as err:
             success = False
             result = f"Agent 定时任务执行失败：{str(err)}"
