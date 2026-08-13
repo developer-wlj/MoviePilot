@@ -4,7 +4,6 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from langchain.agents.middleware import SummarizationMiddleware
 from langchain_core.messages import ToolMessage
 from pydantic import BaseModel, Field
 
@@ -12,6 +11,7 @@ import app.agent as agent_module
 from app.agent.middleware.activity_log import ActivityLogMiddleware
 from app.agent.middleware.memory import MemoryMiddleware
 from app.agent.middleware.policy import AgentPolicyMiddleware
+from app.agent.middleware.summarization import FinalRequestCompactionMiddleware
 from app.agent.policy import (
     DEFAULT_TOOL_POLICY_ORCHESTRATOR,
     DEFAULT_TOOL_POLICY_REGISTRY,
@@ -40,6 +40,18 @@ class _EchoInput(BaseModel):
     """策略测试工具的输入契约。"""
 
     query: str = Field(description="待回显文本")
+
+
+class _AgentFactoryLLM:
+    """满足 Agent 构建与摘要中间件所需合同的测试模型。"""
+
+    _llm_type = "openai-chat"
+    model = "fake"
+    profile = {"max_input_tokens": 64000}
+
+    def with_retry(self):
+        """返回可供摘要中间件调用的 Runnable。"""
+        return self
 
 
 class _EchoTool(MoviePilotTool):
@@ -769,11 +781,7 @@ def test_agent_middleware_secret_setting_result_stays_out_of_receipt_logs() -> N
 def test_main_agent_registers_policy_middleware_as_outermost() -> None:
     """主 Agent 必须把宿主策略中间件放在 middleware 链最外层。"""
     agent = agent_module.MoviePilotAgent(session_id="session-1", user_id="user-1")
-    fake_llm = SimpleNamespace(
-        _llm_type="openai-chat",
-        model="fake",
-        profile={"max_input_tokens": 64000},
-    )
+    fake_llm = _AgentFactoryLLM()
     captured = {}
 
     def _fake_create_agent(**kwargs):
@@ -801,11 +809,7 @@ def test_main_agent_preserves_activity_log_middleware_order() -> None:
         channel=MessageChannel.WebAgent.value,
         source="web-agent",
     )
-    fake_llm = SimpleNamespace(
-        _llm_type="openai-chat",
-        model="fake",
-        profile={"max_input_tokens": 64000},
-    )
+    fake_llm = _AgentFactoryLLM()
     captured = {}
 
     def _fake_create_agent(**kwargs):
@@ -838,12 +842,12 @@ def test_main_agent_preserves_activity_log_middleware_order() -> None:
         for index, middleware in enumerate(middlewares)
         if isinstance(middleware, ActivityLogMiddleware)
     )
-    summary_index = next(
+    compaction_index = next(
         index
         for index, middleware in enumerate(middlewares)
-        if isinstance(middleware, SummarizationMiddleware)
+        if isinstance(middleware, FinalRequestCompactionMiddleware)
     )
 
     assert policy_index == 0
     assert activity_index == memory_index + 1
-    assert summary_index == activity_index + 1
+    assert compaction_index > activity_index
