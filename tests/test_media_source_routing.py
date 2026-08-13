@@ -4,7 +4,11 @@ from app.chain import ChainBase
 from app.core.context import MediaInfo
 from app.core.meta import MetaBase
 from app.schemas.types import MediaSource, MediaType
-from app.utils.media import resolve_media_identity
+from app.utils.media import (
+    build_media_key,
+    parse_media_source_selection,
+    resolve_media_identity,
+)
 
 
 def _chain_without_init() -> ChainBase:
@@ -22,10 +26,30 @@ def test_generic_source_id_resolves_as_fixed_enum() -> None:
     ) == (MediaSource.AniList, "154587")
 
 
-def test_unknown_plugin_source_is_rejected() -> None:
-    """固定枚举以外的来源不能进入通用识别链。"""
+def test_iqiyi_source_routes_through_unified_identity() -> None:
+    """爱奇艺探索来源应支持选择解析、身份解析和媒体键构造。"""
+    assert parse_media_source_selection("iqiyi,iqiyidiscover") == (
+        MediaSource.Iqiyi,
+    )
+    assert resolve_media_identity(
+        media_source="iqiyi",
+        media_id="album-1",
+    ) == (MediaSource.Iqiyi, "album-1")
+    assert build_media_key("iqiyi", "album-1") == "iqiyidiscover:album-1"
+
+
+def test_plugin_source_is_preserved_as_dynamic_enum() -> None:
+    """格式合法的插件来源应作为动态枚举成员进入通用识别链。"""
     assert resolve_media_identity(
         media_source="plugin_source",
+        media_id="custom-1",
+    ) == (MediaSource("plugin_source"), "custom-1")
+
+
+def test_invalid_source_identifier_is_rejected() -> None:
+    """包含空格或分隔符的来源标识不得进入通用识别链。"""
+    assert resolve_media_identity(
+        media_source="Plugin Source:Invalid",
         media_id="custom-1",
     ) == (None, None)
 

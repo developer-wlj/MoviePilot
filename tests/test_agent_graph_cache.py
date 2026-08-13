@@ -242,6 +242,30 @@ async def test_agent_bundle_signature_changes_with_temperature(monkeypatch) -> N
 
 
 @pytest.mark.anyio
+async def test_agent_bundle_signature_changes_with_context_cap(monkeypatch) -> None:
+    """有效窗口配置变化时应使会话内 Agent 图缓存失效。"""
+    agent = MoviePilotAgent(session_id="context-cap-change", user_id="user-1")
+    runtime_config = {
+        "provider": "openai",
+        "model": "gpt-test",
+        "api_key": "test-key",
+        "base_url": "https://llm.example.com/v1",
+    }
+
+    with patch.object(
+        agent,
+        "_resolve_llm_runtime_config",
+        new=AsyncMock(return_value=runtime_config),
+    ):
+        monkeypatch.setattr(settings, "LLM_MAX_CONTEXT_TOKENS", 32)
+        initial_signature = await agent._agent_bundle_signature(streaming=False)
+        monkeypatch.setattr(settings, "LLM_MAX_CONTEXT_TOKENS", 64)
+        updated_signature = await agent._agent_bundle_signature(streaming=False)
+
+    assert updated_signature != initial_signature
+
+
+@pytest.mark.anyio
 async def test_agent_bundle_signature_changes_with_tool_catalog() -> None:
     """工具目录 revision 必须参与会话内 Agent 图缓存签名。"""
     agent = MoviePilotAgent(session_id="tool-revision", user_id="user-1")
@@ -467,8 +491,10 @@ async def test_graph_keeps_mcp_first_winner_and_catalogs_all_collisions(
             activity_tool,
             subagent_task_tool,
         ]
+        assert captured["middlewares"][-2].name == "selector"
     else:
         assert "selection_tools" not in captured
+    assert captured["middlewares"][-1].name == "usage"
     policy_middleware = next(
         middleware
         for middleware in captured["middlewares"]

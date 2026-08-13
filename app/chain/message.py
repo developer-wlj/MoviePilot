@@ -152,6 +152,7 @@ class MessageChain(ChainBase):
             source=source,
             userid=userid,
             username=username,
+            is_channel_admin=info.is_channel_admin,
             text=text,
             original_message_id=original_message_id,
             original_chat_id=original_chat_id,
@@ -174,6 +175,7 @@ class MessageChain(ChainBase):
             audio_refs: Optional[List[str]] = None,
             files: Optional[List[CommingMessage.MessageAttachment]] = None,
             reply_to_message_id: Optional[Union[str, int]] = None,
+            is_channel_admin: Optional[bool] = None,
     ) -> None:
         """
         识别消息内容，执行操作
@@ -214,6 +216,7 @@ class MessageChain(ChainBase):
                     source=source,
                     userid=userid,
                     username=username,
+                    is_channel_admin=is_channel_admin,
                     text=text,
                     original_message_id=original_message_id,
                     original_chat_id=original_chat_id,
@@ -271,6 +274,7 @@ class MessageChain(ChainBase):
                 source=source,
                 userid=userid,
                 username=username,
+                is_channel_admin=is_channel_admin,
                 text=text,
                 original_message_id=original_message_id,
                 original_chat_id=original_chat_id,
@@ -305,6 +309,7 @@ class MessageChain(ChainBase):
             audio_refs: Optional[List[str]] = None,
             files: Optional[List[CommingMessage.MessageAttachment]] = None,
             has_audio_input: bool = False,
+            is_channel_admin: Optional[bool] = None,
     ) -> bool:
         """将 TG/飞书中的确认控制文本交回所属 Agent 会话。"""
         if channel not in {MessageChannel.Telegram, MessageChannel.Feishu}:
@@ -331,6 +336,7 @@ class MessageChain(ChainBase):
             source=source,
             userid=userid,
             username=username,
+            is_channel_admin=is_channel_admin,
             original_message_id=original_message_id,
             original_chat_id=original_chat_id,
             images=images,
@@ -354,6 +360,7 @@ class MessageChain(ChainBase):
             has_audio_input: bool = False,
             processing_status: Optional[_ProcessingStatus] = None,
             reply_to_message_id: Optional[Union[str, int]] = None,
+            is_channel_admin: Optional[bool] = None,
     ) -> bool:
         """执行实际消息路由，便于统一包裹处理中状态。"""
 
@@ -365,6 +372,7 @@ class MessageChain(ChainBase):
                     source=source,
                     userid=userid,
                     username=username,
+                    is_channel_admin=is_channel_admin,
                     original_message_id=original_message_id,
                     original_chat_id=original_chat_id,
                     processing_status=processing_status,
@@ -430,6 +438,7 @@ class MessageChain(ChainBase):
                 source=source,
                 userid=userid,
                 username=username,
+                is_channel_admin=is_channel_admin,
                 original_message_id=original_message_id,
                 original_chat_id=original_chat_id,
                 images=images,
@@ -490,6 +499,7 @@ class MessageChain(ChainBase):
                 source=source,
                 userid=userid,
                 username=username,
+                is_channel_admin=is_channel_admin,
                 original_message_id=original_message_id,
                 original_chat_id=original_chat_id,
                 images=images,
@@ -747,6 +757,7 @@ class MessageChain(ChainBase):
             original_message_id: Optional[Union[str, int]] = None,
             original_chat_id: Optional[str] = None,
             processing_status: Optional[_ProcessingStatus] = None,
+            is_channel_admin: Optional[bool] = None,
     ) -> bool:
         """
         处理按钮回调
@@ -815,6 +826,7 @@ class MessageChain(ChainBase):
                 source=source,
                 userid=userid,
                 username=username,
+                is_channel_admin=is_channel_admin,
                 original_message_id=original_message_id,
                 original_chat_id=original_chat_id,
         ):
@@ -954,6 +966,7 @@ class MessageChain(ChainBase):
             username: str,
             original_message_id: Optional[Union[str, int]] = None,
             original_chat_id: Optional[str] = None,
+            is_channel_admin: Optional[bool] = None,
     ) -> bool:
         """
         将 Agent 按钮选择回传为同一会话中的下一条用户消息。
@@ -999,6 +1012,7 @@ class MessageChain(ChainBase):
             source=source,
             userid=userid,
             username=username,
+            is_channel_admin=is_channel_admin,
             session_id=request.session_id,
         )
 
@@ -1386,7 +1400,11 @@ class MessageChain(ChainBase):
         last_input_tokens = status.get("last_input_tokens")
         if context_window_tokens and status.get("model_call_count"):
             context_ratio = status.get("last_context_usage_ratio")
-            if context_ratio is None and last_input_tokens is not None:
+            if (
+                context_ratio is None
+                and status.get("last_input_usage_available") is True
+                and last_input_tokens is not None
+            ):
                 context_ratio = last_input_tokens / context_window_tokens
             context_usage_text = (
                 f"{cls._format_token_count(last_input_tokens)} / "
@@ -1405,17 +1423,45 @@ class MessageChain(ChainBase):
             f"当前模型: {status.get('model') or '未知'}",
             f"上下文窗口: {cls._format_token_count(context_window_tokens)} tokens",
             f"最近一次上下文占用: {context_usage_text}",
-            f"最近一次 tokens: 输入 {cls._format_token_count(status.get('last_input_tokens'))} / 输出 {cls._format_token_count(status.get('last_output_tokens'))} / 总计 {cls._format_token_count(status.get('last_total_tokens'))}",
-            f"当前会话累计 tokens: 输入 {cls._format_token_count(status.get('total_input_tokens'))} / 输出 {cls._format_token_count(status.get('total_output_tokens'))} / 总计 {cls._format_token_count(status.get('total_tokens'))}",
-            f"模型调用次数: {status.get('model_call_count', 0)}",
-            f"排队消息数: {status.get('pending_messages', 0)}",
-            f"最后更新: {status.get('last_updated_at') or '暂无'}",
         ]
-        if status.get("cache_usage_available"):
+        if status.get("last_request_estimate_available"):
+            estimated_tokens = status.get("last_estimated_input_tokens")
+            estimated_ratio = status.get("last_estimated_input_ratio")
+            estimate_text = (
+                f"{cls._format_token_count(estimated_tokens)} / "
+                f"{cls._format_token_count(context_window_tokens)}"
+            )
+            if estimated_ratio is not None:
+                estimate_text += f" ({estimated_ratio * 100:.2f}%)"
+            if status.get("last_estimated_over_input_limit"):
+                estimate_text += "，估算已超输入上限"
+            lines.extend(
+                [
+                    f"最终请求估算: {estimate_text}",
+                "估算组成: "
+                f"消息 {cls._format_token_count(status.get('last_estimated_message_tokens'))} / "
+                f"系统 {cls._format_token_count(status.get('last_estimated_system_tokens'))} / "
+                f"工具 {cls._format_token_count(status.get('last_estimated_tool_tokens'))} / "
+                    f"其中图片固定成本 {cls._format_token_count(status.get('last_estimated_multimodal_tokens'))}",
+                ]
+            )
+            actual_input_tokens = status.get("last_actual_input_tokens")
+            estimate_error_tokens = status.get("last_estimate_error_tokens")
+            if actual_input_tokens is not None and estimate_error_tokens is not None:
+                estimate_error_ratio = status.get("last_estimate_error_ratio")
+                error_text = (
+                    f"实际 {cls._format_token_count(actual_input_tokens)} / "
+                    f"误差 {estimate_error_tokens:+,}"
+                )
+                if estimate_error_ratio is not None:
+                    error_text += f" ({estimate_error_ratio:+.2%})"
+                lines.append(f"估算校准: {error_text}")
+        lines.append(
+            f"最近一次 tokens: 输入 {cls._format_token_count(status.get('last_input_tokens'))} / 输出 {cls._format_token_count(status.get('last_output_tokens'))} / 总计 {cls._format_token_count(status.get('last_total_tokens'))}"
+        )
+        if status.get("last_cache_usage_available"):
             last_cache_ratio = status.get("last_cache_hit_ratio")
-            total_cache_ratio = status.get("total_cache_hit_ratio")
-            lines.insert(
-                6,
+            lines.append(
                 "最近一次缓存: "
                 f"命中 {cls._format_token_count(status.get('last_cache_read_input_tokens'))} / "
                 f"写入 {cls._format_token_count(status.get('last_cache_write_input_tokens'))} / "
@@ -1426,8 +1472,9 @@ class MessageChain(ChainBase):
                     else ""
                 ),
             )
-            lines.insert(
-                8,
+        if status.get("cache_usage_available"):
+            total_cache_ratio = status.get("total_cache_hit_ratio")
+            lines.append(
                 "当前会话累计缓存: "
                 f"命中 {cls._format_token_count(status.get('total_cache_read_input_tokens'))} / "
                 f"写入 {cls._format_token_count(status.get('total_cache_write_input_tokens'))} / "
@@ -1438,6 +1485,14 @@ class MessageChain(ChainBase):
                     else ""
                 ),
             )
+        lines.extend(
+            [
+                f"当前会话累计 tokens: 输入 {cls._format_token_count(status.get('total_input_tokens'))} / 输出 {cls._format_token_count(status.get('total_output_tokens'))} / 总计 {cls._format_token_count(status.get('total_tokens'))}",
+                f"模型调用次数: {status.get('model_call_count', 0)}",
+                f"排队消息数: {status.get('pending_messages', 0)}",
+                f"最后更新: {status.get('last_updated_at') or '暂无'}",
+            ]
+        )
         return "\n".join(lines)
 
     def remote_session_status(
@@ -1486,6 +1541,7 @@ class MessageChain(ChainBase):
             files: Optional[List[CommingMessage.MessageAttachment]] = None,
             session_id: Optional[str] = None,
             has_audio_input: bool = False,
+            is_channel_admin: Optional[bool] = None,
     ) -> bool:
         """
         处理AI智能体消息
@@ -1603,6 +1659,7 @@ class MessageChain(ChainBase):
                 "channel": channel.value if channel else None,
                 "source": source,
                 "username": username,
+                "is_channel_admin": is_channel_admin,
                 "original_message_id": str(original_message_id)
                 if original_message_id
                 else None,
