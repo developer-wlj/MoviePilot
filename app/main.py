@@ -32,6 +32,13 @@ import signal
 import threading
 from pathlib import Path
 
+def _write_pid():
+    pid_path = Path(__file__).parents[1] / "MoviePilot.pid"  # 创建 pid 文件
+    with open(pid_path, 'w', encoding='utf-8') as f:
+        f.write(str(os.getpid()))
+
+_write_pid()
+
 import uvicorn as uvicorn
 from PIL import Image
 from uvicorn import Config
