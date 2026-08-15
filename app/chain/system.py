@@ -53,7 +53,7 @@ class SystemChain(ChainBase):
         # 主动备份一次插件
         self.backup_plugins()
         # 重启
-        SystemUtils.restart()
+        SystemHelper.restart()
 
     @staticmethod
     def backup_plugins():

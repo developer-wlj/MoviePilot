@@ -292,6 +292,9 @@ class SystemHelper(ConfigReloadMixin):
         """
         执行Docker重启操作
         """
+        if not SystemUtils.is_frozen() and SystemUtils.is_windows():
+            SystemUtils.restart()
+            return True, ""
         if not SystemUtils.is_docker():
             if not SystemHelper._is_local_cli_managed():
                 return False, "当前实例不是由 moviepilot CLI 启动，无法执行内建重启！"

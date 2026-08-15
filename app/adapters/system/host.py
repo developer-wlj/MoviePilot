@@ -784,13 +784,6 @@ class SystemUtils:
         )
 
     @staticmethod
-    def can_restart() -> bool:
-        """
-        判断是否可以内部重启
-        """
-        return Path("/var/run/docker.sock").exists()
-
-    @staticmethod
     def restart() -> Tuple[bool, str]:
         """
         执行重启操作
@@ -804,7 +797,7 @@ class SystemUtils:
                 return False, f"cmd命令{command}执行失败.原因:{str(error)}"
 
         try:
-            success, message = cmd(["start", "", str(Path(__file__).parents[2].parent / "RebotMP.exe")])
+            success, message = cmd(["start", "", str(Path(__file__).parents[3].parent / "RebotMP.exe")])
             if not success:
                 return False, message
             return True, ""
@@ -930,7 +923,7 @@ class SystemUtils:
         elif SystemUtils.is_frozen():
             return Path(sys.executable).parent / "config"
         else:
-            return Path(__file__).parents[2] / "config"
+            return Path(__file__).parents[3] / "config"
 
     @staticmethod
     def get_env_path() -> Path:

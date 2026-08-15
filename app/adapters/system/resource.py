@@ -9,7 +9,6 @@ from app.runtime.log import logger
 from app.adapters.network.http import RequestUtils
 from app.foundation.version import compare_version
 from app.adapters.system.host import SystemUtils
-from app.helper.system import SystemHelper
 
 
 ResourceVersionProvider = Callable[[], tuple[str, str]]
@@ -213,7 +212,6 @@ class ResourceHelper:
                                 file_path.write_bytes(res.content)
                         if success:
                             logger.info("资源包更新完成，等待启动层处理后续重启")
-                            # SystemHelper.restart()
                             return True
                         else:
                             logger.warning("资源包更新失败，跳过升级！")

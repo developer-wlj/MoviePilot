@@ -52,7 +52,6 @@ from app.foundation.crypto import HashUtils
 from app.adapters.network.http import RequestUtils, AsyncRequestUtils
 from app.adapters.system import rust as rust_accel
 from app.application.security.url import SecurityUtils
-from app.utils.system import SystemUtils
 from app.foundation.url import UrlUtils
 from version import APP_VERSION
 
@@ -1439,7 +1438,7 @@ def restart_system(_: User = Depends(get_current_active_superuser)):
     重启系统（仅管理员）
     """
     # 执行重启
-    ret, msg = SystemUtils.restart()
+    ret, msg = SystemHelper.restart()
     return schemas.Response(success=ret, message=msg)
 
 
