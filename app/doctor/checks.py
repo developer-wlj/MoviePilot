@@ -18,9 +18,9 @@ from urllib.request import Request, urlopen
 
 import psutil
 
-from app.core.config import settings
+from app.runtime.config import settings
 from app.doctor.models import DoctorFinding, DoctorFindingStatus, DoctorReport, DoctorSeverity
-from app.utils.system import SystemUtils
+from app.adapters.system.host import SystemUtils
 
 
 CheckFunc = Callable[["DoctorRunnerProtocol"], None]

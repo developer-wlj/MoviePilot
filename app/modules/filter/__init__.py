@@ -3,16 +3,16 @@ from copy import deepcopy
 from functools import lru_cache
 from typing import List, Tuple, Union, Dict, Optional
 
-from app.core.context import TorrentInfo, MediaInfo
-from app.core.metainfo import MetaInfo, clear_rust_parse_options_cache, _rust_parse_options
-from app.helper.rule import RuleHelper
-from app.log import logger
+from app.domain.context import TorrentInfo, MediaInfo
+from app.domain.metainfo import MetaInfo, clear_rust_parse_options_cache, _rust_parse_options
+from app.application.filter import RuleHelper
+from app.runtime.log import logger
 from app.modules import _ModuleBase
 from app.modules.filter.RuleParser import RuleParser
 from app.modules.filter.builtin_rules import BUILTIN_RULE_SET
 from app.schemas.types import ModuleType, OtherModulesType, SystemConfigKey
-from app.utils import rust_accel
-from app.utils.string import StringUtils
+from app.adapters.system import rust as rust_accel
+from app.foundation import size as size_tools
 
 
 _SIZE_UNIT = 1024 * 1024
@@ -388,7 +388,7 @@ class FilterModule(_ModuleBase):
             if not self.__match_size(torrent, size_range):
                 # 大小范围不匹配
                 logger.debug(f"种子 {torrent.site_name} - {torrent.title} 大小 "
-                             f"{StringUtils.str_filesize(torrent.size)} 不在范围 {size_range}MB")
+                             f"{size_tools.format_compact_size(torrent.size)} 不在范围 {size_range}MB")
                 return False
         if seeders:
             if torrent.seeders < int(seeders):

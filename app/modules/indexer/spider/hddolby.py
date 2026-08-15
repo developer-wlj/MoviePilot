@@ -1,11 +1,11 @@
 from typing import Tuple, List, Optional
 
-from app.core.config import settings
-from app.db.systemconfig_oper import SystemConfigOper
-from app.log import logger
+from app.runtime.config import settings
+from app.db.oper.systemconfig import SystemConfigOper
+from app.runtime.log import logger
 from app.schemas import MediaType
-from app.utils.http import RequestUtils, AsyncRequestUtils
-from app.utils.string import StringUtils
+from app.adapters.network.http import RequestUtils, AsyncRequestUtils
+from app.domain import site as site_rules
 
 
 class HddolbySpider:
@@ -71,7 +71,7 @@ class HddolbySpider:
         if indexer:
             self._indexerid = indexer.get('id')
             self._domain = indexer.get('domain')
-            self._domain_host = StringUtils.get_url_domain(self._domain)
+            self._domain_host = site_rules.extract_domain(self._domain)
             self._name = indexer.get('name')
             if indexer.get('proxy'):
                 self._proxy = settings.PROXY

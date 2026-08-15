@@ -20,11 +20,11 @@ import aiofiles
 import httpx
 import jwt
 
-from app.core.config import settings
-from app.db.systemconfig_oper import SystemConfigOper
-from app.log import logger
+from app.runtime.config import settings
+from app.db.oper.systemconfig import SystemConfigOper
+from app.runtime.log import logger
 from app.schemas.types import SystemConfigKey
-from app.utils.singleton import Singleton
+from app.foundation.singleton import Singleton
 
 
 class LLMProviderError(RuntimeError):

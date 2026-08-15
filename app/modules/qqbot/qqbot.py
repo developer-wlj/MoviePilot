@@ -11,11 +11,11 @@ from typing import Optional, List, Tuple
 
 from PIL import Image
 
-from app.core.cache import FileCache
-from app.core.config import settings
-from app.core.context import MediaInfo, Context
-from app.core.metainfo import MetaInfo
-from app.log import logger
+from app.runtime.cache import FileCache
+from app.runtime.config import settings
+from app.domain.context import MediaInfo, Context
+from app.domain.metainfo import MetaInfo
+from app.runtime.log import logger
 from app.modules.qqbot.api import (
     get_access_token,
     get_gateway_url,
@@ -23,8 +23,8 @@ from app.modules.qqbot.api import (
     send_proactive_group_message,
 )
 from app.modules.qqbot.gateway import run_gateway
-from app.utils.http import RequestUtils
-from app.utils.string import StringUtils
+from app.adapters.network.http import RequestUtils
+from app.foundation import size as size_tools
 
 # QQ Markdown 图片展示尺寸限制，避免竖版海报被客户端拉伸变形
 _DEFAULT_IMAGE_SIZE: Tuple[int, int] = (208, 320)
@@ -449,7 +449,7 @@ class QQBot:
             meta = MetaInfo(t.title, t.description)
             name = f"{meta.season_episode} {meta.resource_term} {meta.video_term}"
             name = " ".join(name.split())
-            lines.append(f"{i + 1}.【{t.site_name}】{name} {StringUtils.str_filesize(t.size)} {t.seeders}↑")
+            lines.append(f"{i + 1}.【{t.site_name}】{name} {size_tools.format_compact_size(t.size)} {t.seeders}↑")
         text = "\n".join(lines)
         return self.send_msg(
             title=title or "种子列表",

@@ -3,9 +3,9 @@ from typing import Optional, List
 from pydantic import Field
 
 from app.workflow.actions import BaseAction, ActionChain
-from app.core.config import global_vars
-from app.helper.torrent import TorrentHelper
-from app.log import logger
+from app.runtime.config import global_vars
+from app.application.torrent import TorrentHelper
+from app.runtime.log import logger
 from app.schemas import ActionParams, ActionContext
 
 

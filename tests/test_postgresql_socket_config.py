@@ -1,6 +1,6 @@
 import unittest
 
-from app.core.config import Settings
+from app.runtime.config import Settings
 
 
 class PostgreSQLSocketConfigTests(unittest.TestCase):

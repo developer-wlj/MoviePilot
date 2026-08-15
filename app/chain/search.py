@@ -14,18 +14,18 @@ from fastapi.concurrency import run_in_threadpool
 
 from app.chain import ChainBase
 from app.chain.media import MediaChain
-from app.core.config import global_vars, settings
-from app.core.context import Context
-from app.core.context import MediaInfo, SubtitleInfo, TorrentInfo
-from app.core.event import eventmanager, Event
-from app.core.meta import MetaMusic
-from app.core.metainfo import MetaInfo
-from app.core.context import MusicInfo
-from app.db.systemconfig_oper import SystemConfigOper
-from app.helper.progress import ProgressHelper
-from app.helper.sites import SitesHelper  # noqa
-from app.helper.torrent import TorrentHelper
-from app.log import logger
+from app.runtime.config import global_vars, settings
+from app.domain.context import Context
+from app.domain.context import MediaInfo, SubtitleInfo, TorrentInfo
+from app.runtime.events import eventmanager, Event
+from app.domain.meta.metamusic import MetaMusic
+from app.domain.metainfo import MetaInfo
+from app.domain.context import MusicInfo
+from app.db.oper.systemconfig import SystemConfigOper
+from app.runtime.progress import ProgressHelper
+from app.application.site.sites import SitesHelper  # pylint: disable=no-name-in-module
+from app.application.torrent import TorrentHelper
+from app.runtime.log import logger
 from app.schemas import NotExistMediaInfo
 from app.schemas.types import (
     MUSIC_ENTITY_ALBUM,
@@ -35,13 +35,9 @@ from app.schemas.types import (
     ProgressKey,
     SystemConfigKey,
 )
-from app.utils.media import (
-    build_media_key,
-    parse_media_key,
-    resolve_media_identity,
-)
-from app.utils.string import StringUtils
-from app.utils.zhconv import convert as zhconv_convert
+from app.schemas.media import build_media_key, parse_media_key, resolve_media_identity
+from app.foundation import size as size_tools
+from app.foundation.text import convert as zhconv_convert
 
 
 class SearchChain(ChainBase):
@@ -470,7 +466,7 @@ class SearchChain(ChainBase):
                 "index": index,
                 "title": torrent.torrent_info.title or "未知",
                 "size": (
-                    StringUtils.format_size(torrent.torrent_info.size)
+                    size_tools.format_size(torrent.torrent_info.size)
                     if torrent.torrent_info.size
                     else "0 B"
                 ),
@@ -513,7 +509,7 @@ class SearchChain(ChainBase):
         """
         通过统一后台提示词机制执行资源推荐。
         """
-        from app.agent import ReplyMode, agent_manager
+        from app.agent.orchestrator import ReplyMode, agent_manager
         from app.agent.prompt import prompt_manager
 
         prompt = prompt_manager.render_system_task_message(
@@ -1570,6 +1566,72 @@ class SearchChain(ChainBase):
             filter_params=filter_params,
         )
 
+    async def _async_process_music_stream(
+            self,
+            mediainfo: MusicInfo,
+            keyword: Optional[str] = None,
+            sites: Optional[List[int]] = None,
+            rule_groups: Optional[List[str]] = None,
+            filter_params: Optional[Dict[str, str]] = None,
+    ) -> AsyncIterator[dict]:
+        """
+        按音乐元数据渐进式搜索资源，逐站点输出进度并在结束时返回过滤后的完整结果。
+
+        音乐候选需要同时匹配名称、艺术家和音乐分类，因此站点批次只负责推进搜索进度，
+        最终结果仍统一交给音乐上下文构造逻辑过滤、排序和去重。
+        """
+        keywords = [keyword] if keyword else SearchChain.music_site_keywords(mediainfo)
+        torrents: List[TorrentInfo] = []
+        for index, search_word in enumerate(keywords or [mediainfo.title]):
+            if index:
+                await asyncio.sleep(random.randint(1, 10))
+            keyword_matched = False
+            async for event in self.__async_search_all_sites_stream(
+                    keyword=search_word,
+                    mediainfo=mediainfo,
+                    sites=sites,
+                    mtype=MediaType.MUSIC):
+                result = event.pop("items", []) or []
+                matched_torrents = self._matching_music_torrents(result, mediainfo)
+                if matched_torrents:
+                    keyword_matched = True
+                    torrents.extend(matched_torrents)
+                yield {
+                    **event,
+                    "type": "append",
+                    "items": [],
+                    "total_items": len(torrents),
+                }
+            if keyword_matched and not settings.SEARCH_MULTIPLE_NAME:
+                break
+
+        contexts = await run_in_threadpool(
+            self._build_music_contexts,
+            torrents=torrents,
+            mediainfo=mediainfo,
+            rule_groups=rule_groups,
+            filter_params=filter_params,
+        )
+        items = [context.to_dict() for context in contexts]
+        yield {
+            "type": "replace",
+            "stage": "filtered",
+            "value": 100,
+            "text": f"过滤匹配完成，共 {len(contexts)} 个资源",
+            "items": items,
+            "total_items": len(contexts),
+            "candidate_items": len(torrents),
+        }
+        yield {
+            "type": "done",
+            "stage": "done",
+            "text": f"搜索完成，共 {len(contexts)} 个资源",
+            "items": items,
+            "total_items": len(contexts),
+            "candidate_items": len(torrents),
+            "contexts": contexts,
+        }
+
     def process(self, mediainfo: MediaInfo,
                 keyword: Optional[str] = None,
                 no_exists: Dict[int, Dict[int, NotExistMediaInfo]] = None,
@@ -1766,30 +1828,13 @@ class SearchChain(ChainBase):
         """
 
         if mediainfo.type == MediaType.MUSIC:
-            contexts = await self._async_process_music(
-                mediainfo=mediainfo,
-                keyword=keyword,
-                sites=sites,
-                rule_groups=rule_groups,
-                filter_params=filter_params,
-            )
-            items = [context.to_dict() for context in contexts]
-            yield {
-                "type": "replace",
-                "stage": "filtered",
-                "value": 100,
-                "text": f"过滤匹配完成，共 {len(contexts)} 个资源",
-                "items": items,
-                "total_items": len(contexts),
-            }
-            yield {
-                "type": "done",
-                "stage": "done",
-                "text": f"搜索完成，共 {len(contexts)} 个资源",
-                "items": items,
-                "total_items": len(contexts),
-                "contexts": contexts,
-            }
+            async for event in self._async_process_music_stream(
+                    mediainfo=mediainfo,
+                    keyword=keyword,
+                    sites=sites,
+                    rule_groups=rule_groups,
+                    filter_params=filter_params):
+                yield event
             return
 
         # 豆瓣标题处理

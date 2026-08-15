@@ -1,11 +1,11 @@
 from datetime import datetime
 from typing import List, Optional, Tuple, Union
 
-from app.core.context import SubtitleInfo, TorrentInfo
-from app.db.site_oper import SiteOper
-from app.helper.module import ModuleHelper
-from app.helper.sites import SitesHelper  # noqa
-from app.log import logger
+from app.domain.context import SubtitleInfo, TorrentInfo
+from app.db.oper.site import SiteOper
+from app.foundation.reflection import ModuleHelper
+from app.application.site.sites import SitesHelper  # pylint: disable=no-name-in-module
+from app.runtime.log import logger
 from app.modules import _ModuleBase
 from app.modules.indexer.parser import SiteParserBase
 from app.modules.indexer.spider import SiteSpider
@@ -17,11 +17,12 @@ from app.modules.indexer.spider.sunnypt import SunnyPTSpider
 from app.modules.indexer.spider.tnode import TNodeSpider
 from app.modules.indexer.spider.torrentleech import TorrentLeech
 from app.schemas.types import MediaSource
-from app.utils.media import resolve_media_identity
+from app.schemas.media import resolve_media_identity
 from app.modules.indexer.spider.yema import YemaSpider
 from app.schemas import SiteUserData
 from app.schemas.types import MediaType, ModuleType, OtherModulesType
-from app.utils.string import StringUtils
+from app.domain import site as site_rules
+from app.foundation import text as text_tools
 
 SPIDER_PARSER_CLASSES = {
     "TNodeSpider": TNodeSpider,
@@ -101,13 +102,13 @@ class IndexerModule(_ModuleBase):
         # 可能为关键字或ttxxxx
         if search_word \
                 and site.get('language') == "en" \
-                and StringUtils.is_chinese(search_word):
+                and text_tools.contains_chinese(search_word):
             # 不支持中文
             logger.warn(f"{site.get('name')} 不支持中文搜索")
             return False
 
         # 站点流控
-        state, msg = SitesHelper().check(StringUtils.get_url_domain(site.get("domain")))
+        state, msg = SitesHelper().check(site_rules.extract_domain(site.get("domain")))
         if state:
             logger.warn(msg)
             return False
@@ -124,14 +125,14 @@ class IndexerModule(_ModuleBase):
         if not text:
             return text
         # 去除特殊字符和多余空格
-        return StringUtils.clear(text, replace_word=" ", allow_space=True)
+        return text_tools.remove_punctuation(text, replacement=" ", allow_space=True)
 
     @staticmethod
     def __indexer_statistic(site: dict, error_flag: bool = False, seconds: int = 0) -> None:
         """
         索引器统计
         """
-        domain = StringUtils.get_url_domain(site.get("domain"))
+        domain = site_rules.extract_domain(site.get("domain"))
         if error_flag:
             SiteOper().fail(domain)
         else:
@@ -142,7 +143,7 @@ class IndexerModule(_ModuleBase):
         """
         异步索引器统计
         """
-        domain = StringUtils.get_url_domain(site.get("domain"))
+        domain = site_rules.extract_domain(site.get("domain"))
         if error_flag:
             await SiteOper().async_fail(domain)
         else:
@@ -633,7 +634,7 @@ class IndexerModule(_ModuleBase):
             site_obj.parse()
             logger.debug(f"站点 {site.get('name')} 数据解析完成")
             return SiteUserData(
-                domain=StringUtils.get_url_domain(site.get("url")),
+                domain=site_rules.extract_domain(site.get("url")),
                 userid=site_obj.userid,
                 username=site_obj.username,
                 user_level=site_obj.user_level,

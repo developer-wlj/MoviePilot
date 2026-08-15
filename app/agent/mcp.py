@@ -12,15 +12,15 @@ from dataclasses import dataclass
 from typing import Any, Optional
 from urllib.parse import urljoin
 
-from app.db.systemconfig_oper import SystemConfigOper
-from app.log import logger
+from app.db.oper.systemconfig import SystemConfigOper
+from app.runtime.log import logger
 from app.schemas.agent import (
     AgentMcpServerConfig,
     AgentMcpServerTestResult,
     AgentMcpServerToolInfo,
 )
 from app.schemas.types import SystemConfigKey
-from app.utils.http import AsyncRequestUtils
+from app.adapters.network.http import AsyncRequestUtils
 
 MCP_PROTOCOL_VERSION = "2025-11-25"
 MCP_CLIENT_NAME = "MoviePilot Agent"

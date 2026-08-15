@@ -5,10 +5,10 @@ from torrentool.torrent import Torrent
 from transmission_rpc import File
 
 from app import schemas
-from app.core.cache import FileCache
-from app.core.config import settings
-from app.core.metainfo import MetaInfo
-from app.log import logger
+from app.runtime.cache import FileCache
+from app.runtime.config import settings
+from app.domain.metainfo import MetaInfo
+from app.runtime.log import logger
 from app.modules import _ModuleBase, _DownloaderBase
 from app.modules.transmission.transmission import Transmission
 from app.schemas import DownloaderTorrent
@@ -19,7 +19,9 @@ from app.schemas.types import (
     TorrentQueryStatus,
     TorrentStatus,
 )
-from app.utils.string import StringUtils
+from app.domain import torrent as torrent_rules
+from app.foundation import size as size_tools
+from app.foundation import temporal as time_tools
 
 _TRANSMISSION_DOWNLOADING_STATES = {
     "download_pending",
@@ -125,7 +127,7 @@ class TransmissionModule(_ModuleBase, _DownloaderBase[Transmission]):
 
                 if torrent_content:
                     # 检查是否为磁力链接
-                    if StringUtils.is_magnet_link(torrent_content):
+                    if torrent_rules.is_magnet_link(torrent_content):
                         return None, torrent_content
                     else:
                         torrent_info = Torrent.from_string(torrent_content)
@@ -329,14 +331,14 @@ class TransmissionModule(_ModuleBase, _DownloaderBase[Transmission]):
                 progress=__get_torrent_progress(torrent_data),
                 size=__get_torrent_size(torrent_data),
                 state=self.__normalize_torrent_state(torrent_data.status),
-                dlspeed=StringUtils.str_filesize(dlspeed),
-                upspeed=StringUtils.str_filesize(upspeed),
+                dlspeed=size_tools.format_compact_size(dlspeed),
+                upspeed=size_tools.format_compact_size(upspeed),
                 tags=__get_torrent_labels(torrent_data),
                 download_limit=__get_torrent_attr(torrent_data, "download_limit", "downloadLimit"),
                 upload_limit=__get_torrent_attr(torrent_data, "upload_limit", "uploadLimit"),
                 ratio_limit=ratio_limit,
                 seeding_time_limit=seeding_time_limit,
-                left_time=StringUtils.str_secends(
+                left_time=time_tools.format_duration(
                     left_until_done / dlspeed
                 ) if dlspeed > 0 else ''
             )

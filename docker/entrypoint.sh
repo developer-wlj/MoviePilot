@@ -409,12 +409,12 @@ function chown_plugin_runtime_path() {
     chown -h moviepilot:moviepilot "${plugin_path}"
 }
 
-function correct_helper_resource_permissions() {
-    local helper_dir="${IMAGE_HELPER_DIR:-/app/app/helper}"
-    [ -e "${helper_dir}" ] || return 0
+function correct_site_resource_permissions() {
+    local resource_dir="${IMAGE_RESOURCE_DIR:-/app/app/application/site}"
+    [ -e "${resource_dir}" ] || return 0
 
-    INFO "→ 正在修复资源包目录权限：${helper_dir}"
-    chown -R moviepilot:moviepilot "${helper_dir}"
+    INFO "→ 正在修复资源包目录权限：${resource_dir}"
+    chown -R moviepilot:moviepilot "${resource_dir}"
 }
 
 function correct_file_permissions() {
@@ -424,7 +424,7 @@ function correct_file_permissions() {
 
     INFO "→ 正在校正文件权限..."
     force_chown_image_paths_if_requested /app /public
-    correct_helper_resource_permissions
+    correct_site_resource_permissions
     chown_plugin_runtime_path /app/app/plugins
     correct_home_permissions
     chown -R moviepilot:moviepilot \
@@ -465,6 +465,12 @@ render_nginx_config
 
 # 自动更新
 cd /
+if [ -f /app/docker/update.sh ] && ! cmp -s /app/docker/update.sh /usr/local/bin/mp_update.sh; then
+    # 后端源码可独立于镜像更新，启动前同步更新器，避免它长期保留过期目录约定。
+    cp -f /app/docker/update.sh /usr/local/bin/mp_update.sh
+    chmod +x /usr/local/bin/mp_update.sh
+    INFO "→ 已同步后端内置更新脚本"
+fi
 source /usr/local/bin/mp_update.sh
 if [ "${ONE_SHOT_UPDATE_APPLIED}" = "true" ]; then
     MOVIEPILOT_AUTO_UPDATE="${MOVIEPILOT_AUTO_UPDATE_ORIGINAL}"

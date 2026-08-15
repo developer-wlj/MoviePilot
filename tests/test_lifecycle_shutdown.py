@@ -7,7 +7,7 @@ import pytest
 from fastapi import FastAPI
 
 from app.startup import lifecycle, modules_initializer
-from app.utils import http as http_utils
+from app.adapters.network import http as http_utils
 
 
 def _assert_completed_once(mock: MagicMock) -> None:
@@ -33,6 +33,12 @@ def _patch_lifespan(monkeypatch, *, failing_step: str | None = None) -> dict:
     ):
         monkeypatch.setattr(lifecycle, name, MagicMock())
     monkeypatch.setattr(lifecycle, "init_modules", AsyncMock())
+
+    # 启动期的引擎预热与额度核算也要打桩。不打的话这些用例会走真实的引擎创建，在测试
+    # 进程里留下一个从此无人释放的全局异步引擎——NullPool 不持连接、无害，但用例就不再
+    # 自洽了，而且额度核算还会去连库。
+    for name in ("get_engine", "get_global_async_engine", "check_connection_budget"):
+        monkeypatch.setattr(lifecycle, name, MagicMock())
 
     system_chain = MagicMock()
     monkeypatch.setattr(lifecycle, "SystemChain", MagicMock(return_value=system_chain))
@@ -104,6 +110,104 @@ def test_lifespan_continues_after_each_shutdown_owner_failure(
     lifecycle.init_modules.assert_awaited_once_with()
     for step in shutdown_steps.values():
         _assert_completed_once(step)
+
+
+def test_lifespan_creates_global_async_engine_at_startup(monkeypatch):
+    """启动期必须把全局异步引擎建出来一次，让异步侧恢复 fail-fast
+
+    引擎改为惰性创建后，启动路径只碰得到同步引擎（init_db 建表），异步驱动没装、
+    异步 URL 拼错这类问题会一路推迟到第一个异步查询——用户拿到 500、调度任务静默死掉，
+    而不是启动就崩。create_async_engine 只校验 URL 与驱动导入、不建立连接，代价可以忽略。
+    """
+    _patch_lifespan(monkeypatch)
+    created = []
+    monkeypatch.setattr(lifecycle, "get_global_async_engine",
+                        lambda: created.append(1) or MagicMock())
+
+    async def run_lifespan():
+        async with lifecycle.lifespan(FastAPI()):
+            pass
+
+    asyncio.run(run_lifespan())
+
+    assert created, "启动期未创建全局异步引擎，异步侧的驱动/URL 错误会推迟到运行期才暴露"
+
+
+def test_lifespan_creates_sync_engine_at_startup(monkeypatch):
+    """启动期也必须把同步引擎建出来一次，把首次创建钉在单线程期
+
+    「init_db() 会在启动期单线程预热同步引擎」这个前提只对 run_application() 入口成立。
+    外部 supervisor 直挂 ASGI app（`gunicorn -k uvicorn.workers.UvicornWorker
+    app.factory:app`、`uvicorn app.main:app`）时 run_application() 不执行、init_db() 也就
+    不执行，同步引擎的首次创建退到运行期——而那时 init_scheduler() / init_monitor() 已经
+    放出上百个线程，引擎构建里那段 PRAGMA journal_mode 会让它们一起堵在创建锁上。
+    """
+    _patch_lifespan(monkeypatch)
+    created = []
+    monkeypatch.setattr(lifecycle, "get_engine",
+                        lambda: created.append(1) or MagicMock())
+
+    async def run_lifespan():
+        async with lifecycle.lifespan(FastAPI()):
+            pass
+
+    asyncio.run(run_lifespan())
+
+    assert created, "启动期未预热同步引擎，首次创建会退到已经放出上百个线程的运行期"
+
+
+def test_lifespan_warms_engines_before_any_initializer(monkeypatch):
+    """两个引擎的预热必须排在 init_routers / init_modules 之前
+
+    排在后面时，预热失败会把已经初始化好的模块晾在那里：lifespan 的 try/finally 关停块
+    要到 yield 处才开始，在它之前抛异常，stop_modules() 根本没有机会执行。
+    """
+    _patch_lifespan(monkeypatch)
+    calls = []
+    monkeypatch.setattr(lifecycle, "get_engine", lambda: calls.append("sync_engine"))
+    monkeypatch.setattr(lifecycle, "get_global_async_engine",
+                        lambda: calls.append("async_engine"))
+    monkeypatch.setattr(lifecycle, "init_routers", lambda _app: calls.append("init_routers"))
+    async def _init_modules():
+        """init_modules 在 v3 是协程，桩也必须可 await。"""
+        calls.append("init_modules")
+
+    monkeypatch.setattr(lifecycle, "init_modules", _init_modules)
+
+    async def run_lifespan():
+        async with lifecycle.lifespan(FastAPI()):
+            pass
+
+    asyncio.run(run_lifespan())
+
+    # 不钉同步/异步两者之间的先后：那一层顺序无所谓，要紧的是它们都在 init_* 之前
+    assert set(calls[:2]) == {"sync_engine", "async_engine"}, f"引擎预热没有排在最前面：{calls}"
+    assert calls[2:] == ["init_routers", "init_modules"], f"初始化顺序被打乱：{calls}"
+
+
+def test_lifespan_fails_fast_when_async_engine_cannot_be_built(monkeypatch):
+    """异步引擎建不起来必须让启动直接失败，不能吞掉继续跑
+
+    吞掉等于把 fail-fast 又还回去了：进程起来了、健康检查是绿的，只有异步请求在报错。
+    """
+    _patch_lifespan(monkeypatch)
+
+    def _boom():
+        """模拟异步驱动缺失。"""
+        raise RuntimeError("no async driver")
+
+    monkeypatch.setattr(lifecycle, "get_global_async_engine", _boom)
+
+    async def run_lifespan():
+        async with lifecycle.lifespan(FastAPI()):
+            pass
+
+    with pytest.raises(RuntimeError, match="no async driver"):
+        asyncio.run(run_lifespan())
+
+    # 失败要发生在任何东西被初始化之前，否则模块起来了却没人关：关停块在 yield 处才开始
+    lifecycle.init_routers.assert_not_called()
+    lifecycle.init_modules.assert_not_called()
 
 
 def test_uvicorn_signal_publishes_stop_before_server_exit(monkeypatch):
@@ -227,7 +331,7 @@ def test_restart_endpoint_failure_preserves_stop_state(
 def test_command_restart_failure_does_not_publish_stop_request(monkeypatch):
     """命令重启失败时进程仍在运行，不能提前发布停止请求"""
     from app.chain.system import SystemChain
-    from app.core.config import global_vars
+    from app.runtime.config import global_vars
 
     stop_event = threading.Event()
     monkeypatch.setattr(global_vars, "STOP_EVENT", stop_event)
@@ -320,9 +424,6 @@ def test_shared_http_close_waits_for_real_lru_eviction(monkeypatch):
 
     monkeypatch.setattr(http_utils, "_MAX_SHARED_TRANSPORTS_PER_LOOP", 1)
     monkeypatch.setattr(http_utils.httpx, "AsyncHTTPTransport", FakeTransport)
-    debug = MagicMock()
-    monkeypatch.setattr(http_utils.logger, "debug", debug)
-
     async def run_test():
         transport_kwargs = {
             "proxy": None,
@@ -358,6 +459,7 @@ def test_shared_http_close_waits_for_real_lru_eviction(monkeypatch):
             await close_task
             await asyncio.sleep(0)
             assert eviction_tasks[0].done()
+            assert isinstance(eviction_tasks[0].exception(), RuntimeError)
             assert evicted_transport.closed
             assert active_transport.closed
             with http_utils._shared_async_transports_lock:
@@ -372,12 +474,6 @@ def test_shared_http_close_waits_for_real_lru_eviction(monkeypatch):
             await http_utils.aclose_shared_async_transports()
 
     asyncio.run(run_test())
-
-    debug.assert_any_call(
-        "LRU 淘汰共享 transport 时关闭失败: "
-        "RuntimeError('eviction close failed')"
-    )
-
 
 def test_shared_http_close_ignores_eviction_from_other_loop():
     """当前事件循环关闭不能等待其他循环持有的淘汰任务"""

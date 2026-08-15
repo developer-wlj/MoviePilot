@@ -13,33 +13,36 @@ from app import schemas
 from app.chain import ChainBase
 from app.chain.media import MediaChain
 from app.chain.storage import StorageChain
-from app.core.cache import FileCache
-from app.core.config import settings, global_vars
-from app.core.context import (
+from app.runtime.cache import FileCache
+from app.runtime.config import settings, global_vars
+from app.domain.context import (
     Context,
     MediaInfo,
     MusicInfo,
     SubtitleInfo,
     TorrentInfo,
 )
-from app.core.event import eventmanager, Event
-from app.core.meta import MetaBase, MetaMusic
-from app.core.metainfo import MetaInfo
-from app.db.downloadfailure_oper import DownloadFailureOper
-from app.db.downloadhistory_oper import DownloadHistoryOper
-from app.db.mediaserver_oper import MediaServerOper
-from app.helper.directory import DirectoryHelper, validate_download_save_path
-from app.helper.thread import ThreadHelper
-from app.helper.torrent import TorrentHelper
-from app.log import logger
+from app.runtime.events import eventmanager, Event
+from app.domain.meta.metabase import MetaBase
+from app.domain.meta.metamusic import MetaMusic
+from app.domain.metainfo import MetaInfo
+from app.db.oper.downloadfailure import DownloadFailureOper
+from app.db.oper.downloadhistory import DownloadHistoryOper
+from app.db.oper.mediaserver import MediaServerOper
+from app.application.directory import DirectoryHelper, validate_download_save_path
+from app.runtime.thread import ThreadHelper
+from app.application.torrent import TorrentHelper
+from app.runtime.log import logger
 from app.schemas import ExistMediaInfo, FileURI, NotExistMediaInfo, DownloaderTorrent, Notification, ResourceSelectionEventData, \
     ResourceDownloadEventData
 from app.schemas.types import MUSIC_ENTITY_ALBUM, MediaSource, MediaType, TorrentStatus, EventType, MessageChannel, NotificationType, ContentType, \
     ChainEventType
-from app.utils.http import RequestUtils
-from app.utils.media import build_media_key, resolve_media_identity
-from app.utils.string import StringUtils
-from app.utils.system import SystemUtils
+from app.adapters.network.http import RequestUtils
+from app.schemas.media import build_media_key, resolve_media_identity
+from app.domain import episode as episode_rules
+from app.foundation import size as size_tools
+from app.foundation import text as text_tools
+from app.adapters.system.host import SystemUtils
 
 
 DOWNLOAD_FAILURE_RESOURCE_TTL_SECONDS = 24 * 60 * 60
@@ -137,7 +140,7 @@ class DownloadChain(ChainBase):
         ).apply_path_context(file_path)
         track_identity: Union[int, str, None] = file_meta.track_number
         if track_identity is None:
-            track_identity = StringUtils.clear_upper(file_meta.title or file_path.stem)
+            track_identity = text_tools.normalize_upper(file_meta.title or file_path.stem)
         if track_identity in (None, ""):
             return None
         return file_meta.disc_number or 1, track_identity
@@ -553,7 +556,7 @@ class DownloadChain(ChainBase):
             return meta.episode
         episode_list = getattr(meta, "episode_list", None)
         if episode_list:
-            return StringUtils.format_ep(list(episode_list))
+            return episode_rules.format_ranges(list(episode_list))
         return None
 
     @staticmethod
@@ -668,7 +671,7 @@ class DownloadChain(ChainBase):
                 media_source=media_source,
                 media_id=media_id,
                 seasons=getattr(meta, "season", None),
-                episodes=StringUtils.format_ep(list(episodes)) if episodes else self._format_failure_episodes(meta),
+                episodes=episode_rules.format_ranges(list(episodes)) if episodes else self._format_failure_episodes(meta),
                 site=site if isinstance(site, int) else None,
                 site_name=getattr(torrent, "site_name", None),
                 torrent_id=self._torrent_resource_key(torrent),
@@ -915,7 +918,7 @@ class DownloadChain(ChainBase):
                 return (None, str(err)) if return_detail else None
 
         # 实际下载的集数
-        download_episodes = StringUtils.format_ep(list(episodes)) if episodes else None
+        download_episodes = episode_rules.format_ranges(list(episodes)) if episodes else None
         if episodes is not None:
             context.selected_episodes = sorted(set(episodes))
         elif _meta and _meta.episode_list:
@@ -1426,12 +1429,12 @@ class DownloadChain(ChainBase):
                                 if complete_coverage_matched:
                                     logger.info(
                                         f"{meta.org_string} 解析文件集数已完整覆盖目标范围："
-                                        f"{StringUtils.format_ep(sorted(required_episodes))}")
+                                        f"{episode_rules.format_ranges(sorted(required_episodes))}")
                                 if required_episodes and not complete_coverage_matched:
                                     missing_episodes = sorted(required_episodes.difference(torrent_episodes_set))
                                     logger.info(
                                         f"{meta.org_string} 解析文件集数未覆盖目标范围，"
-                                        f"缺少 {StringUtils.format_ep(missing_episodes)}，先放弃这个种子")
+                                        f"缺少 {episode_rules.format_ranges(missing_episodes)}，先放弃这个种子")
                                     continue
                                 if not required_episodes and need_total and len(torrent_episodes) < need_total:
                                     logger.info(
@@ -1857,7 +1860,7 @@ class DownloadChain(ChainBase):
         index = 1
         for torrent in torrents:
             messages.append(f"{index}. {torrent.title} "
-                            f"{StringUtils.str_filesize(torrent.size)} "
+                            f"{size_tools.format_compact_size(torrent.size)} "
                             f"{round(torrent.progress, 1)}%")
             index += 1
         self.post_message(Notification(

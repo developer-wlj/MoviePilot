@@ -84,12 +84,12 @@ result = await self.async_run_module("method_name", kwarg1=val1)
 
 **When to use:** Triggering cross-cutting reactions (e.g., notifying the media server after a transfer completes, reloading a module after config changes, dispatching user messages to message channels).
 
-**Core classes:** `EventManager` (singleton instance `eventmanager`) and `Event` in `app/core/event.py`.
+**Core classes:** `EventManager` (singleton instance `eventmanager`) and `Event` in `app/runtime/events.py`.
 
 **Registering a handler:**
 
 ```python
-from app.core.event import eventmanager, Event
+from app.runtime.events import eventmanager, Event
 from app.schemas.types import EventType
 
 @eventmanager.register(EventType.TransferComplete)
@@ -112,18 +112,18 @@ eventmanager.send_event(EventType.TransferComplete, data_dict)
 
 **When to use:** All database reads and writes. Never issue SQLAlchemy queries directly from chain, module, or endpoint code.
 
-**Convention:** Each SQLAlchemy model in `app/db/models/` has a corresponding `<Model>Oper` class in `app/db/<model>_oper.py`.
+**Convention:** Each SQLAlchemy model in `app/db/models/` has a corresponding `<Model>Oper` class in `app/db/oper/<model>.py` — the two packages mirror each other file for file, so the module name carries the entity and the package carries the role.
 
 ```
-app/db/models/subscribe.py       → app/db/subscribe_oper.py  (SubscribeOper)
-app/db/models/systemconfig.py    → app/db/systemconfig_oper.py (SystemConfigOper)
-app/db/models/transferhistory.py → app/db/transferhistory_oper.py (TransferHistoryOper)
+app/db/models/subscribe.py       → app/db/oper/subscribe.py       (SubscribeOper)
+app/db/models/systemconfig.py    → app/db/oper/systemconfig.py    (SystemConfigOper)
+app/db/models/transferhistory.py → app/db/oper/transferhistory.py (TransferHistoryOper)
 ```
 
 **Usage:**
 
 ```python
-from app.db.subscribe_oper import SubscribeOper
+from app.db.oper.subscribe import SubscribeOper
 
 oper = SubscribeOper()
 subscribe = oper.get(sid=1)
@@ -136,7 +136,7 @@ oper.add(Subscribe(name="Example", type="电影"))
 
 **When to use:** A chain, module, or helper holds a long-lived object that must be rebuilt when specific configuration keys change (e.g., a downloader client reconnects when its host/port changes).
 
-**Mixin:** `ConfigReloadMixin` in `app/utils/mixins.py`
+**Mixin:** `ConfigReloadMixin` in `app/runtime/reload.py`
 
 **How it works:**
 1. Inherit `ConfigReloadMixin`.
@@ -161,10 +161,10 @@ class MyChain(ChainBase, ConfigReloadMixin):
 
 **When to use:** Classes that must have exactly one instance shared application-wide (e.g., `EventManager`, `ModuleManager`, `PluginManager`).
 
-**Implementation:** Inherit from `Singleton` in `app/utils/singleton.py`.
+**Implementation:** Inherit from `Singleton` in `app/foundation/singleton.py`.
 
 ```python
-from app.utils.singleton import Singleton
+from app.foundation.singleton import Singleton
 
 class MyManager(metaclass=Singleton):
     ...
@@ -180,11 +180,11 @@ Do not introduce new singletons unless the class genuinely manages global shared
 
 **Enum:** `SystemConfigKey` in `app/schemas/types.py`
 
-**Oper class:** `SystemConfigOper` in `app/db/systemconfig_oper.py`
+**Oper class:** `SystemConfigOper` in `app/db/oper/systemconfig.py`
 
 ```python
 from app.schemas.types import SystemConfigKey
-from app.db.systemconfig_oper import SystemConfigOper
+from app.db.oper.systemconfig import SystemConfigOper
 
 oper = SystemConfigOper()
 value = oper.get(SystemConfigKey.RssUrls)
@@ -199,7 +199,7 @@ oper.set(SystemConfigKey.RssUrls, ["https://..."])
 
 **When to use:** Per-user settings that must survive across sessions but differ by user.
 
-**Oper class:** `UserConfigOper` in `app/db/userconfig_oper.py`
+**Oper class:** `UserConfigOper` in `app/db/oper/userconfig.py`
 
 Usage mirrors `SystemConfigOper` but scoped to a `user_id`.
 
@@ -209,11 +209,11 @@ Usage mirrors `SystemConfigOper` but scoped to a `user_id`.
 
 | Anti-Pattern | Correct Alternative |
 |---|---|
-| `module -> chain` coupling | Move shared logic into `chain` or down into `helper` |
+| `module -> chain` coupling | Move orchestration into `chain` and shared logic into its owning canonical package |
 | `module -> module` direct calls | Use `chain` to orchestrate cross-module workflows |
-| `helper -> chain` dependency | `helper` must remain a low-level utility; move orchestration to `chain` |
-| Raw SQLAlchemy queries in endpoints or chains | Use the corresponding `*_oper.py` class |
+| Lower-level module importing a chain or manager | Register a callback/resolver from `app/startup/` or move orchestration to `chain` |
+| Raw SQLAlchemy queries in endpoints or chains | Use the corresponding Oper class in `app/db/oper/` |
 | Raw string keys for SystemConfig | Define and use a `SystemConfigKey` enum entry |
-| HTTP requests via `requests` or `httpx` directly | Use `RequestUtils` from `app/utils/http.py` |
+| HTTP requests via `requests` or `httpx` directly | Host code uses `RequestUtils` from `app/adapters/network/http.py`; plugins use `app.sdk.network` |
 
-*Last Updated: 2026-05-25*
+*Last Updated: 2026-08-14*

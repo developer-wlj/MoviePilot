@@ -16,7 +16,7 @@ curl -fsSL https://raw.githubusercontent.com/jxxghp/MoviePilot/v3/scripts/bootst
 - 安装后端依赖
 - 按当前仓库 `version.py` 中的 `FRONTEND_VERSION` 下载对应前端 release 的 `dist.zip`
 - 下载 `MoviePilot-Resources` 主分支资源
-- 将 `resources.v3/*` 同步到后端 [app/helper](/Users/jxxghp/PycharmProjects/MoviePilot/app/helper)
+- 将 `resources.v3/*` 同步到后端 `app/application/site/`
 - 下载本地 Node 运行时并安装前端运行依赖
 - 执行初始化向导
 - 创建全局 `moviepilot` 命令
@@ -192,7 +192,7 @@ moviepilot install resources --config-dir /path/to/moviepilot-config
 说明：
 
 - 默认直接从 GitHub 下载 `MoviePilot-Resources` 主分支压缩包
-- 会将 `resources.v3/*` 整体复制到 [app/helper](/Users/jxxghp/PycharmProjects/MoviePilot/app/helper)
+- 会将 `resources.v3/*` 整体复制到 `app/application/site/`
 - 这一步和 Docker 构建流程保持一致
 
 ## 初始化命令
@@ -294,7 +294,7 @@ moviepilot uninstall --config-dir /path/to/moviepilot-config
 说明：
 
 - 卸载时会先停止当前 CLI 管理的前后端服务
-- 会删除本地虚拟环境、前端运行时、本地 Node 运行时、全局 `moviepilot` 软链接，以及同步到 `app/helper` 的资源文件
+- 会删除本地虚拟环境、前端运行时、本地 Node 运行时、全局 `moviepilot` 软链接，以及同步到 `app/application/site` 的资源文件
 - 如果之前注册过开机自启，卸载时也会一并取消
 - 会询问是否同时删除配置目录，默认不删除
 - 如果当前使用的是仓库内 legacy `config/` 目录，确认删除后其中的 `category.yaml` 等配置文件也会一起删除
@@ -442,6 +442,7 @@ moviepilot config set PORT 3001
 moviepilot config set NGINX_PORT 3000
 moviepilot config set API_TOKEN your-token-here
 moviepilot config set ACOUSTID_API_KEY your-acoustid-client-key
+moviepilot config set MUSIC_METADATA_TO_SIMPLIFIED true
 ```
 
 查看所有可配置项：
@@ -460,6 +461,7 @@ moviepilot config describe API_TOKEN --show-secrets
 - `config list` 显示当前配置值
 - `config keys` 显示配置项名称、类型和默认值
 - `ACOUSTID_API_KEY` 内置可用默认值，也可在前端“高级设置 - 媒体”或配置命令中覆盖；本地安装需要系统可执行路径中存在 Chromaprint `fpcalc`，官方 Docker 镜像已内置
+- `MUSIC_METADATA_TO_SIMPLIFIED` 默认开启；开启后会将识别结果中的曲名、艺术家、专辑和分类等标准音乐元数据转换为简体中文，不转换歌词与来源原始响应
 - `config describe` 显示单个配置项的类型、默认值和当前值
 
 ## Tool 命令

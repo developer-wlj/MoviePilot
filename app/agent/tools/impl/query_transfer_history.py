@@ -7,10 +7,10 @@ from pydantic import BaseModel, Field
 
 from app.agent.tools.base import MoviePilotTool
 from app.agent.tools.tags import ToolTag
-from app.db.transferhistory_oper import TransferHistoryOper
-from app.log import logger
+from app.db.oper.transferhistory import TransferHistoryOper
+from app.runtime.log import logger
 from app.schemas.types import media_type_to_agent
-from app.utils.jieba import cut as jieba_cut
+from app.foundation.text import cut as jieba_cut
 
 
 class QueryTransferHistoryInput(BaseModel):

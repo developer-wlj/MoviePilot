@@ -1,5 +1,5 @@
-from app.core.config import settings
-from app.utils import rust_accel
+from app.runtime.config import settings
+from app.adapters.system import rust as rust_accel
 
 
 class _DummyRustExtension:

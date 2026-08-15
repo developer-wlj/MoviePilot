@@ -9,13 +9,13 @@ from plexapi.server import PlexServer
 from requests import Response, Session
 
 from app import schemas
-from app.core.cache import cached
-from app.helper.mediaserver import MediaServerIdentityHelper
-from app.log import logger
+from app.runtime.cache import cached
+from app.application.mediaserver import MediaServerIdentityHelper
+from app.runtime.log import logger
 from app.schemas import MediaType
 from app.schemas.types import MediaSource
-from app.utils.http import RequestUtils
-from app.utils.url import UrlUtils
+from app.adapters.network.http import RequestUtils
+from app.foundation.url import UrlUtils
 from app.schemas import MediaServerItem
 
 

@@ -3,14 +3,14 @@ from dataclasses import dataclass
 from typing import Literal, Optional, Tuple, Union
 
 from app.chain import ChainBase
-from app.core.config import settings
-from app.core.security import get_password_hash, verify_password
+from app.runtime.config import settings
+from app.application.security.access import get_password_hash, verify_password
 from app.db.models.user import User
-from app.db.user_oper import UserOper
-from app.log import logger
+from app.db.oper.user import UserOper
+from app.runtime.log import logger
 from app.schemas import AuthCredentials, AuthInterceptCredentials
 from app.schemas.types import ChainEventType
-from app.utils.otp import OtpUtils
+from app.application.security.otp import OtpUtils
 
 PASSWORD_INVALID_CREDENTIALS_MESSAGE = "用户名、密码或验证码错误"
 

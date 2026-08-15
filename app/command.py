@@ -11,17 +11,17 @@ from app.chain.skills import SkillsChain
 from app.chain.subscribe import SubscribeChain
 from app.chain.system import SystemChain
 from app.chain.transfer import TransferChain
-from app.core.event import Event as ManagerEvent, eventmanager, Event
-from app.core.plugin import PluginManager
-from app.helper.message import MessageHelper
-from app.helper.thread import ThreadHelper
-from app.log import logger
+from app.runtime.events import Event as ManagerEvent, eventmanager, Event
+from app.runtime.extensions.plugin_manager import PluginManager
+from app.application.messaging.message import MessageHelper
+from app.runtime.thread import ThreadHelper
+from app.runtime.log import logger
 from app.scheduler import Scheduler
 from app.schemas import Notification, CommandRegisterEventData
 from app.schemas.types import EventType, MessageChannel, ChainEventType
-from app.utils.object import ObjectUtils
-from app.utils.singleton import Singleton
-from app.utils.structures import DictUtils
+from app.foundation.reflection import ObjectUtils
+from app.foundation.singleton import Singleton
+from app.foundation.collections import DictUtils
 
 
 class CommandChain(ChainBase):

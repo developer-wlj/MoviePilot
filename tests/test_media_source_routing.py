@@ -1,14 +1,11 @@
 from unittest.mock import Mock, patch
 
 from app.chain import ChainBase
-from app.core.context import MediaInfo
-from app.core.meta import MetaBase
+from app.domain.context import MediaInfo
+from app.domain.meta.metabase import MetaBase
 from app.schemas.types import MediaSource, MediaType
-from app.utils.media import (
-    build_media_key,
-    parse_media_source_selection,
-    resolve_media_identity,
-)
+from app.domain.media import parse_media_source_selection
+from app.schemas.media import build_media_key, resolve_media_identity
 
 
 def _chain_without_init() -> ChainBase:

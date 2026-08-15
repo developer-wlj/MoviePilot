@@ -3,12 +3,12 @@ from typing import Any, Dict, Generator, List, Optional, Tuple, Union
 
 import app.modules.trimemedia.api as fnapi
 from app import schemas
-from app.helper.mediaserver import MediaServerIdentityHelper
-from app.log import logger
+from app.application.mediaserver import MediaServerIdentityHelper
+from app.runtime.log import logger
 from app.schemas import MediaType
 from app.schemas.types import MediaSource
-from app.utils.security import SecurityUtils
-from app.utils.url import UrlUtils
+from app.application.security.url import SecurityUtils
+from app.foundation.url import UrlUtils
 
 
 class TrimeMedia:

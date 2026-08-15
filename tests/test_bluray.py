@@ -9,11 +9,11 @@ from app import schemas
 from app.chain.scraping import ScrapingChain
 from app.chain.storage import StorageChain
 from app.chain.transfer import TransferChain
-from app.core.context import MediaInfo
-from app.core.event import Event
-from app.core.metainfo import MetaInfoPath
+from app.domain.context import MediaInfo
+from app.runtime.events import Event
+from app.domain.metainfo import MetaInfoPath
 from app.db.models.transferhistory import TransferHistory
-from app.log import logger
+from app.runtime.log import logger
 from app.schemas.types import EventType
 from tests.cases.files import bluray_files
 
@@ -176,7 +176,7 @@ class BluRayTest(TestCase):
 
     @patch("app.chain.scraping.ScrapingChain.metadata_img", return_value=None)  # 避免获取图片
     @patch("app.chain.ChainBase.__init__", return_value=None)  # 避免不必要的模块初始化
-    @patch("app.db.transferhistory_oper.TransferHistoryOper.get_by_src")
+    @patch("app.db.oper.transferhistory.TransferHistoryOper.get_by_src")
     @patch("app.chain.storage.StorageChain.list_files")
     @patch("app.chain.storage.StorageChain.get_parent_item")
     @patch("app.chain.storage.StorageChain.get_file_item")

@@ -10,31 +10,33 @@ from time import monotonic
 from typing import List, Optional, Tuple, Union, Dict, Callable, Any
 
 from app import schemas
-from app.agent import ReplyMode, prompt_manager, agent_manager
+from app.agent.orchestrator import ReplyMode, agent_manager, prompt_manager
 from app.chain import ChainBase
 from app.chain.media import MediaChain
 from app.chain.storage import StorageChain
 from app.chain.subscribe import SubscribeChain
 from app.chain.tmdb import TmdbChain
-from app.core.config import settings, global_vars
-from app.core.context import MediaInfo, MusicInfo
-from app.core.event import eventmanager
-from app.core.meta import MetaBase, MetaMusic
-from app.core.metainfo import MetaInfoPath
-from app.db.downloadhistory_oper import DownloadHistoryOper
+from app.runtime.config import settings, global_vars
+from app.domain.context import MediaInfo, MusicInfo
+from app.runtime.events import eventmanager
+from app.domain.meta.metabase import MetaBase
+from app.domain.meta.metamusic import MetaMusic
+from app.domain.metainfo import MetaInfoPath
+from app.db.oper.downloadhistory import DownloadHistoryOper
 from app.db.models.downloadhistory import DownloadHistory, DownloadFiles
 from app.db.models.transferhistory import TransferHistory
-from app.db.systemconfig_oper import SystemConfigOper
-from app.db.transferpending_oper import TransferPendingOper
-from app.db.transferhistory_oper import TransferHistoryOper
-from app.helper.directory import DirectoryHelper
-from app.helper.audio import AudioMetadataHelper
-from app.helper.format import EpisodeFormatRuleHelper, FormatParser
-from app.helper.progress import ProgressHelper
-from app.helper.transferhistory import (clear_transfer_failures, describe_history_gate,
+from app.db.oper.systemconfig import SystemConfigOper
+from app.db.oper.transferpending import TransferPendingOper
+from app.db.oper.transferhistory import TransferHistoryOper
+from app.application.directory import DirectoryHelper
+from app.application.audio import AudioMetadataHelper
+from app.application.formatting import EpisodeFormatRuleHelper, FormatParser
+from app.runtime.progress import ProgressHelper
+from app.application.history import (add_transfer_fail, add_transfer_success,
+                                        clear_transfer_failures, describe_history_gate,
                                         evaluate_history_gate, is_skip_action,
                                         record_transfer_failure, resolve_history)
-from app.log import logger
+from app.runtime.log import logger
 from app.schemas import StorageOperSelectionEventData
 from app.schemas import (
     TransferInfo,
@@ -42,8 +44,6 @@ from app.schemas import (
     EpisodeFormat,
     FileItem,
     TransferDirectoryConf,
-    TransferTask,
-    TransferQueue,
     TransferJob,
     TransferJobTask,
     TmdbEpisode,
@@ -63,15 +63,14 @@ from app.schemas.types import (
     MUSIC_ENTITY_RECORDING,
     MediaSource,
 )
-from app.utils.mixins import ConfigReloadMixin
-from app.utils.media import (
-    normalize_media_source,
-    normalize_music_type,
-    resolve_media_identity,
-)
-from app.utils.singleton import Singleton
-from app.utils.string import StringUtils
-from app.utils.system import SystemUtils
+from app.runtime.reload import ConfigReloadMixin
+from app.application.transfer import TransferQueue, TransferTask
+from app.domain.media import normalize_music_type
+from app.schemas.media import normalize_media_source, resolve_media_identity
+from app.foundation.singleton import Singleton
+from app.domain import episode as episode_rules
+from app.foundation import text as text_tools
+from app.adapters.system.host import SystemUtils
 
 # 下载器锁
 downloader_lock = threading.Lock()
@@ -155,7 +154,8 @@ class JobManager:
         return meta.name, season
 
     @staticmethod
-    def __get_media_id(media: MediaInfo = None, season: Optional[int] = None) -> Tuple:
+    def __get_media_id(media: Optional[Union[MediaInfo, MusicInfo]] = None,
+                       season: Optional[int] = None) -> Tuple:
         """
         获取媒体ID；音乐额外区分实体类型，并为无远端ID的曲目构造稳定身份。
         """
@@ -170,16 +170,16 @@ class JobManager:
                 return "music", source, media_id, music_type
 
             artists = tuple(
-                StringUtils.clear_upper(artist)
+                text_tools.normalize_upper(artist)
                 for artist in (getattr(media, "artists", None) or [])
-                if StringUtils.clear_upper(artist)
+                if text_tools.normalize_upper(artist)
             )
             if music_type == MUSIC_ENTITY_ALBUM:
-                album_artist = StringUtils.clear_upper(
+                album_artist = text_tools.normalize_upper(
                     getattr(media, "album_artist", None)
                     or (artists[0] if artists else "")
                 )
-                album = StringUtils.clear_upper(
+                album = text_tools.normalize_upper(
                     getattr(media, "album", None) or getattr(media, "title", None) or ""
                 )
                 return "music", "local", music_type, album_artist, album, getattr(media, "year", None)
@@ -189,8 +189,8 @@ class JobManager:
                 "local",
                 music_type,
                 artists,
-                StringUtils.clear_upper(getattr(media, "title", None) or ""),
-                StringUtils.clear_upper(getattr(media, "album", None) or ""),
+                text_tools.normalize_upper(getattr(media, "title", None) or ""),
+                text_tools.normalize_upper(getattr(media, "album", None) or ""),
                 getattr(media, "disc_number", None),
                 getattr(media, "track_number", None),
             )
@@ -224,7 +224,7 @@ class JobManager:
         return self.__get_id(task)
 
     @staticmethod
-    def __get_media(task: TransferTask) -> schemas.MediaInfo:
+    def __get_media(task: TransferTask) -> Union[schemas.MediaInfo, schemas.MusicInfo]:
         """
         获取媒体信息
         """
@@ -761,7 +761,7 @@ class JobManager:
             )
 
     def success_tasks(
-            self, media: MediaInfo, season: Optional[int] = None
+            self, media: Union[MediaInfo, MusicInfo], season: Optional[int] = None
     ) -> List[TransferJobTask]:
         """
         获取作业中所有成功的任务
@@ -788,7 +788,7 @@ class JobManager:
                 return []
             return self._job_view[__mediaid__].tasks
 
-    def count(self, media: MediaInfo, season: Optional[int] = None) -> int:
+    def count(self, media: Union[MediaInfo, MusicInfo], season: Optional[int] = None) -> int:
         """
         获取作业中成功总数
         """
@@ -804,7 +804,7 @@ class JobManager:
                 ]
             )
 
-    def size(self, media: MediaInfo, season: Optional[int] = None) -> int:
+    def size(self, media: Union[MediaInfo, MusicInfo], season: Optional[int] = None) -> int:
         """
         获取作业中所有成功文件总大小
         """
@@ -857,7 +857,7 @@ class JobManager:
             return list(self._job_view.values())
 
     def season_episodes(
-            self, media: MediaInfo, season: Optional[int] = None
+            self, media: Union[MediaInfo, MusicInfo], season: Optional[int] = None
     ) -> List[int]:
         """
         获取作业的季集清单
@@ -1275,7 +1275,7 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
             self,
             history: TransferHistory,
             src_path: Path,
-    ) -> Optional[MusicInfo]:
+    ) -> Optional[Union[MusicInfo, MediaInfo]]:
         """
         重新整理重试时恢复音乐信息。
 
@@ -1421,7 +1421,7 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
                         task.mediainfo, task.meta.begin_season
                     )
                     if season_episodes:
-                        se_str = f"{task.meta.season} {StringUtils.format_ep(season_episodes)}"
+                        se_str = f"{task.meta.season} {episode_rules.format_ranges(season_episodes)}"
                     else:
                         se_str = f"{task.meta.season}"
                 # 发送入库成功消息
@@ -1465,7 +1465,7 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
                 )
 
                 # 新增转移失败历史记录
-                history = transferhis.add_fail(
+                history = add_transfer_fail(
                     fileitem=task.fileitem,
                     mode=transferinfo.transfer_type if transferinfo else "",
                     downloader=task.downloader,
@@ -1473,6 +1473,7 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
                     meta=task.meta,
                     mediainfo=task.mediainfo,
                     transferinfo=transferinfo,
+                    transfer_history_oper=transferhis,
                 )
 
                 # 整理失败事件
@@ -1585,7 +1586,7 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
             )
 
             # 新增task转移成功历史记录
-            history = transferhis.add_success(
+            history = add_transfer_success(
                 fileitem=task.fileitem,
                 mode=transferinfo.transfer_type if transferinfo else "",
                 downloader=task.downloader,
@@ -1593,6 +1594,7 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
                 meta=task.meta,
                 mediainfo=task.mediainfo,
                 transferinfo=transferinfo,
+                transfer_history_oper=transferhis,
             )
 
             # task整理完成事件
@@ -2284,7 +2286,9 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
         try:
             # 识别
             transferhis = TransferHistoryOper()
-            mediainfo = task.mediainfo
+            # 显式标注联合：下面既会赋回音乐识别结果（MusicInfo），也会赋回影视识别
+            # 结果（MediaInfo），不标注时会被推断成其中一种，另一种就成了假错误
+            mediainfo: Optional[Union[MediaInfo, MusicInfo]] = task.mediainfo
             mediainfo_changed = False
             need_obtain_images = False
             if not mediainfo:
@@ -2301,8 +2305,10 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
                             and download_history.media_id
                             and not history_year_conflict
                     ):
-                        # 下载记录中已存在识别信息
-                        mediainfo: Optional[MediaInfo] = MediaChain().recognize_media(
+                        # 下载记录中已存在识别信息。这里不再重复标注类型：函数开头
+                        # 已把 mediainfo 声明为 MediaInfo | MusicInfo | None，重复
+                        # 声明会遮蔽它，把音乐识别结果判成类型错误
+                        mediainfo = MediaChain().recognize_media(
                             mtype=task.mtype or MediaType(download_history.type),
                             media_source=download_history.media_source,
                             media_id=download_history.media_id,
@@ -2366,24 +2372,35 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
                         fileid=task.fileitem.fileid if task.fileitem else None,
                     )
                     # 新增整理失败历史记录
-                    his = transferhis.add_fail(
+                    his = add_transfer_fail(
                         fileitem=task.fileitem,
                         mode=task.transfer_type,
                         meta=task.meta,
                         downloader=task.downloader,
                         download_hash=task.download_hash,
+                        transfer_history_oper=transferhis,
                     )
                     self.post_message(
                         Notification(
                             mtype=NotificationType.Manual,
                             title=f"{task.fileitem.name} 未识别到媒体信息，无法入库！",
-                            text=(
-                                "原因：未识别到媒体信息\n"
-                                "如果按钮不可用，可回复：\n"
-                                f"```\n/redo {his.id}\n"
-                                f"/redo {his.id} [media_source]|[media_id]|[类型]\n```\n"
-                                "自动重试或手动识别整理。"
-                            ),
+                            # 历史落库失败时 his 为 None（add_transfer_fail 末尾的
+                            # get_by_src 查不到即返回 None），此时 /redo 无 ID 可用，
+                            # 只省去这段指引而不是让整条通知连同后续的作业清理、
+                            # 种子完成标记一起崩在 NoneType 上
+                            text="\n".join(
+                                [
+                                    "原因：未识别到媒体信息",
+                                    (
+                                        "如果按钮不可用，可回复：\n"
+                                        f"```\n/redo {his.id}\n"
+                                        f"/redo {his.id} [media_source]|[media_id]|[类型]\n```\n"
+                                        "自动重试或手动识别整理。"
+                                        if his
+                                        else ""
+                                    ),
+                                ]
+                            ).strip(),
                             username=task.username,
                             link=settings.MP_DOMAIN("#/history"),
                             buttons=self.build_failed_transfer_buttons(
@@ -3165,7 +3182,11 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
 
     @staticmethod
     def _is_movie_year_conflict(
-            file_meta: MetaBase, media: Union[DownloadHistory, MediaInfo]
+            file_meta: MetaBase,
+            # 两种 DownloadHistory 都会进来：库模型（本文件按 ORM 行查历史）与
+            # schemas DTO（TransferTask.download_history）。本函数只按 getattr 取
+            # year 与 type，对两者一视同仁
+            media: Union[DownloadHistory, schemas.DownloadHistory, MediaInfo, MusicInfo]
     ) -> bool:
         """
         判断文件名年份是否与已识别电影年份冲突。
@@ -3222,7 +3243,7 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
             return False
         if source_meta.type != target_meta.type:
             return False
-        if StringUtils.clear_upper(source_meta.name) != StringUtils.clear_upper(
+        if text_tools.normalize_upper(source_meta.name) != text_tools.normalize_upper(
                 target_meta.name
         ):
             return False
@@ -3449,7 +3470,7 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
             self,
             fileitem: FileItem,
             meta: MetaBase = None,
-            mediainfo: MediaInfo = None,
+            mediainfo: Optional[Union[MediaInfo, MusicInfo]] = None,
             mtype: Optional[MediaType] = None,
             media_source: Optional[MediaSource] = None,
             media_id: Optional[str] = None,
@@ -4001,7 +4022,7 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
                     raise OperationInterrupted()
                 file_path = Path(file_item.path)
 
-                # 自动整理按 app/helper/transferhistory.py 的统一判定去重（失败记录放行重试、
+                # 自动整理按 app/application/history.py 的统一判定去重（失败记录放行重试、
                 # 成功但源文件已变化放行交 overwrite_mode 决断）；手动整理可清理失败记录，
                 # 或按用户确认清理成功记录。
                 if (not force or reorganize) and not preview:
@@ -4685,7 +4706,7 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
     def send_transfer_message(
             self,
             meta: MetaBase,
-            mediainfo: MediaInfo,
+            mediainfo: Union[MediaInfo, MusicInfo],
             transferinfo: TransferInfo,
             season_episode: Optional[str] = None,
             episodes_info: Optional[List[TmdbEpisode]] = None,

@@ -7,20 +7,20 @@ from app.chain.bangumi import BangumiChain
 from app.chain.douban import DoubanChain
 from app.chain.listenbrainz import ListenBrainzChain
 from app.chain.tmdb import TmdbChain
-from app.core.cache import cached, fresh
-from app.core.config import settings, global_vars
-from app.core.context import MusicInfo
-from app.helper.image import ImageHelper
-from app.log import logger
+from app.runtime.cache import cached, fresh
+from app.runtime.config import settings, global_vars
+from app.domain.context import MusicInfo
+from app.application.image import ImageHelper
+from app.runtime.log import logger
 from app.schemas import MediaType
 from app.schemas.types import (
     MUSIC_ENTITY_ALBUM,
     MUSIC_ENTITY_RECORDING,
     MediaSource,
 )
-from app.utils.common import log_execution_time
-from app.utils.media import normalize_media_source
-from app.utils.singleton import Singleton
+from app.runtime.execution import log_execution_time
+from app.schemas.media import normalize_media_source
+from app.foundation.singleton import Singleton
 
 
 class RecommendChain(ChainBase, metaclass=Singleton):

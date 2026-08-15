@@ -5,9 +5,9 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from app.db.models.systemconfig import SystemConfig
-from app.db.systemconfig_oper import SystemConfigOper
+from app.db.oper.systemconfig import SystemConfigOper
 from app.schemas.types import SystemConfigKey
-from app.utils.singleton import Singleton
+from app.foundation.singleton import Singleton
 
 
 def _unique_key() -> str:

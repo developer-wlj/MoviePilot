@@ -5,11 +5,11 @@ from fastapi import Depends
 from app import schemas
 from app.api.response import ResponseAPIRouter
 from app.chain.tmdb import TmdbChain
-from app.core.config import settings
-from app.core.security import verify_token
+from app.runtime.config import settings
+from app.application.security.access import verify_token
 from app.db.models.user import User
-from app.db.systemconfig_oper import SystemConfigOper
-from app.db.user_oper import get_current_active_superuser_async
+from app.db.oper.systemconfig import SystemConfigOper
+from app.api.deps import get_current_active_superuser_async
 from app.modules.themoviedb.tmdb_cache import TmdbCache
 from app.schemas.types import MediaType, SystemConfigKey
 

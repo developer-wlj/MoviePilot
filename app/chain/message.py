@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Optional, Dict, Union, List, Tuple
 from urllib.parse import unquote, urlparse
 
-from app.agent import ReplyMode, agent_manager
+from app.agent.orchestrator import ReplyMode, agent_manager
 from app.agent.llm import AgentCapabilityManager, LLMHelper
 from app.agent.prompt.transfer_redo import build_manual_redo_prompt
 from app.chain import ChainBase
@@ -22,28 +22,30 @@ from app.chain.site import SiteChain, site_interaction_manager
 from app.chain.skills import SkillsChain, skills_interaction_manager
 from app.chain.subscribe import SubscribeChain, subscribe_interaction_manager
 from app.chain.transfer import TransferChain
-from app.core.config import settings, global_vars
-from app.core.context import MediaInfo, Context
-from app.core.meta import MetaBase
+from app.runtime.config import settings, global_vars
+from app.domain.context import MediaInfo, Context
+from app.domain.meta.metabase import MetaBase
 from app.db.models import TransferHistory
-from app.db.transferhistory_oper import TransferHistoryOper
-from app.db.user_oper import UserOper
-from app.helper.directory import DirectoryHelper
-from app.helper.interaction import (
+from app.db.oper.transferhistory import TransferHistoryOper
+from app.db.oper.user import UserOper
+from app.application.directory import DirectoryHelper
+from app.application.messaging.interaction import (
     agent_interaction_manager,
     media_interaction_manager,
     plugin_input_interaction_manager,
     PendingMediaInteraction,
 )
-from app.helper.torrent import TorrentHelper
-from app.log import logger
+from app.application.torrent import TorrentHelper
+from app.runtime.log import logger
 from app.schemas import CommingMessage, DownloadDirectory, FileURI, NotExistMediaInfo, Notification
 from app.schemas.message import ChannelCapabilityManager, ChannelCapability
 from app.schemas.system import TransferDirectoryConf
 from app.schemas.types import EventType, MessageChannel, MediaType
-from app.utils.http import RequestUtils
-from app.utils.media import build_media_key, resolve_media_identity
-from app.utils.string import StringUtils
+from app.adapters.network.http import RequestUtils
+from app.schemas.media import build_media_key, resolve_media_identity
+from app.domain import episode as episode_rules
+from app.domain import title as title_rules
+from app.foundation import url as url_tools
 
 
 class MessageChain(ChainBase):
@@ -2562,9 +2564,9 @@ class MediaInteractionChain(ChainBase):
             return "ReSubscribe", re.sub(r"洗版[:：\s]*", "", text)
         if text.startswith("搜索") or text.startswith("下载"):
             return "ReSearch", re.sub(r"(搜索|下载)[:：\s]*", "", text)
-        if StringUtils.is_link(text):
+        if url_tools.is_link(text):
             return None, text
-        if not StringUtils.is_media_title_like(text):
+        if not title_rules.is_media_title_like(text):
             return None, text
         return "Search", text
 
@@ -3683,7 +3685,7 @@ class MediaInteractionChain(ChainBase):
         season_map = no_exists.get(mediakey) or {}
         if show_missing_only:
             return [
-                f"第 {sea} 季缺失 {StringUtils.str_series(no_exist.episodes) if no_exist.episodes else no_exist.total_episode} 集"
+                f"第 {sea} 季缺失 {episode_rules.compact_numbers(no_exist.episodes) if no_exist.episodes else no_exist.total_episode} 集"
                 for sea, no_exist in season_map.items()
             ]
         return [

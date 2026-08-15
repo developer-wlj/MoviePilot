@@ -8,12 +8,12 @@ from urllib.parse import urljoin, urlsplit
 
 from requests import Session
 
-from app.core.config import settings
-from app.helper.cloudflare import under_challenge
-from app.log import logger
-from app.utils.http import RequestUtils
-from app.utils.site import SiteUtils
-from app.utils.string import StringUtils
+from app.runtime.config import settings
+from app.adapters.network.cloudflare import under_challenge
+from app.runtime.log import logger
+from app.adapters.network.http import RequestUtils
+from app.domain.site import SiteUtils
+from app.foundation import size as size_tools
 
 
 # 站点框架
@@ -183,7 +183,7 @@ class SiteParserBase(metaclass=ABCMeta):
         """
         将站点页面中的文件大小文本转换为字节。
         """
-        return StringUtils.num_filesize(text)
+        return size_tools.parse_size(text)
 
     def parse(self):
         """

@@ -12,20 +12,21 @@ from app.chain.acoustid import AcoustIdChain
 from app.chain.douban import DoubanChain
 from app.chain.musicbrainz import MusicBrainzChain, _MusicMetadataSourceChain
 from app.chain.theaudiodb import TheAudioDbChain
-from app.core.cache import async_fresh, fresh
-from app.core.config import settings
-from app.core.context import (
+from app.runtime.cache import async_fresh, fresh
+from app.runtime.config import settings
+from app.domain.context import (
     Context,
     MediaInfo,
     MusicAlbumInfo,
     MusicArtistInfo,
     MusicInfo,
 )
-from app.core.event import eventmanager, Event
-from app.core.meta import MetaBase, MetaMusic
-from app.core.metainfo import MetaInfo, MetaInfoPath
-from app.helper.audio import AudioMetadataHelper
-from app.log import logger
+from app.runtime.events import eventmanager, Event
+from app.domain.meta.metabase import MetaBase
+from app.domain.meta.metamusic import MetaMusic
+from app.domain.metainfo import MetaInfo, MetaInfoPath
+from app.application.audio import AudioMetadataHelper
+from app.runtime.log import logger
 from app.schemas import FileItem
 from app.schemas.types import (
     MUSIC_ENTITY_ALBUM,
@@ -36,13 +37,11 @@ from app.schemas.types import (
     MediaSourceSelection,
     MediaType,
 )
-from app.utils.media import (
-    is_music_media_source,
-    normalize_media_source,
-    resolve_media_identity,
-)
-from app.utils.singleton import Singleton
-from app.utils.string import StringUtils
+from app.domain.media import is_music_media_source
+from app.schemas.media import normalize_media_source, resolve_media_identity
+from app.foundation.singleton import Singleton
+from app.foundation.text import convert as zhconv_convert
+from app.domain import title as title_rules
 
 recognize_lock = Lock()
 
@@ -57,6 +56,15 @@ class MediaChain(ChainBase, metaclass=Singleton):
     _album_dir_cache: dict[str, tuple[tuple[str, ...], dict[str, MusicInfo]]] = {}
     _album_dir_cache_max = 128
     _album_match_min_files = 2
+    _music_simplified_text_fields = (
+        "title",
+        "album",
+        "album_artist",
+        "album_type",
+        "version",
+        "category",
+    )
+    _music_simplified_list_fields = ("artists", "genres", "names")
 
     @staticmethod
     def _music_source_chain(
@@ -205,7 +213,49 @@ class MediaChain(ChainBase, metaclass=Singleton):
                 or str(result.media_id or "") != media_id
         ):
             return None
-        return result
+        return MediaChain._simplify_recognized_music_info(result)
+
+    @classmethod
+    def _simplify_recognized_music_info(cls, info: MusicInfo) -> MusicInfo:
+        """按开关转换标准音乐文本字段，并避免修改来源模块的缓存对象。"""
+        if not settings.MUSIC_METADATA_TO_SIMPLIFIED:
+            return info
+        updates: dict[str, Any] = {}
+        for field_name in cls._music_simplified_text_fields:
+            value = getattr(info, field_name, None)
+            if isinstance(value, str):
+                converted = zhconv_convert(value, "zh-hans")
+                if converted != value:
+                    updates[field_name] = converted
+        for field_name in cls._music_simplified_list_fields:
+            value = getattr(info, field_name, None)
+            if isinstance(value, list):
+                converted = [
+                    zhconv_convert(item, "zh-hans") if isinstance(item, str) else item
+                    for item in value
+                ]
+                if converted != value:
+                    updates[field_name] = converted
+        if not updates:
+            return info
+        simplified = deepcopy(info)
+        for field_name, value in updates.items():
+            setattr(simplified, field_name, value)
+        return simplified
+
+    @classmethod
+    def _simplify_recognized_music_mapping(
+            cls,
+            matched: dict[str, MusicInfo],
+    ) -> dict[str, MusicInfo]:
+        """转换目录识别结果，同时让缓存始终保留来源返回的原始文本。"""
+        simplified = {
+            path: cls._simplify_recognized_music_info(info)
+            for path, info in matched.items()
+        }
+        if all(simplified[path] is info for path, info in matched.items()):
+            return matched
+        return simplified
 
     def recognize_music_from_source(
             self,
@@ -590,9 +640,9 @@ class MediaChain(ChainBase, metaclass=Singleton):
 
     def supplement_tmdb_info(
             self,
-            mediainfo: Optional[MediaInfo],
+            mediainfo: Optional[Union[MediaInfo, MusicInfo]],
             metainfo: Optional[MetaBase] = None,
-    ) -> Optional[MediaInfo]:
+    ) -> Optional[Union[MediaInfo, MusicInfo]]:
         """
         为任意主识别源补充 TMDB 辅助信息，同时保留原始媒体身份。
 
@@ -602,7 +652,10 @@ class MediaChain(ChainBase, metaclass=Singleton):
         """
         if not mediainfo:
             return None
-        if mediainfo.type == MediaType.MUSIC:
+        # 音乐原样返回：下面全是 TMDB 影视字段，MusicInfo 上根本没有。用 isinstance
+        # 而不只看 type，一来静态检查能据此收窄（.type == 的比较收窄不了类型），二来
+        # type 没被正确赋值的 MusicInfo 也挡得住，不至于到下一行才 AttributeError
+        if isinstance(mediainfo, MusicInfo) or mediainfo.type == MediaType.MUSIC:
             return mediainfo
         if mediainfo.tmdb_id and mediainfo.tmdb_info and mediainfo.genre_ids:
             return mediainfo
@@ -1192,12 +1245,12 @@ class MediaChain(ChainBase, metaclass=Singleton):
         signature = self._album_directory_signature(directory, files)
         cached = self._album_dir_cache.get(key)
         if cached and cached[0] == signature:
-            return cached[1]
+            return self._simplify_recognized_music_mapping(cached[1])
         matched = self._match_music_album_directory(directory, files)
         if len(self._album_dir_cache) >= self._album_dir_cache_max:
             self._album_dir_cache.clear()
         self._album_dir_cache[key] = signature, matched
-        return matched
+        return self._simplify_recognized_music_mapping(matched)
 
     async def async_recognize_music_album_directory(
             self,
@@ -1214,12 +1267,12 @@ class MediaChain(ChainBase, metaclass=Singleton):
         signature = self._album_directory_signature(directory, files)
         cached = self._album_dir_cache.get(key)
         if cached and cached[0] == signature:
-            return cached[1]
+            return self._simplify_recognized_music_mapping(cached[1])
         matched = await self._async_match_music_album_directory(directory, files)
         if len(self._album_dir_cache) >= self._album_dir_cache_max:
             self._album_dir_cache.clear()
         self._album_dir_cache[key] = signature, matched
-        return matched
+        return self._simplify_recognized_music_mapping(matched)
 
     def recognize_music_by_path(
             self,
@@ -1258,7 +1311,7 @@ class MediaChain(ChainBase, metaclass=Singleton):
             matched = self._music_album_dir_fallback(path)
             if matched:
                 result = self._merge_music_audio_quality(matched, meta)
-        return meta, result
+        return meta, self._simplify_recognized_music_info(result)
 
     async def async_recognize_music_by_path(
             self,
@@ -1303,7 +1356,7 @@ class MediaChain(ChainBase, metaclass=Singleton):
             matched = await self._async_music_album_dir_fallback(path)
             if matched:
                 result = self._merge_music_audio_quality(matched, meta)
-        return meta, result
+        return meta, self._simplify_recognized_music_info(result)
 
     def _is_music_path_request(self, path: str, media_source: Optional[MediaSource]) -> bool:
         """路径识别请求是否属于音乐：音频后缀文件或显式指定音乐数据源。"""
@@ -1359,7 +1412,7 @@ class MediaChain(ChainBase, metaclass=Singleton):
         """
         # 提取要素
         mtype, key_word, season_num, episode_num, year, content = (
-            StringUtils.get_keyword(title)
+            title_rules.parse_search_keyword(title)
         )
         # 识别
         meta = MetaInfo(content)
@@ -1836,7 +1889,7 @@ class MediaChain(ChainBase, metaclass=Singleton):
         """
         # 提取要素
         mtype, key_word, season_num, episode_num, year, content = (
-            StringUtils.get_keyword(title)
+            title_rules.parse_search_keyword(title)
         )
         # 识别
         meta = MetaInfo(content)

@@ -2,10 +2,10 @@
 import json
 from typing import Optional, Tuple
 
-from app.log import logger
+from app.runtime.log import logger
 from app.modules.indexer.parser import SiteParserBase, SiteSchema
 from app.modules.indexer.parser.nexus_php import NexusPhpSiteUserInfo
-from app.utils.string import StringUtils
+from app.domain import site as site_rules
 
 
 class HDDolbySiteUserInfo(SiteParserBase):
@@ -44,7 +44,7 @@ class HDDolbySiteUserInfo(SiteParserBase):
         获取站点页面地址
         """
         # 更换api地址
-        self._base_url = f"https://api.{StringUtils.get_url_domain(self._base_url)}"
+        self._base_url = f"https://api.{site_rules.extract_domain(self._base_url)}"
         self._user_traffic_page = None
         self._user_detail_page = None
         self._user_basic_page = "api/v1/user/data"

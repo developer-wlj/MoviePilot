@@ -12,10 +12,10 @@ import httpx
 import requests
 from bs4 import BeautifulSoup
 
-from app.core.cache import cached
-from app.core.config import settings
-from app.utils.http import RequestUtils, AsyncRequestUtils
-from app.utils.singleton import WeakSingleton
+from app.runtime.cache import cached
+from app.runtime.config import settings
+from app.adapters.network.http import RequestUtils, AsyncRequestUtils
+from app.foundation.singleton import WeakSingleton
 
 
 class DoubanApi(metaclass=WeakSingleton):

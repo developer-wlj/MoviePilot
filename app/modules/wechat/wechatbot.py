@@ -11,16 +11,16 @@ from typing import Optional, List, Dict, Tuple, Set
 import websocket
 from Crypto.Cipher import AES
 
-from app.core.cache import FileCache
-from app.core.config import settings
-from app.core.context import MediaInfo, Context
-from app.core.metainfo import MetaInfo
-from app.helper.agent import matches_channel_admin
-from app.log import logger
+from app.runtime.cache import FileCache
+from app.runtime.config import settings
+from app.domain.context import MediaInfo, Context
+from app.domain.metainfo import MetaInfo
+from app.application.messaging.agent import matches_channel_admin
+from app.runtime.log import logger
 from app.schemas import CommingMessage
 from app.schemas.types import MessageChannel
-from app.utils.http import RequestUtils
-from app.utils.string import StringUtils
+from app.adapters.network.http import RequestUtils
+from app.foundation import size as size_tools
 
 
 class WeChatBot:
@@ -629,7 +629,7 @@ class WeChatBot:
                 f"{meta.resource_term} "
                 f"{meta.video_term} "
                 f"{meta.release_group} "
-                f"{StringUtils.str_filesize(torrent.size)} "
+                f"{size_tools.format_compact_size(torrent.size)} "
                 f"{torrent.volume_factor} "
                 f"{torrent.seeders}↑"
             )

@@ -9,18 +9,15 @@ from sqlalchemy.orm import Session
 from app import schemas
 from app.api.response import ResponseAPIRouter
 from app.chain.workflow import WorkflowChain
-from app.core.config import global_vars
-from app.core.plugin import PluginManager
+from app.runtime.config import global_vars
+from app.runtime.extensions.plugin_manager import PluginManager
 from app.workflow import WorkFlowManager
 from app.db import get_async_db, get_db
 from app.db.models import Workflow, User
-from app.db.systemconfig_oper import SystemConfigOper
-from app.db.user_oper import (
-    get_current_active_manage_user,
-    get_current_active_manage_user_async,
-)
-from app.db.workflow_oper import WorkflowOper
-from app.helper.server import MoviePilotServerHelper
+from app.db.oper.systemconfig import SystemConfigOper
+from app.api.deps import get_current_active_manage_user, get_current_active_manage_user_async
+from app.db.oper.workflow import WorkflowOper
+from app.adapters.external.server import MoviePilotServerHelper
 from app.scheduler import Scheduler
 from app.schemas.types import EventType, EVENT_TYPE_NAMES
 

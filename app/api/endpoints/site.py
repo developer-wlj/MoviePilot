@@ -11,28 +11,29 @@ from app.api.endpoints.plugin import register_plugin_api
 from app.chain.site import SiteChain
 from app.chain.torrents import TorrentsChain
 from app.command import Command
-from app.core.event import eventmanager
-from app.core.plugin import PluginManager
-from app.core.security import verify_token
+from app.runtime.events import eventmanager
+from app.runtime.extensions.plugin_manager import PluginManager
+from app.application.security.access import verify_token
 from app.db import get_db, get_async_db
 from app.db.models import User
 from app.db.models.site import Site
 from app.db.models.siteicon import SiteIcon
 from app.db.models.sitestatistic import SiteStatistic
 from app.db.models.siteuserdata import SiteUserData
-from app.db.site_oper import SiteOper
-from app.db.systemconfig_oper import SystemConfigOper
-from app.db.user_oper import (
+from app.db.oper.site import SiteOper
+from app.db.oper.systemconfig import SystemConfigOper
+from app.api.deps import (
     get_current_active_manage_user,
     get_current_active_manage_user_async,
     get_current_active_superuser,
     get_current_active_superuser_async,
 )
-from app.helper.sites import SitesHelper  # noqa
-from app.log import logger
+from app.application.site.sites import SitesHelper  # pylint: disable=no-name-in-module
+from app.runtime.log import logger
 from app.scheduler import Scheduler
 from app.schemas.types import SystemConfigKey, EventType, MediaType
-from app.utils.string import StringUtils
+from app.domain import site as site_rules
+from app.foundation import url as url_tools
 
 router = ResponseAPIRouter()
 
@@ -117,7 +118,7 @@ async def read_sites_by_media_type(
             continue
         if indexer.get("id") is not None:
             supported_ids.add(str(indexer.get("id")))
-        domain = StringUtils.get_url_domain(indexer.get("domain"))
+        domain = site_rules.extract_domain(indexer.get("domain"))
         if domain:
             supported_domains.add(domain)
 
@@ -146,7 +147,7 @@ async def add_site(
         return schemas.Response(
             success=False, message="用户未通过认证，无法使用站点功能！"
         )
-    domain = StringUtils.get_url_domain(site_in.url)
+    domain = site_rules.extract_domain(site_in.url)
     site_info = await SitesHelper().async_get_indexer(domain)
     if not site_info:
         return schemas.Response(
@@ -157,7 +158,7 @@ async def add_site(
     # 保存站点信息
     site_in.domain = domain
     # 校正地址格式
-    _scheme, _netloc = StringUtils.get_url_netloc(site_in.url)
+    _scheme, _netloc = url_tools.split_netloc(site_in.url)
     site_in.url = f"{_scheme}://{_netloc}/"
     site_in.name = site_info.get("name")
     site_in.id = None
@@ -183,9 +184,9 @@ async def update_site(
     if not site:
         return schemas.Response(success=False, message="站点不存在")
     # 校正地址格式
-    _scheme, _netloc = StringUtils.get_url_netloc(site_in.url)
+    _scheme, _netloc = url_tools.split_netloc(site_in.url)
     site_in.url = f"{_scheme}://{_netloc}/"
-    site_in.domain = StringUtils.get_url_domain(site_in.url)
+    site_in.domain = site_rules.extract_domain(site_in.url)
     await site.async_update(db, site_in.model_dump())
     # 通知站点更新
     await eventmanager.async_send_event(
@@ -521,7 +522,7 @@ async def read_site_by_domain(
     """
     通过域名获取站点信息
     """
-    domain = StringUtils.get_url_domain(site_url)
+    domain = site_rules.extract_domain(site_url)
     site = await Site.async_get_by_domain(db, domain)
     if not site:
         raise HTTPException(
@@ -544,7 +545,7 @@ async def read_statistic_by_domain(
     """
     通过域名获取站点统计信息
     """
-    domain = StringUtils.get_url_domain(site_url)
+    domain = site_rules.extract_domain(site_url)
     sitestatistic = await SiteStatistic.async_get_by_domain(db, domain)
     if sitestatistic:
         return sitestatistic

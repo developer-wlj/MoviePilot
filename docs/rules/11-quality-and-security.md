@@ -15,7 +15,7 @@ pytest
 ### When to Expand Scope
 
 Run the full test suite when changing:
-- `app/core/` — config, event system, module manager, plugin manager
+- `app/runtime/`, `app/adapters/`, or `app/runtime/compat/` - config, events, managers, adapters, and compatibility boundaries
 - `app/chain/__init__.py` — chain base class
 - `app/modules/__init__.py` — module base class
 - `app/main.py` — application startup
@@ -105,7 +105,7 @@ The `API_TOKEN` value in `settings` is the source of truth. It is set at initial
 
 ## SQL Injection Prevention
 
-- All database access goes through SQLAlchemy ORM via the `*_oper.py` classes. No raw SQL string construction.
+- All database access goes through SQLAlchemy ORM via the Oper classes in `app/db/oper/`. No raw SQL string construction.
 - If a raw SQL query is ever genuinely necessary, use SQLAlchemy's `text()` with parameterized binds — never string interpolation.
 
 ---

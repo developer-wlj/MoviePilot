@@ -62,7 +62,7 @@ def _load_subscribe_chain_class():
             """异步按元数据识别默认返回空结果。"""
             return None
 
-    interaction_module = ensure_module("app.helper.interaction", types.ModuleType("app.helper.interaction"))
+    interaction_module = ensure_module("app.application.messaging.interaction", types.ModuleType("app.application.messaging.interaction"))
 
     class _SlashInteractionManager:
         def create_or_replace(self, *args, **kwargs):
@@ -85,14 +85,14 @@ def _load_subscribe_chain_class():
     interaction_module.supports_markdown = lambda *args, **kwargs: False
     interaction_module.update_or_post_message = lambda *args, **kwargs: None
 
-    config_module = ensure_module("app.core.config", types.ModuleType("app.core.config"))
+    config_module = ensure_module("app.runtime.config", types.ModuleType("app.runtime.config"))
     config_module.global_vars = SimpleNamespace(is_system_stopped=False)
     config_module.settings = SimpleNamespace(
         RECOGNIZE_SOURCE="themoviedb",
         MP_DOMAIN=lambda path: path,
     )
 
-    context_module = ensure_module("app.core.context", types.ModuleType("app.core.context"))
+    context_module = ensure_module("app.domain.context", types.ModuleType("app.domain.context"))
     context_module.TorrentInfo = SimpleNamespace
     context_module.Context = SimpleNamespace
     context_module.MediaInfo = SimpleNamespace
@@ -100,7 +100,7 @@ def _load_subscribe_chain_class():
     context_module.MUSIC_ENTITY_ALBUM = "album"
     context_module.MUSIC_ENTITY_RECORDING = "recording"
 
-    event_module = ensure_module("app.core.event", types.ModuleType("app.core.event"))
+    event_module = ensure_module("app.runtime.events", types.ModuleType("app.runtime.events"))
 
     class _EventManager:
         @staticmethod
@@ -126,11 +126,11 @@ def _load_subscribe_chain_class():
     event_module.eventmanager = _EventManager()
     event_module.Event = SimpleNamespace
 
-    meta_module = ensure_module("app.core.meta", types.ModuleType("app.core.meta"))
+    meta_module = ensure_module("app.domain.meta", types.ModuleType("app.domain.meta"))
     meta_module.MetaBase = SimpleNamespace
     meta_module.MetaMusic = SimpleNamespace
 
-    metainfo_module = ensure_module("app.core.metainfo", types.ModuleType("app.core.metainfo"))
+    metainfo_module = ensure_module("app.domain.metainfo", types.ModuleType("app.domain.metainfo"))
 
     class _MetaInfo(SimpleNamespace):
         """提供订阅刷新测试需要的 MetaInfo 核心字段。"""
@@ -156,7 +156,7 @@ def _load_subscribe_chain_class():
 
     metainfo_module.MetaInfo = _MetaInfo
 
-    words_module = ensure_module("app.core.meta.words", types.ModuleType("app.core.meta.words"))
+    words_module = ensure_module("app.domain.meta.words", types.ModuleType("app.domain.meta.words"))
 
     class _WordsMatcher:
         def prepare(self, title, custom_words=None):
@@ -253,7 +253,7 @@ def _load_subscribe_chain_class():
     schemas_module.SubscribeEpisodesRefreshEventData = _SubscribeEpisodesRefreshEventData
     schemas_module.SubscribeCompletionCheckEventData = _SubscribeCompletionCheckEventData
 
-    logger_module = ensure_module("app.log", types.ModuleType("app.log"))
+    logger_module = ensure_module("app.runtime.log", types.ModuleType("app.runtime.log"))
 
     class _Logger:
         def info(self, *args, **kwargs):
@@ -273,7 +273,7 @@ def _load_subscribe_chain_class():
 
     logger_module.logger = _Logger()
 
-    helper_server_module = ensure_module("app.helper.server", types.ModuleType("app.helper.server"))
+    helper_server_module = ensure_module("app.adapters.external.server", types.ModuleType("app.adapters.external.server"))
 
     class _MoviePilotServerHelper:
         @staticmethod
@@ -306,10 +306,10 @@ def _load_subscribe_chain_class():
 
     helper_server_module.MoviePilotServerHelper = _MoviePilotServerHelper
 
-    helper_mediaserver_module = ensure_module("app.helper.mediaserver", types.ModuleType("app.helper.mediaserver"))
+    helper_mediaserver_module = ensure_module("app.application.mediaserver", types.ModuleType("app.application.mediaserver"))
     helper_mediaserver_module.MediaServerHelper = type("MediaServerHelper", (), {})
 
-    helper_torrent_module = ensure_module("app.helper.torrent", types.ModuleType("app.helper.torrent"))
+    helper_torrent_module = ensure_module("app.application.torrent", types.ModuleType("app.application.torrent"))
     helper_torrent_module.TorrentHelper = type("TorrentHelper", (), {})
 
     db_model_module = ensure_module("app.db.models.subscribe", types.ModuleType("app.db.models.subscribe"))
@@ -333,7 +333,7 @@ def _load_subscribe_chain_class():
 
     db_model_module.Subscribe = _SubscribeModel
 
-    subscribe_oper_module = ensure_module("app.db.subscribe_oper", types.ModuleType("app.db.subscribe_oper"))
+    subscribe_oper_module = ensure_module("app.db.oper.subscribe", types.ModuleType("app.db.oper.subscribe"))
 
     class _SubscribeOper:
         def update(self, *args, **kwargs):
@@ -354,9 +354,9 @@ def _load_subscribe_chain_class():
     subscribe_oper_module.SubscribeOper = _SubscribeOper
 
     simple_oper_modules = {
-        "app.db.downloadhistory_oper": "DownloadHistoryOper",
-        "app.db.site_oper": "SiteOper",
-        "app.db.systemconfig_oper": "SystemConfigOper",
+        "app.db.oper.downloadhistory": "DownloadHistoryOper",
+        "app.db.oper.site": "SiteOper",
+        "app.db.oper.systemconfig": "SystemConfigOper",
     }
     for module_name_key, class_name in simple_oper_modules.items():
         module = ensure_module(module_name_key, types.ModuleType(module_name_key))
@@ -3325,12 +3325,13 @@ class SubscribeProgressConsolidationTest(TestCase):
         chain = SubscribeChain()
         chain.obtain_images = lambda **_kwargs: None
 
-        class _SubscribeOper:
-            def add(self, **kwargs):
-                added.append(kwargs)
-                return 41, None
+        # 落库入口已迁到 app/application/subscribe.py，链路层的接缝是 add_subscribe；
+        # 截在这里拿到的就是链路交给写入路径的原始字段，正是本用例要断言的总集数
+        def _add_subscribe(**kwargs):
+            added.append(kwargs)
+            return 41, None
 
-        with patch.object(module, "SubscribeOper", return_value=_SubscribeOper()), patch.object(
+        with patch.object(module, "add_subscribe", _add_subscribe), patch.object(
             module,
             "eventmanager",
             eventmanager,

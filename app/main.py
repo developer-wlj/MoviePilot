@@ -1,12 +1,34 @@
-import multiprocessing
 import os
+import sys
+
+
+def _prepare_direct_execution_import_path() -> None:
+    """
+    修正直接执行 ``app/main.py`` 时的模块搜索路径。
+
+    PyCharm 的脚本启动方式会把 ``app`` 目录放到 ``sys.path[0]``，使应用内部
+    目录可能被当成顶级模块并遮蔽标准库或第三方包。直接执行时只保留项目根目录
+    作为应用导入入口，模块方式启动则不做任何调整。
+    """
+    if __package__:
+        return
+    script_dir = os.path.dirname(os.path.realpath(__file__))
+    project_root = os.path.dirname(script_dir)
+    sys.path[:] = [
+        entry
+        for entry in sys.path
+        if os.path.realpath(entry or os.curdir) != script_dir
+    ]
+    if project_root in sys.path:
+        sys.path.remove(project_root)
+    sys.path.insert(0, project_root)
+
+
+_prepare_direct_execution_import_path()
+
+import multiprocessing
 import setproctitle
 import signal
-import sys
-# 获取当前工作目录的路径
-current_path = os.getcwd()
-print(current_path)
-sys.path.append(current_path)
 import threading
 from pathlib import Path
 
@@ -14,8 +36,8 @@ import uvicorn as uvicorn
 from PIL import Image
 from uvicorn import Config
 
-from app.utils.stdio import configure_rotating_stdio
-from app.utils.system import SystemUtils
+from app.adapters.system.stdio import configure_rotating_stdio
+from app.adapters.system.host import SystemUtils
 
 # 禁用输出
 stdio_log_file = os.getenv("MOVIEPILOT_STDIO_LOG_FILE")
@@ -34,8 +56,8 @@ elif SystemUtils.is_frozen():
     sys.stderr = open(os.devnull, 'w')
 
 from app.factory import app
-from app.core.config import global_vars, settings
-from app.db.init import init_db, update_db
+from app.runtime.config import global_vars, settings
+from app.startup.database_initializer import init_db, update_db
 
 # 设置进程名
 setproctitle.setproctitle(settings.PROJECT_NAME)
@@ -51,7 +73,7 @@ class MoviePilotServer(uvicorn.Server):
 
 # uvicorn服务
 Server = MoviePilotServer(Config(app, host=settings.HOST, port=settings.PORT,
-                                 reload=settings.DEV, workers=multiprocessing.cpu_count() * 2 + 1,
+                                 reload=settings.DEV, workers=settings.API_WORKERS,
                                  timeout_graceful_shutdown=60))
 
 

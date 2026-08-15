@@ -4,12 +4,12 @@ import base64
 from typing import Optional, List, Tuple
 from urllib.parse import quote
 
-from app.core.context import MediaInfo, Context
-from app.core.metainfo import MetaInfo
-from app.log import logger
-from app.utils.common import retry
-from app.utils.http import RequestUtils
-from app.utils.string import StringUtils
+from app.domain.context import MediaInfo, Context
+from app.domain.metainfo import MetaInfo
+from app.runtime.log import logger
+from app.runtime.execution import retry
+from app.adapters.network.http import RequestUtils
+from app.foundation import size as size_tools
 
 lock = threading.Lock()
 
@@ -215,7 +215,7 @@ class VoceChat:
                 free = torrent.volume_factor
                 seeder = f"{torrent.seeders}↑"
                 caption = f"{caption}\n{index}.【{site_name}】[{title}]({link}) " \
-                          f"{StringUtils.str_filesize(torrent.size)} {free} {seeder}"
+                          f"{size_tools.format_compact_size(torrent.size)} {free} {seeder}"
                 index += 1
 
             if link:

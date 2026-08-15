@@ -1,4 +1,4 @@
-from app.core.config import Settings
+from app.runtime.config import Settings
 
 
 PROXY_ENV_NAMES = (

@@ -4,7 +4,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.core.config import global_vars
+from app.runtime.config import global_vars
 from app.scheduler import Scheduler
 
 

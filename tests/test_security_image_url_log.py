@@ -13,9 +13,9 @@ from typing import List, Optional
 from unittest import IsolatedAsyncioTestCase
 from unittest.mock import patch
 
-from app.utils import security as security_module
-from app.utils.coalesce import EventCoalescer
-from app.utils.security import (
+from app.runtime.coalesce import EventCoalescer
+from app.application.security import url as security_module
+from app.application.security.url import (
     SecurityUtils,
     UrlSafetyDiagnosis,
     UrlSafetyReason,

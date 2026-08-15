@@ -9,12 +9,12 @@ import discord
 from discord import app_commands
 import httpx
 
-from app.core.config import settings
-from app.core.context import MediaInfo, Context
-from app.core.metainfo import MetaInfo
-from app.log import logger
+from app.runtime.config import settings
+from app.domain.context import MediaInfo, Context
+from app.domain.metainfo import MetaInfo
+from app.runtime.log import logger
 from app.schemas.types import NotificationType
-from app.utils.string import StringUtils
+from app.foundation import size as size_tools
 
 # Discord embed 字段解析白名单
 # 只有这些消息类型会使用复杂的字段解析逻辑
@@ -1032,7 +1032,7 @@ class Discord:
             title_text = f"{meta.season_episode} {meta.resource_term} {meta.video_term} {meta.release_group}"
             title_text = re.sub(r"\s+", " ", title_text).strip()
             detail = [
-                f"{torrent.site_name} | {StringUtils.str_filesize(torrent.size)} | {torrent.volume_factor} | {torrent.seeders}↑",
+                f"{torrent.site_name} | {size_tools.format_compact_size(torrent.size)} | {torrent.volume_factor} | {torrent.seeders}↑",
                 meta.resource_term,
                 meta.video_term,
             ]

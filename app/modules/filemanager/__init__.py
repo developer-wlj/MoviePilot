@@ -2,21 +2,22 @@ from pathlib import Path
 from typing import Optional, List, Tuple, Union, Dict, Callable
 
 from app.chain.tmdb import TmdbChain
-from app.core.config import settings
-from app.core.context import MediaInfo, MusicInfo
-from app.core.meta import MetaBase, MetaMusic
-from app.core.metainfo import MetaInfo
-from app.helper.directory import DirectoryHelper
-from app.helper.message import MessageHelper
-from app.helper.module import ModuleHelper
-from app.log import logger
+from app.runtime.config import settings
+from app.domain.context import MediaInfo, MusicInfo
+from app.domain.meta.metabase import MetaBase
+from app.domain.meta.metamusic import MetaMusic
+from app.domain.metainfo import MetaInfo
+from app.application.directory import DirectoryHelper
+from app.application.messaging.message import MessageHelper
+from app.foundation.reflection import ModuleHelper
+from app.runtime.log import logger
 from app.modules import _ModuleBase
 from app.modules.filemanager.storages import StorageBase
 from app.modules.filemanager.transhandler import TransHandler
 from app.schemas import TransferInfo, ExistMediaInfo, TmdbEpisode, TransferDirectoryConf, FileItem, StorageUsage
 from app.schemas.types import MUSIC_ENTITY_ALBUM, MediaType, ModuleType, OtherModulesType
-from app.utils.system import SystemUtils
-from app.utils.string import StringUtils
+from app.adapters.system.host import SystemUtils
+from app.foundation import text as text_tools
 
 
 class FileManagerModule(_ModuleBase):
@@ -595,7 +596,7 @@ class FileManagerModule(_ModuleBase):
         return (
             file_meta.disc_number,
             file_meta.track_number,
-            StringUtils.clear_upper(file_meta.title or file_path.stem),
+            text_tools.normalize_upper(file_meta.title or file_path.stem),
         )
 
     @classmethod
@@ -605,7 +606,7 @@ class FileManagerModule(_ModuleBase):
             mediainfo: MusicInfo,
     ) -> bool:
         """按曲名和可用曲序判断单曲是否存在，避免专辑内任一文件造成误判。"""
-        target_title = StringUtils.clear_upper(mediainfo.title or "")
+        target_title = text_tools.normalize_upper(mediainfo.title or "")
         target_track = getattr(mediainfo, "track_number", None)
         target_disc = getattr(mediainfo, "disc_number", None)
         if not target_title:

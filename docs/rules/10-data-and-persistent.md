@@ -48,21 +48,38 @@ alembic revision -m "describe the change"
 
 **Location:** `app/db/`
 
-Each model has a corresponding `*_oper.py` file containing the data access class. Do not write SQLAlchemy queries directly in chain, module, or endpoint code.
+Each model has a corresponding file under `app/db/oper/` containing the data access
+class, mirroring `app/db/models/` one-for-one. Do not write SQLAlchemy queries
+directly in chain, module, or endpoint code.
 
 | Oper Class | File |
 |---|---|
-| `SubscribeOper` | `subscribe_oper.py` |
-| `SystemConfigOper` | `systemconfig_oper.py` |
-| `TransferHistoryOper` | `transferhistory_oper.py` |
-| `DownloadHistoryOper` | `downloadhistory_oper.py` |
-| `MediaServerOper` | `mediaserver_oper.py` |
-| `UserOper` | `user_oper.py` |
-| `UserConfigOper` | `userconfig_oper.py` |
-| `MessageOper` | `message_oper.py` |
-| `SiteOper` | `site_oper.py` |
-| `PluginDataOper` | `plugindata_oper.py` |
-| `WorkflowOper` | `workflow_oper.py` |
+| `AgentChatOper` | `oper/agentchat.py` |
+| `AgentTaskOper` | `oper/agenttask.py` |
+| `DownloadFailureOper` | `oper/downloadfailure.py` |
+| `DownloadHistoryOper` | `oper/downloadhistory.py` |
+| `MediaServerOper` | `oper/mediaserver.py` |
+| `MessageOper` | `oper/message.py` |
+| `PluginDataOper` | `oper/plugindata.py` |
+| `SiteOper` | `oper/site.py` |
+| `SubscribeHistoryOper` | `oper/subscribehistory.py` |
+| `SubscribeOper` | `oper/subscribe.py` |
+| `SystemConfigOper` | `oper/systemconfig.py` |
+| `TransferHistoryOper` | `oper/transferhistory.py` |
+| `TransferPendingOper` | `oper/transferpending.py` |
+| `UserConfigOper` | `oper/userconfig.py` |
+| `UserOper` | `oper/user.py` |
+| `WorkflowOper` | `oper/workflow.py` |
+
+Import by module (`from app.db.oper.subscribe import SubscribeOper`) — that is the
+preferred form in this repository. `app/db/oper/__init__.py` also resolves class
+names lazily for callers that only want a name, but it deliberately does not
+eagerly re-export: several tests isolate a single Oper by stubbing it in
+`sys.modules`, and an eager re-export would pull in the other fifteen and bypass
+the stub.
+
+Oper classes accept and return persistence values. Turning a `MediaInfo` or
+`MetaBase` into a row is business logic and lives in `app/application/`.
 
 **Standard Oper method conventions:**
 
@@ -83,11 +100,11 @@ oper.delete(sid=1)                    # Delete by key
 
 **Enum:** `SystemConfigKey` in `app/schemas/types.py`
 
-**Oper:** `SystemConfigOper` in `app/db/systemconfig_oper.py`
+**Oper:** `SystemConfigOper` in `app/db/oper/systemconfig.py`
 
 ```python
 from app.schemas.types import SystemConfigKey
-from app.db.systemconfig_oper import SystemConfigOper
+from app.db.oper.systemconfig import SystemConfigOper
 
 oper = SystemConfigOper()
 
@@ -107,7 +124,7 @@ oper.set(SystemConfigKey.RssUrls, ["https://example.com/rss"])
 **Purpose:** Settings that differ per user account. Uses `UserConfigOper`.
 
 ```python
-from app.db.userconfig_oper import UserConfigOper
+from app.db.oper.userconfig import UserConfigOper
 
 oper = UserConfigOper()
 value = oper.get(user_id=1, key="notification_enabled")
@@ -120,14 +137,14 @@ oper.set(user_id=1, key="notification_enabled", value=True)
 
 **Purpose:** Deployment-level, environment-level, and startup-time configuration such as ports, paths, proxies, switches, API keys, and third-party service addresses.
 
-**Location:** `ConfigModel` and `Settings` in `app/core/config.py`
+**Location:** `ConfigModel` and `Settings` in `app/runtime/config.py`
 
 These values are read from environment variables (or `.moviepilot.env`) at startup and are immutable at runtime. They are not stored in the database.
 
 **Access:**
 
 ```python
-from app.core.config import settings
+from app.runtime.config import settings
 
 host = settings.QB_HOST
 port = settings.QB_PORT
@@ -139,12 +156,12 @@ port = settings.QB_PORT
 
 ### FileCache / AsyncFileCache
 
-**Location:** `app/core/cache.py`
+**Location:** `app/runtime/cache.py`
 
 Used to cache expensive external API responses to disk. Cache entries have a configurable TTL.
 
 ```python
-from app.core.cache import FileCache, fresh
+from app.runtime.cache import FileCache, fresh
 
 cache = FileCache(cache_name="tmdb", ttl=3600)
 
@@ -174,4 +191,4 @@ When `REDIS_HOST` is configured, `app/modules/redis/` provides a distributed cac
 - `settings.API_TOKEN` and other secret fields must not be included in log output or API responses.
 - The `config list --show-secrets` flag exists specifically to gate secret visibility in the CLI.
 
-*Last Updated: 2026-05-25*
+*Last Updated: 2026-08-14*

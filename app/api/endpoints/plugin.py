@@ -13,26 +13,23 @@ from starlette.responses import StreamingResponse
 from app import schemas
 from app.api.response import ResponseAPIRouter
 from app.command import Command
-from app.core.cache import async_fresh
-from app.core.config import settings
-from app.core.event import eventmanager
-from app.core.plugin import PluginManager
-from app.core.security import (
+from app.runtime.cache import async_fresh
+from app.runtime.config import settings
+from app.runtime.events import eventmanager
+from app.runtime.extensions.plugin_manager import PluginManager
+from app.application.security.access import (
     resource_token_cookie,
     verify_apikey,
     verify_resource_token,
     verify_token,
 )
 from app.db.models import User
-from app.db.systemconfig_oper import SystemConfigOper
-from app.db.user_oper import (
-    get_current_active_superuser,
-    get_current_active_superuser_async,
-)
+from app.db.oper.systemconfig import SystemConfigOper
+from app.api.deps import get_current_active_superuser, get_current_active_superuser_async
 from app.factory import app
-from app.helper.server import MoviePilotServerHelper
-from app.helper.plugin import PluginHelper
-from app.log import logger
+from app.adapters.external.server import MoviePilotServerHelper
+from app.adapters.external.market import PluginHelper
+from app.runtime.log import logger
 from app.scheduler import Scheduler
 from app.schemas.event import PluginDataResetEventData
 from app.schemas.types import ChainEventType, SystemConfigKey

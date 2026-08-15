@@ -7,8 +7,8 @@ from pydantic import BaseModel, Field
 
 from app.agent.tools.base import MoviePilotTool
 from app.agent.tools.tags import ToolTag
-from app.db.subscribe_oper import SubscribeOper
-from app.log import logger
+from app.db.oper.subscribe import SubscribeOper
+from app.runtime.log import logger
 from app.schemas.subscribe import Subscribe as SubscribeSchema
 from app.schemas.types import (
     MUSIC_ENTITY_RECORDING,

@@ -10,12 +10,12 @@ from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 from slack_sdk import WebClient
 
-from app.core.config import settings
-from app.core.context import MediaInfo, Context
-from app.core.metainfo import MetaInfo
-from app.log import logger
-from app.utils.http import RequestUtils
-from app.utils.string import StringUtils
+from app.runtime.config import settings
+from app.domain.context import MediaInfo, Context
+from app.domain.metainfo import MetaInfo
+from app.runtime.log import logger
+from app.adapters.network.http import RequestUtils
+from app.foundation import size as size_tools
 
 lock = Lock()
 
@@ -692,7 +692,7 @@ class Slack:
                     seeder = f"{torrent.seeders}↑"
                     description = torrent.description
                     text = f"{index}. 【{site_name}】<{link}|{title_text}> " \
-                           f"{StringUtils.str_filesize(torrent.size)} {free} {seeder}\n" \
+                           f"{size_tools.format_compact_size(torrent.size)} {free} {seeder}\n" \
                            f"{description}"
                     blocks.append(
                         {
@@ -752,7 +752,7 @@ class Slack:
                     seeder = f"{torrent.seeders}↑"
                     description = torrent.description
                     text = f"{index}. 【{site_name}】<{link}|{title_text}> " \
-                           f"{StringUtils.str_filesize(torrent.size)} {free} {seeder}\n" \
+                           f"{size_tools.format_compact_size(torrent.size)} {free} {seeder}\n" \
                            f"{description}"
                     blocks.append(
                         {

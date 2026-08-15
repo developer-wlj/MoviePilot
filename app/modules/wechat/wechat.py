@@ -7,13 +7,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, List, Dict
 
-from app.core.context import MediaInfo, Context
-from app.core.metainfo import MetaInfo
-from app.log import logger
-from app.utils.common import retry
-from app.utils.http import RequestUtils
-from app.utils.string import StringUtils
-from app.utils.url import UrlUtils
+from app.domain.context import MediaInfo, Context
+from app.domain.metainfo import MetaInfo
+from app.runtime.log import logger
+from app.runtime.execution import retry
+from app.adapters.network.http import RequestUtils
+from app.foundation import size as size_tools
+from app.foundation.url import UrlUtils
 
 lock = threading.Lock()
 
@@ -563,7 +563,7 @@ class WeChat:
                                 f"{meta.resource_term} " \
                                 f"{meta.video_term} " \
                                 f"{meta.release_group} " \
-                                f"{StringUtils.str_filesize(torrent.size)} " \
+                                f"{size_tools.format_compact_size(torrent.size)} " \
                                 f"{torrent.volume_factor} " \
                                 f"{torrent.seeders}↑"
                 torrent_title = re.sub(r"\s+", " ", torrent_title).strip()

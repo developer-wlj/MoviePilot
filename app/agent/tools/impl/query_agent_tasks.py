@@ -5,8 +5,8 @@ from pydantic import BaseModel, Field
 
 from app.agent.tools.base import MoviePilotTool
 from app.agent.tools.tags import ToolTag
-from app.core.config import settings
-from app.db.agenttask_oper import AgentTaskOper
+from app.runtime.config import settings
+from app.db.oper.agenttask import AgentTaskOper
 
 
 class QueryAgentTasksInput(BaseModel):

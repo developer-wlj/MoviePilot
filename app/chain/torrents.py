@@ -3,24 +3,25 @@ import re
 import traceback
 from typing import Callable, Dict, List, Union, Optional
 
-from app.helper.sites import SitesHelper  # noqa
+from app.application.site.sites import SitesHelper  # pylint: disable=no-name-in-module
 
 from app.chain import ChainBase
 from app.chain.media import MediaChain
-from app.core.config import settings, global_vars
-from app.core.context import TorrentInfo, Context, MediaInfo
-from app.core.context import MusicInfo
-from app.core.meta import MetaMusic
-from app.core.metainfo import MetaInfo
-from app.db.site_oper import SiteOper
-from app.db.systemconfig_oper import SystemConfigOper
-from app.helper.rss import RssHelper
-from app.helper.torrent import TorrentHelper
-from app.log import logger
+from app.runtime.config import settings, global_vars
+from app.domain.context import TorrentInfo, Context, MediaInfo
+from app.domain.context import MusicInfo
+from app.domain.meta.metamusic import MetaMusic
+from app.domain.metainfo import MetaInfo
+from app.db.oper.site import SiteOper
+from app.db.oper.systemconfig import SystemConfigOper
+from app.application.rss import RssHelper
+from app.application.torrent import TorrentHelper
+from app.runtime.log import logger
 from app.schemas import Notification
 from app.schemas.types import SystemConfigKey, MessageChannel, NotificationType, MediaType
-from app.utils.media import resolve_media_identity
-from app.utils.string import StringUtils
+from app.schemas.media import resolve_media_identity
+from app.domain import site as site_rules
+from app.foundation import text as text_tools
 
 
 class TorrentsChain(ChainBase):
@@ -355,7 +356,7 @@ class TorrentsChain(ChainBase):
         """
         归一标题用于低置信标题兜底匹配。
         """
-        return (StringUtils.clear_upper(value or "") or "").strip()
+        return (text_tools.normalize_upper(value or "") or "").strip()
 
     def clear_torrents(self):
         """
@@ -603,7 +604,7 @@ class TorrentsChain(ChainBase):
                         "current": indexer.get("id"),
                     },
                 )
-            domain = StringUtils.get_url_domain(indexer.get("domain"))
+            domain = site_rules.extract_domain(indexer.get("domain"))
             domains.append(domain)
             if stype == "spider":
                 # 刷新首页种子

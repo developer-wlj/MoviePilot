@@ -4,20 +4,20 @@ from datetime import datetime
 from typing import Callable, List, Optional, Tuple, Union, Dict
 from urllib.parse import urljoin
 
-from app.helper.sites import SitesHelper  # noqa
+from app.application.site.sites import SitesHelper  # pylint: disable=no-name-in-module
 from lxml import etree
 
 from app.chain import ChainBase
-from app.core.config import global_vars, settings
-from app.core.event import Event, eventmanager
+from app.runtime.config import global_vars, settings
+from app.runtime.events import Event, eventmanager
 from app.db.models.site import Site
-from app.db.site_oper import SiteOper
-from app.db.systemconfig_oper import SystemConfigOper
-from app.helper.browser import PlaywrightHelper
-from app.helper.cloudflare import under_challenge
-from app.helper.cookie import CookieHelper
-from app.helper.cookiecloud import CookieCloudHelper
-from app.helper.interaction import (
+from app.db.oper.site import SiteOper
+from app.db.oper.systemconfig import SystemConfigOper
+from app.adapters.network.browser import PlaywrightHelper
+from app.adapters.network.cloudflare import under_challenge
+from app.application.security.cookie import CookieHelper
+from app.adapters.external.cookiecloud import CookieCloudHelper
+from app.application.messaging.interaction import (
     SlashInteractionManager,
     build_navigation_buttons,
     format_markdown_table,
@@ -26,13 +26,16 @@ from app.helper.interaction import (
     supports_markdown,
     update_or_post_message,
 )
-from app.helper.rss import RssHelper
-from app.log import logger
+from app.application.rss import RssHelper
+from app.runtime.log import logger
 from app.schemas import MessageChannel, Notification, SiteUserData
 from app.schemas.types import EventType, NotificationType
-from app.utils.http import RequestUtils
-from app.utils.site import SiteUtils
-from app.utils.string import StringUtils
+from app.adapters.network.http import RequestUtils
+from app.domain.site import SiteUtils
+from app.domain import site as site_rules
+from app.foundation import size as size_tools
+from app.foundation import url as url_tools
+from app.foundation.dom import DomUtils
 
 site_interaction_manager = SlashInteractionManager()
 
@@ -71,7 +74,7 @@ class SiteChain(ChainBase):
         """
         userdata: SiteUserData = self.run_module("refresh_userdata", site=site)
         if userdata:
-            SiteOper().update_userdata(domain=StringUtils.get_url_domain(site.get("domain")),
+            SiteOper().update_userdata(domain=site_rules.extract_domain(site.get("domain")),
                                        name=site.get("name"),
                                        payload=userdata.model_dump())
             # 发送事件
@@ -229,7 +232,7 @@ class SiteChain(ChainBase):
         判断站点是否已经登陆：m-team
         """
         user_agent = site.ua or settings.USER_AGENT
-        domain = StringUtils.get_url_domain(site.url)
+        domain = site_rules.extract_domain(site.url)
         url = f"https://api.{domain}/api/member/profile"
         headers = {
             "User-Agent": user_agent,
@@ -352,7 +355,7 @@ class SiteChain(ChainBase):
         """
         判断站点是否已经登陆：rousi
         """
-        url = f"https://{StringUtils.get_url_domain(site.url)}/api/v1/profile"
+        url = f"https://{site_rules.extract_domain(site.url)}/api/v1/profile"
         headers = {
             "Content-Type": "application/json",
             "Accept": "application/json",
@@ -391,7 +394,7 @@ class SiteChain(ChainBase):
             return favicon_url, None
         html = etree.HTML(html_text)
         try:
-            if StringUtils.is_valid_html_element(html):
+            if DomUtils.has_child_elements(html):
                 fav_link = html.xpath('//head/link[contains(@rel, "icon")]/@href')
                 if fav_link:
                     favicon_url = urljoin(url, fav_link[0])
@@ -422,10 +425,10 @@ class SiteChain(ChainBase):
             """
             根据主域名获取索引器地址
             """
-            if StringUtils.get_url_domain(inx.get("domain")) == sub_domain:
+            if site_rules.extract_domain(inx.get("domain")) == sub_domain:
                 return inx.get("domain")
             for ext_d in inx.get("ext_domains", []):
-                if StringUtils.get_url_domain(ext_d) == sub_domain:
+                if site_rules.extract_domain(ext_d) == sub_domain:
                     return ext_d
             return sub_domain
 
@@ -496,7 +499,7 @@ class SiteChain(ChainBase):
                 _update_count += 1
             elif indexer:
                 if settings.COOKIECLOUD_BLACKLIST and any(
-                        StringUtils.get_url_domain(domain) == StringUtils.get_url_domain(black_domain) for black_domain
+                        site_rules.extract_domain(domain) == site_rules.extract_domain(black_domain) for black_domain
                         in str(settings.COOKIECLOUD_BLACKLIST).split(",")):
                     logger.warn(f"站点 {domain} 已在黑名单中，不添加站点")
                     continue
@@ -600,7 +603,7 @@ class SiteChain(ChainBase):
         if not domain:
             return
         if str(domain).startswith("http"):
-            domain = StringUtils.get_url_domain(domain)
+            domain = site_rules.extract_domain(domain)
         # 站点信息
         siteoper = SiteOper()
         siteshelper = SitesHelper()
@@ -642,7 +645,7 @@ class SiteChain(ChainBase):
         if not domain:
             return
         # 获取主域名中间那段
-        domain_host = StringUtils.get_url_host(domain)
+        domain_host = url_tools.host_label(domain)
         # 查询以"site.domain_host"开头的配置项，并清除
         systemconfig = SystemConfigOper()
         site_keys = systemconfig.all().keys()
@@ -664,7 +667,7 @@ class SiteChain(ChainBase):
         if not domain:
             return
         if str(domain).startswith("http"):
-            domain = StringUtils.get_url_domain(domain)
+            domain = site_rules.extract_domain(domain)
         indexer = SitesHelper().get_indexer(domain)
         if not indexer:
             return
@@ -678,7 +681,7 @@ class SiteChain(ChainBase):
         :return: (是否可用, 错误信息)
         """
         # 检查域名是否可用
-        domain = StringUtils.get_url_domain(url)
+        domain = site_rules.extract_domain(url)
         siteoper = SiteOper()
         site_info = siteoper.get_by_domain(domain)
         if not site_info:
@@ -1188,7 +1191,7 @@ class SiteChain(ChainBase):
                     "启用" if site.is_active else "禁用",
                     "已配置" if site.cookie else "未配置",
                     "是" if site.render else "否",
-                    site.domain or StringUtils.get_url_domain(site.url or ""),
+                    site.domain or site_rules.extract_domain(site.url or ""),
                 ]
                 for site in site_list
             ]
@@ -1203,7 +1206,7 @@ class SiteChain(ChainBase):
                 f"{site.id}. {site.name} | 状态：{'启用' if site.is_active else '禁用'}"
                 f" | Cookie：{'已配置' if site.cookie else '未配置'}"
                 f" | 渲染：{'是' if site.render else '否'}"
-                f" | 域名：{site.domain or StringUtils.get_url_domain(site.url or '')}"
+                f" | 域名：{site.domain or site_rules.extract_domain(site.url or '')}"
             )
         return "\n".join(lines)
 
@@ -1506,15 +1509,15 @@ class SiteChain(ChainBase):
                     incDownloads += download
                     messages[upload + (rand / 1000)] = (
                             f"【{site}】{updated_date}\n"
-                            + f"上传量：{StringUtils.str_filesize(upload)}\n"
-                            + f"下载量：{StringUtils.str_filesize(download)}\n"
+                            + f"上传量：{size_tools.format_compact_size(upload)}\n"
+                            + f"下载量：{size_tools.format_compact_size(download)}\n"
                             + "————————————"
                     )
             if incDownloads or incUploads:
                 sorted_messages = [messages[key] for key in sorted(messages.keys(), reverse=True)]
                 sorted_messages.insert(0, f"【汇总】\n"
-                                          f"总上传：{StringUtils.str_filesize(incUploads)}\n"
-                                          f"总下载：{StringUtils.str_filesize(incDownloads)}\n"
+                                          f"总上传：{size_tools.format_compact_size(incUploads)}\n"
+                                          f"总下载：{size_tools.format_compact_size(incDownloads)}\n"
                                           f"————————————")
                 self.post_message(Notification(
                     channel=channel,

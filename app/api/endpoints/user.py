@@ -7,15 +7,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import schemas
 from app.api.response import ResponseAPIRouter
-from app.core.security import get_password_hash
+from app.application.security.access import get_password_hash
 from app.db import get_async_db
 from app.db.models.user import User
-from app.db.user_oper import (
-    get_current_active_superuser_async,
-    get_current_active_user_async,
-    get_current_active_user,
-)
-from app.db.userconfig_oper import UserConfigOper
+from app.api.deps import get_current_active_superuser_async, get_current_active_user_async, get_current_active_user
+from app.db.oper.userconfig import UserConfigOper
 
 router = ResponseAPIRouter()
 
