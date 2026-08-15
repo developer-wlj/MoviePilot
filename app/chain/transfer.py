@@ -238,6 +238,20 @@ class JobManager:
         else:
             # 没有媒体信息
             meta: MetaBase = task.meta
+            if isinstance(meta, MetaMusic):
+                # 未识别的音乐按已解析元数据兜底展示；音乐年份为 int，
+                # 不能复用 MediaInfo（year 为 str），否则触发 pydantic 校验异常
+                return schemas.MusicInfo(
+                    title=meta.name,
+                    artists=list(meta.artists or []),
+                    artist=meta.artist,
+                    album=meta.album,
+                    album_artist=meta.album_artist,
+                    year=meta.year,
+                    title_year=f"{meta.name} ({meta.year})" if meta.year else meta.name,
+                    media_source=meta.media_source,
+                    media_id=meta.media_id,
+                )
             return schemas.MediaInfo(
                 title=meta.name,
                 year=meta.year,
@@ -2509,6 +2523,7 @@ class TransferChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
                 task.target_storage = task.target_directory.library_storage
 
             if self._requires_automatic_category(task) and not task.mediainfo.category:
+                # MusicInfo 无 tmdb_id 字段，但模型 __getattr__ 已兜底返回 None
                 if task.mediainfo.tmdb_id:
                     error_message = "TMDB 信息未匹配到媒体分类，无法按媒体类别整理"
                 else:
