@@ -927,7 +927,7 @@ class Settings(BaseSettings, ConfigModel, LogConfigModel):
                     key_to_unset=field_name,
                 )
                 logger.info(f"配置项 '{field_name}' 已清空，从 'app.env' 中移除")
-                return True, message
+                return True, message or ""
             # 如果是列表、字典或集合类型，将其转换为JSON字符串
             if isinstance(converted_value, (list, dict, set)):
                 value_to_write = json.dumps(converted_value)
@@ -942,7 +942,7 @@ class Settings(BaseSettings, ConfigModel, LogConfigModel):
             )
             if is_converted:
                 logger.info(f"配置项 '{field_name}' 已自动修正并写入到 'app.env' 文件")
-        return True, message
+        return True, message or ""
 
     def update_setting(self, key: str, value: Any) -> Tuple[Optional[bool], str]:
         """

@@ -138,8 +138,8 @@ class StorageConf(BaseModel):
 class SystemEnvironmentUpdateData(BaseModel):
     """环境配置更新的成功项和失败项。"""
 
-    success_updates: dict[str, tuple[Optional[bool], str]] = Field(default_factory=dict)
-    failed_updates: dict[str, tuple[Optional[bool], str]] = Field(default_factory=dict)
+    success_updates: dict[str, tuple[Optional[bool], Optional[str]]] = Field(default_factory=dict)
+    failed_updates: dict[str, tuple[Optional[bool], Optional[str]]] = Field(default_factory=dict)
 
 
 class PluginMarketSyncData(BaseModel):
