@@ -2,7 +2,20 @@ from typing import Any
 
 from app.chain import ChainBase
 from app.domain.context import MusicInfo
-from app.schemas.types import MUSIC_ENTITY_RECORDING, MediaSource
+from app.schemas.types import (
+    LISTENBRAINZ_CHART_RANGES,
+    LISTENBRAINZ_FRESH_MAX_DAYS,
+    LISTENBRAINZ_FRESH_SORTS,
+    MUSIC_ENTITY_RECORDING,
+    MediaSource,
+)
+
+__all__ = [
+    "ListenBrainzChain",
+    "LISTENBRAINZ_CHART_RANGES",
+    "LISTENBRAINZ_FRESH_MAX_DAYS",
+    "LISTENBRAINZ_FRESH_SORTS",
+]
 
 
 class ListenBrainzChain(ChainBase):

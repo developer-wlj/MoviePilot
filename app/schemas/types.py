@@ -22,6 +22,28 @@ MUSIC_SUBSCRIBABLE_TYPES = frozenset({
     MUSIC_ENTITY_ALBUM,
 })
 
+# ListenBrainz 音乐探索能力的参数取值域契约，供入口层校验、链层与模块实现共用
+# ListenBrainz 全站统计支持的周期，取值与官方统计页面完全一致
+LISTENBRAINZ_CHART_RANGES = (
+    "this_week",
+    "this_month",
+    "this_year",
+    "week",
+    "month",
+    "quarter",
+    "half_yearly",
+    "year",
+    "all_time",
+)
+# ListenBrainz 官方新发行页面支持的排序方式
+LISTENBRAINZ_FRESH_SORTS = (
+    "release_date",
+    "artist_credit_name",
+    "release_name",
+)
+# ListenBrainz 新发行页面允许回溯或预告的最大天数
+LISTENBRAINZ_FRESH_MAX_DAYS = 90
+
 
 # 媒体类型
 class MediaType(Enum):
@@ -467,6 +489,69 @@ class MessageChannel(Enum):
     WebAgent = "WebAgent"
     WebPush = "WebPush"
     QQ = "QQ"
+
+
+class NotificationAction(str, Enum):
+    """
+    通知渠道通用管理动作
+
+    作为渠道管理契约的公共词汇表，具体动作的支持范围与参数语义由渠道模块自行解释
+    """
+    # 查询登录状态与二维码
+    STATUS = "status"
+    # 刷新登录二维码
+    REFRESH_QRCODE = "refresh_qrcode"
+    # 退出登录
+    LOGOUT = "logout"
+    # 测试连通性
+    TEST_CONNECTION = "test_connection"
+    # 迁移渠道名变更前的登录缓存
+    MIGRATE_CACHE = "migrate_cache"
+
+
+class StorageAction(str, Enum):
+    """
+    网盘存储通用管理动作
+
+    作为存储管理契约的公共词汇表，具体动作的支持范围与参数语义由存储实现自行解释
+    """
+    # 保存存储配置
+    SAVE_CONFIG = "save_config"
+    # 重置存储配置
+    RESET_CONFIG = "reset_config"
+    # 生成登录二维码
+    GENERATE_QRCODE = "generate_qrcode"
+    # 生成 OAuth2 授权 URL
+    GENERATE_AUTH_URL = "generate_auth_url"
+    # 登录确认
+    CHECK_LOGIN = "check_login"
+    # 查询存储空间用量
+    USAGE = "usage"
+    # 查询支持的整理方式
+    SUPPORT_TRANSTYPE = "support_transtype"
+
+
+# LLM 提供商通用管理动作
+class LlmProviderAction(str, Enum):
+    """
+    LLM 提供商通用管理动作
+
+    作为提供商管理契约的公共词汇表，具体动作的支持范围与参数语义由提供商实现自行解释
+    """
+    # 查询提供商目录
+    LIST_PROVIDERS = "list_providers"
+    # 查询模型目录
+    LIST_MODELS = "list_models"
+    # 启动授权会话
+    START_AUTH = "start_auth"
+    # 查询授权会话状态
+    AUTH_STATUS = "auth_status"
+    # 轮询授权会话
+    POLL_AUTH = "poll_auth"
+    # 断开授权
+    DISCONNECT = "disconnect"
+    # 测试调用
+    TEST = "test"
 
 
 # 下载器类型

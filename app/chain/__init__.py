@@ -9,8 +9,6 @@ from pathlib import Path
 from typing import Optional, Any, Tuple, List, Set, Union, Dict
 
 from fastapi.concurrency import run_in_threadpool
-from qbittorrentapi import TorrentFilesList
-from transmission_rpc import File
 
 from app.runtime.cache import FileCache, AsyncFileCache, fresh, async_fresh
 from app.runtime.config import settings
@@ -42,7 +40,7 @@ from app.schemas import (
     MessageResponse,
 )
 from app.foundation.identity import normalize_internal_user_id
-from app.schemas.media import resolve_media_identity
+from app.schemas.media import normalize_media_source, resolve_media_identity
 from app.schemas.message import ChannelCapability, ChannelCapabilityManager
 from app.schemas.category import CategoryConfig
 from app.schemas.types import (
@@ -628,7 +626,9 @@ class ChainBase(metaclass=ABCMeta):
         :param music_type: 音乐实体类型，显式音乐 ID 必须据此区分单曲与专辑
         :return: 识别的媒体信息，包括剧集信息
         """
-        explicit_identity = media_source is not None or media_id is not None
+        # 仅传数据源是请求级识别源约束（按名称识别限定数据源），显式 media_id 才要求来源成对
+        explicit_identity = media_id is not None
+        requested_source = normalize_media_source(media_source) or media_source
         media_source, media_id = resolve_media_identity(
             media=meta,
             media_source=media_source,
@@ -637,6 +637,12 @@ class ChainBase(metaclass=ABCMeta):
         if explicit_identity and (not media_source or not media_id):
             logger.warning("媒体识别需要同时提供有效的 media_source 和 media_id")
             return None
+        if not media_id and requested_source is not None:
+            media_source = requested_source
+            # meta 自带同源身份（如 {tmdbid=} 标题）时直接按身份识别，避免退化为名称搜索
+            meta_source, meta_id = resolve_media_identity(media=meta)
+            if meta_id and meta_source == requested_source:
+                media_source, media_id = meta_source, meta_id
         if not episode_group and hasattr(meta, "episode_group"):
             episode_group = meta.episode_group
         if not mtype and not (media_source and media_id) and meta and meta.type in [
@@ -738,7 +744,9 @@ class ChainBase(metaclass=ABCMeta):
         :param music_type: 音乐实体类型，显式音乐 ID 必须据此区分单曲与专辑
         :return: 识别的媒体信息，包括剧集信息
         """
-        explicit_identity = media_source is not None or media_id is not None
+        # 仅传数据源是请求级识别源约束（按名称识别限定数据源），显式 media_id 才要求来源成对
+        explicit_identity = media_id is not None
+        requested_source = normalize_media_source(media_source) or media_source
         media_source, media_id = resolve_media_identity(
             media=meta,
             media_source=media_source,
@@ -747,6 +755,12 @@ class ChainBase(metaclass=ABCMeta):
         if explicit_identity and (not media_source or not media_id):
             logger.warning("媒体识别需要同时提供有效的 media_source 和 media_id")
             return None
+        if not media_id and requested_source is not None:
+            media_source = requested_source
+            # meta 自带同源身份（如 {tmdbid=} 标题）时直接按身份识别，避免退化为名称搜索
+            meta_source, meta_id = resolve_media_identity(media=meta)
+            if meta_id and meta_source == requested_source:
+                media_source, media_id = meta_source, meta_id
         if not episode_group and hasattr(meta, "episode_group"):
             episode_group = meta.episode_group
         if not mtype and not (media_source and media_id) and meta and meta.type in [
@@ -1527,10 +1541,10 @@ class ChainBase(metaclass=ABCMeta):
             torrent_content: Union[str, bytes] = None,
     ) -> None:
         """
-        添加下载任务成功后，从站点下载字幕，保存到下载目录
+        添加下载任务成功后的模块附加处理分发，站点字幕下载由 DownloadChain 另行编排
         :param context:  上下文，包括识别信息、媒体信息、种子信息
         :param download_dir:  下载目录
-        :param torrent_content:  种子内容，如果有则直接使用该内容，否则从context中获取种子文件路径
+        :param torrent_content: 种子内容，如果有则直接使用该内容，否则从 context 中获取种子文件路径
         :return: None，该方法可被多个模块同时处理
         """
         return self.run_module(
@@ -1735,12 +1749,12 @@ class ChainBase(metaclass=ABCMeta):
 
     def torrent_files(
             self, tid: str, downloader: Optional[str] = None
-    ) -> Optional[Union[TorrentFilesList, List[File]]]:
+    ) -> Optional[Any]:
         """
         获取种子文件
         :param tid:  种子Hash
         :param downloader:  下载器
-        :return: 种子文件
+        :return: 种子文件，具体类型由下载器实现决定（链层不引入下载器协议类型）
         """
         return self.run_module("torrent_files", tid=tid, downloader=downloader)
 

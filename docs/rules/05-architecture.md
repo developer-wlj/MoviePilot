@@ -196,22 +196,58 @@ ownership.
 entrypoints. Chains may coordinate modules, application services, Oper classes,
 events and caches. New chain-to-chain dependencies are allowed only while the
 static graph remains acyclic. Backend protocol details and HTTP request objects
-do not belong here.
+do not belong here. Chains interact with modules exclusively through
+`run_module` dispatch on method-name contracts; direct imports of module
+internals (classes, exceptions, constants) are forbidden, so every module stays
+pluggable and a chain never names a concrete module implementation.
 
 ### Module layer
 
 `app/modules/` contains pluggable downloaders, media servers, metadata sources,
 message channels, indexers and storage providers. New direct module-to-module or
 module-to-chain dependencies are forbidden; cross-module orchestration belongs
-in a chain. The directory remains unchanged because discovery and plugin code
+in a chain. Module internals stay sealed inside the module: shared constants,
+exceptions and value domains used by both modules and upper layers live in
+`schemas`, and module capabilities are exposed to chains only as dispatched
+method names. The directory remains unchanged because discovery and plugin code
 depend on this established runtime root.
+
+Channels and storages that need login management or temporary-parameter
+initialization follow one generic contract instead of per-target APIs: modules
+implement `channel_manage(channel, action, **params)` or
+`storage_manage(storage, action, **params)`, route by the requested target
+identifier (returning `None` for other targets, accepting both enum members
+and plain strings), and interpret actions from the shared
+`schemas.types.NotificationAction` / `StorageAction` vocabulary plus opaque
+form parameters themselves. All results use the unified
+`{"success": bool, "message": ..., "data": ...}` shape.
+`NotificationChain.manage_channel` and `StorageChain.manage_storage` forward
+transparently and must stay free of any channel/storage-specific names or
+logic; new channels or storages adopt the same contract without touching the
+chains. The endpoint layer exposes this as two generic endpoints
+(`POST /api/v1/notification/manage`, `POST /api/v1/storage/manage`) taking the
+common `schemas.ManageRequest` body (`target` + `action` + `params`) and must
+never define target-specific names, parameters or response fields — the
+frontend supplies them and the endpoint passes them through untouched.
+
+LLM providers follow the same contract: `LLMProviderManager.provider_manage`
+dispatches actions from the shared `schemas.types.LlmProviderAction`
+vocabulary, seals default-value filling, key sanitization and error rewriting
+inside, and the endpoint layer exposes a single `POST /api/v1/llm/manage` with
+the same `ManageRequest` body. The only exception is the named OAuth callback
+route (`GET /api/v1/llm/provider-auth/callback/{provider_id}`), which stays
+named because external browsers redirect to that URL; the endpoint builds the
+callback URL from that route name and injects it as an action parameter.
 
 ### DB / Oper layer
 
 SQLAlchemy models stay under `app/db/models/`; the data access classes live in
 `app/db/oper/` and mirror them one-for-one (`models/subscribe.py` ↔
 `oper/subscribe.py`), so a filename carries only the entity and the package name
-carries the role. Chains, modules, application services and endpoints use Oper
+carries the role. Two verified aggregation exceptions exist: the site family
+(`Passkey`, `SiteIcon`, `SiteStatistic`, `SiteUserData`) is consolidated in
+`oper/site.py`, and `AgentTaskRun` lives in `oper/agenttask.py`. Chains, modules,
+application services and endpoints use Oper
 classes instead of issuing SQLAlchemy queries directly. Every schema change
 requires an Alembic migration under `database/versions/`.
 
@@ -266,7 +302,7 @@ policy. `app/db` therefore has no dependency on `app/domain`.
 | Direction | Status |
 |---|---|
 | `entrypoint -> chain / application / Oper` | Allowed according to workflow complexity |
-| `chain -> module / application / Oper / canonical capability` | Allowed |
+| `chain -> module (only via run_module dispatch) / application / Oper / canonical capability` | Allowed; direct `chain -> module` imports forbidden |
 | `application -> domain / runtime / adapter / Oper` | Allowed |
 | `module -> canonical capability / Oper` | Allowed |
 | `module -> module / chain` | Forbidden for new code |
@@ -292,6 +328,9 @@ policy. `app/db` therefore has no dependency on `app/domain`.
 | `app/runtime/cache.py` | Cache contracts, memory backend, decorators and proxies |
 | `app/adapters/cache/backends.py` | Redis and filesystem cache adapters |
 | `app/adapters/system/resource.py` | Runtime resource detection/download/installation |
+| `app/adapters/system/fsproxy.py` | Timeout-guarded local filesystem operations in a killable subprocess (with colocated `fsworker.py`) |
+| `app/adapters/external/wechat_crypt.py` | WeChat enterprise-message XML encryption/decryption protocol |
+| `app/application/filter_rules.py` | Built-in torrent filter rule set and rule parser |
 | `app/adapters/external/market.py` | Plugin repository discovery and installation |
 | `app/application/security/url.py` | URL/path validation, SSRF protection and signed image policy |
 | `app/application/mediaserver.py` | Configured media-server discovery and identity matching |
@@ -300,7 +339,11 @@ policy. `app/db` therefore has no dependency on `app/domain`.
 
 Run `tests/test_architecture_dependencies.py` after every ownership or import
 change. It rejects physical legacy or retired canonical sources, forbidden
-upward dependencies, SDK/compat backreferences and any strongly connected
-component containing a migrated module.
+upward dependencies, SDK/compat backreferences, any strongly connected
+component containing a migrated module, module-to-module or module-to-chain
+imports, entrypoint (`api`/`agent`/`monitor`/`workflow`/`doctor`) imports of
+`app.modules` internals, chain imports of `app.modules` internals (chains reach
+modules only through `run_module` dispatch), and downloader SDK
+(`qbittorrentapi`, `transmission_rpc`) imports inside `app/chain`.
 
-*Last Updated: 2026-08-14*
+*Last Updated: 2026-08-16*

@@ -287,3 +287,17 @@ class MusicBrainzChain(_MusicMetadataSourceChain):
             limit=limit,
         )
         return self._music_album(result)
+
+    def cache_items(self) -> list[dict]:
+        """查询音乐识别缓存条目列表。"""
+        result = self.run_module("music_cache_items")
+        return result or []
+
+    def delete_cache(self, cache_key: str) -> dict:
+        """按缓存键删除单条音乐识别缓存。"""
+        result = self.run_module("music_cache_delete", cache_key=cache_key)
+        return result or {}
+
+    def clear_cache(self) -> None:
+        """清空全部音乐识别缓存。"""
+        self.run_module("music_cache_clear")

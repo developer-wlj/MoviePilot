@@ -1851,4 +1851,3 @@ class MessageChain(ChainBase):
         except Exception as e:
             logger.error(e)
             return None
-

@@ -320,3 +320,23 @@ class TmdbChain(ChainBase):
         if infos:
             return [info.backdrop_path for info in infos if info and info.backdrop_path][:num]
         return []
+
+    def cache_items(self) -> list:
+        """
+        查询TMDB识别缓存条目列表
+        """
+        result = self.run_module("tmdb_cache_items")
+        return result or []
+
+    def delete_cache(self, cache_key: str) -> dict:
+        """
+        按缓存键删除单条TMDB识别缓存
+        """
+        result = self.run_module("tmdb_cache_delete", cache_key=cache_key)
+        return result or {}
+
+    def clear_cache(self) -> None:
+        """
+        清空全部TMDB识别缓存
+        """
+        self.run_module("tmdb_cache_clear")
