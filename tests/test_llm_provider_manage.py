@@ -250,3 +250,61 @@ def test_llm_manage_endpoint_passes_through_manage_request(monkeypatch):
     assert captured["action"] == "start_auth"
     assert captured["params"]["method"] == "browser_oauth"
     assert captured["params"]["callback_url"].endswith("/callback/chatgpt")
+
+
+def test_llm_manage_endpoint_accepts_empty_target(monkeypatch):
+    """目录类查询动作 target 可为空，不得因 url_for 空路径参数报 500。
+
+    回归守护：前端加载提供商目录时 target 为空字符串，
+    回调地址构造必须跳过空 target。
+    """
+    from app.api.endpoints import llm as llm_endpoint
+
+    captured = {}
+
+    async def fake_manage(self, provider, action, **params):
+        captured["provider"] = provider
+        captured["params"] = params
+        return {"success": True, "message": "", "data": []}
+
+    def fail_url_for(name, **kwargs):
+        raise AssertionError("空 target 不应构造回调地址")
+
+    monkeypatch.setattr(LLMProviderManager, "provider_manage", fake_manage)
+    request = SimpleNamespace(url_for=fail_url_for)
+    payload = schemas.ManageRequest(target="", action="list_providers")
+
+    resp = asyncio.run(llm_endpoint.manage_provider(request, payload, _="token"))
+
+    assert resp.success is True
+    assert captured["provider"] == ""
+    assert "callback_url" not in captured["params"]
+
+
+def test_llm_manage_endpoint_response_model_accepts_list_data():
+    """目录查询动作 data 为列表，响应模型须同时覆盖列表与映射形态。
+
+    回归守护：list_providers 返回 list[dict]，
+    若响应模型声明为 Dict[str, Any] 会在序列化校验时直接 500；
+    同时受响应模型守护测试约束，不得使用 Any/JsonData 弱类型。
+    """
+    from typing import Any, Dict, List, Union
+
+    from app.api.endpoints import llm as llm_endpoint
+
+    route = next(
+        r for r in llm_endpoint.router.routes if getattr(r, "path", "").endswith("/manage")
+    )
+    assert route.response_model is schemas.Response[
+        Union[List[Dict[str, Any]], Dict[str, Any]]
+    ]
+
+    list_resp = schemas.Response[Union[List[Dict[str, Any]], Dict[str, Any]]](
+        success=True, message="", data=[{"id": "openai", "name": "OpenAI 兼容"}]
+    )
+    assert list_resp.data == [{"id": "openai", "name": "OpenAI 兼容"}]
+
+    dict_resp = schemas.Response[Union[List[Dict[str, Any]], Dict[str, Any]]](
+        success=True, message="", data={"models": ["gpt-4o"]}
+    )
+    assert dict_resp.data == {"models": ["gpt-4o"]}

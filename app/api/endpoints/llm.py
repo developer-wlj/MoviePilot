@@ -1,4 +1,4 @@
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from fastapi import Depends, Request, Response
 from fastapi.responses import HTMLResponse
@@ -15,7 +15,9 @@ router = ResponseAPIRouter()
 @router.post(
     "/manage",
     summary="LLM提供商统一管理",
-    response_model=schemas.Response[Dict[str, Any]],
+    # 各动作 data 形态不一：目录查询返回列表，其余动作返回映射，
+    # 须用具体联合类型声明，而非单一开放映射
+    response_model=schemas.Response[Union[List[Dict[str, Any]], Dict[str, Any]]],
 )
 async def manage_provider(
         request: Request,
@@ -28,10 +30,13 @@ async def manage_provider(
     OAuth 回跳地址由具名回调路由统一构造后注入动作参数
     """
     params = dict(payload.params)
-    params.setdefault(
-        "callback_url",
-        str(request.url_for("llm_provider_auth_callback", provider_id=payload.target)),
-    )
+    # 目录类查询动作的 target 可为空，此时无需回跳地址；
+    # 且 url_for 的路径参数不允许空值，必须先行防护
+    if payload.target:
+        params.setdefault(
+            "callback_url",
+            str(request.url_for("llm_provider_auth_callback", provider_id=payload.target)),
+        )
     result = await LLMProviderManager().provider_manage(
         payload.target, payload.action, **params
     )
