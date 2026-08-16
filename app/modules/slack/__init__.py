@@ -1,37 +1,36 @@
-import copy
 import json
 import re
 from typing import Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import quote, unquote
 
 from app.domain.context import MediaInfo, Context
-from app.runtime.events import eventmanager
 from app.application.messaging.agent import (
     matches_channel_admin,
     register_channel_admin_resolver,
     resolve_config_principal_ids,
 )
 from app.runtime.log import logger
-from app.modules import _ModuleBase, _MessageBase
+from app.modules._base import _MessageChannelModuleBase
 from app.modules.slack.slack import Slack
 from app.schemas import (
     CommandRegisterEventData,
-    CommingMessage,
-    MessageChannel,
+    IncomingMessage,
+    NotificationChannel,
     MessageResponse,
-    Notification,
+    Message,
 )
-from app.schemas.types import ChainEventType, ModuleType
-from app.foundation.collections import DictUtils
+from app.schemas.types import ModuleType
 
 
 register_channel_admin_resolver(
-    MessageChannel.Slack,
+    NotificationChannel.Slack,
     lambda config: resolve_config_principal_ids(config, "SLACK_ADMINS"),
 )
 
 
-class SlackModule(_ModuleBase, _MessageBase[Slack]):
+class SlackModule(_MessageChannelModuleBase[Slack]):
+    # 管理员配置键，与渠道 resolver 保持一致
+    _admin_config_key = "SLACK_ADMINS"
     PROCESSING_REACTION = "eyes"
     _AUDIO_SUFFIXES = (
         ".mp3",
@@ -53,7 +52,7 @@ class SlackModule(_ModuleBase, _MessageBase[Slack]):
         初始化模块
         """
         super().init_service(service_name=Slack.__name__.lower(), service_type=Slack)
-        self._channel = MessageChannel.Slack
+        self._channel = NotificationChannel.Slack
 
     @staticmethod
     def get_name() -> str:
@@ -67,11 +66,11 @@ class SlackModule(_ModuleBase, _MessageBase[Slack]):
         return ModuleType.Notification
 
     @staticmethod
-    def get_subtype() -> MessageChannel:
+    def get_subtype() -> NotificationChannel:
         """
         获取模块子类型
         """
-        return MessageChannel.Slack
+        return NotificationChannel.Slack
 
     @staticmethod
     def get_priority() -> int:
@@ -88,50 +87,8 @@ class SlackModule(_ModuleBase, _MessageBase[Slack]):
             except Exception as err:
                 logger.error(f"停止Slack模块实例失败：{err}")
 
-    def test(self) -> Optional[Tuple[bool, str]]:
-        """
-        测试模块连接性
-        """
-        if not self.get_instances():
-            return None
-        for name, client in self.get_instances().items():
-            state = client.get_state()
-            if not state:
-                return False, f"Slack {name} 未就绪"
-        return True, ""
-
     def init_setting(self) -> Tuple[str, Union[str, bool]]:
         pass
-
-    @staticmethod
-    def _get_admins(config: Optional[dict]) -> List[str]:
-        """
-        解析 Slack 管理员配置，兼容逗号分隔和首尾空白。
-        """
-        return [
-            admin.strip()
-            for admin in str((config or {}).get("SLACK_ADMINS") or "").split(",")
-            if admin.strip()
-        ]
-
-    @classmethod
-    def _should_reject_admin_command(
-            cls,
-            config: Optional[dict],
-            *user_ids: Optional[Union[str, int]],
-    ) -> bool:
-        """
-        判断 Slack 命令或命令型按钮回调是否应因非管理员身份被拒绝。
-        """
-        admins = cls._get_admins(config)
-        if not admins:
-            return False
-        candidates = [
-            str(user_id).strip()
-            for user_id in user_ids
-            if user_id is not None and str(user_id).strip()
-        ]
-        return not any(candidate in admins for candidate in candidates)
 
     @staticmethod
     def _send_admin_denied(client: Optional[Slack], userid: Optional[Union[str, int]]) -> None:
@@ -143,7 +100,7 @@ class SlackModule(_ModuleBase, _MessageBase[Slack]):
 
     def message_parser(
         self, source: str, body: Any, form: Any, args: Any
-    ) -> Optional[CommingMessage]:
+    ) -> Optional[IncomingMessage]:
         """
         解析消息内容，返回字典，注意以下约定值：
         userid: 用户ID
@@ -325,13 +282,13 @@ class SlackModule(_ModuleBase, _MessageBase[Slack]):
                 )
 
                 # 创建包含回调信息的CommingMessage
-                return CommingMessage(
-                    channel=MessageChannel.Slack,
+                return IncomingMessage(
+                    channel=NotificationChannel.Slack,
                     source=client_config.name,
                     userid=userid,
                     username=username,
                     is_channel_admin=matches_channel_admin(
-                        MessageChannel.Slack, client_config.config, userid
+                        NotificationChannel.Slack, client_config.config, userid
                     ),
                     text=text,
                     is_callback=True,
@@ -382,13 +339,13 @@ class SlackModule(_ModuleBase, _MessageBase[Slack]):
                 f"text={text}, images={len(images) if images else 0}, audios={len(audio_refs) if audio_refs else 0}, "
                 f"files={len(files) if files else 0}"
             )
-            return CommingMessage(
-                channel=MessageChannel.Slack,
+            return IncomingMessage(
+                channel=NotificationChannel.Slack,
                 source=client_config.name,
                 userid=userid,
                 username=username,
                 is_channel_admin=matches_channel_admin(
-                    MessageChannel.Slack, client_config.config, userid
+                    NotificationChannel.Slack, client_config.config, userid
                 ),
                 text=text,
                 message_id=message_id,
@@ -402,7 +359,7 @@ class SlackModule(_ModuleBase, _MessageBase[Slack]):
     @staticmethod
     def _extract_images(
         msg_json: dict,
-    ) -> Optional[List[CommingMessage.MessageImage]]:
+    ) -> Optional[List[IncomingMessage.MessageImage]]:
         """
         从Slack消息中提取图片URL
         """
@@ -422,7 +379,7 @@ class SlackModule(_ModuleBase, _MessageBase[Slack]):
                 url = file.get("url_private") or file.get("url_private_download")
                 if url:
                     images.append(
-                        CommingMessage.MessageImage(
+                        IncomingMessage.MessageImage(
                             ref=url,
                             name=file.get("name") or file.get("title"),
                             mime_type=file.get("mimetype"),
@@ -457,7 +414,7 @@ class SlackModule(_ModuleBase, _MessageBase[Slack]):
     @classmethod
     def _extract_files(
         cls, msg_json: dict
-    ) -> Optional[List[CommingMessage.MessageAttachment]]:
+    ) -> Optional[List[IncomingMessage.MessageAttachment]]:
         """
         从 Slack 消息中提取非图片/非音频文件。
         """
@@ -487,7 +444,7 @@ class SlackModule(_ModuleBase, _MessageBase[Slack]):
             if not url:
                 continue
             attachments.append(
-                CommingMessage.MessageAttachment(
+                IncomingMessage.MessageAttachment(
                     ref=f"slack://file/{quote(url, safe='')}",
                     name=file.get("name") or file.get("title"),
                     mime_type=file.get("mimetype"),
@@ -536,7 +493,7 @@ class SlackModule(_ModuleBase, _MessageBase[Slack]):
             return content
         return None
 
-    def post_message(self, message: Notification, **kwargs) -> None:
+    def post_message(self, message: Message, **kwargs) -> None:
         """
         发送消息
         :param message: 消息
@@ -575,7 +532,7 @@ class SlackModule(_ModuleBase, _MessageBase[Slack]):
                     )
 
     def post_medias_message(
-        self, message: Notification, medias: List[MediaInfo]
+        self, message: Message, medias: List[MediaInfo]
     ) -> None:
         """
         发送媒体信息选择列表
@@ -598,7 +555,7 @@ class SlackModule(_ModuleBase, _MessageBase[Slack]):
                 )
 
     def post_torrents_message(
-        self, message: Notification, torrents: List[Context]
+        self, message: Message, torrents: List[Context]
     ) -> None:
         """
         发送种子信息选择列表
@@ -622,7 +579,7 @@ class SlackModule(_ModuleBase, _MessageBase[Slack]):
 
     def delete_message(
         self,
-        channel: MessageChannel,
+        channel: NotificationChannel,
         source: str,
         message_id: str,
         chat_id: Optional[str] = None,
@@ -650,7 +607,7 @@ class SlackModule(_ModuleBase, _MessageBase[Slack]):
 
     def edit_message(
         self,
-        channel: MessageChannel,
+        channel: NotificationChannel,
         source: str,
         message_id: Union[str, int],
         chat_id: Union[str, int],
@@ -688,57 +645,9 @@ class SlackModule(_ModuleBase, _MessageBase[Slack]):
                     return True
         return False
 
-    def register_commands(self, commands: Dict[str, dict]) -> None:
-        """
-        注册命令，实现这个函数接收系统可用的命令菜单。
-
-        :param commands: 命令字典
-        """
-        for client_config in self.get_configs().values():
-            client = self.get_instance(client_config.name)
-            if not client:
-                continue
-
-            scoped_commands = copy.deepcopy(commands)
-            event = eventmanager.send_event(
-                ChainEventType.CommandRegister,
-                CommandRegisterEventData(
-                    commands=scoped_commands,
-                    origin="Slack",
-                    service=client_config.name,
-                ),
-            )
-
-            if event and event.event_data:
-                event_data: CommandRegisterEventData = event.event_data
-                if event_data.cancel:
-                    client.delete_commands()
-                    logger.debug(
-                        f"Command registration for {client_config.name} canceled by event: {event_data.source}"
-                    )
-                    continue
-                scoped_commands = event_data.commands or {}
-                if not scoped_commands:
-                    logger.debug("Filtered commands are empty, skipping registration.")
-                    client.delete_commands()
-
-            filtered_scoped_commands = DictUtils.filter_keys_to_subset(
-                scoped_commands,
-                commands,
-            )
-            if not filtered_scoped_commands:
-                logger.debug("Filtered commands are empty, skipping registration.")
-                client.delete_commands()
-                continue
-            if filtered_scoped_commands != commands:
-                logger.debug(
-                    f"Command set has changed, Updating new commands: {filtered_scoped_commands}"
-                )
-            client.register_commands(filtered_scoped_commands)
-
     def mark_message_processing_started(
         self,
-        channel: MessageChannel,
+        channel: NotificationChannel,
         source: str,
         userid: Optional[Union[str, int]] = None,
         message_id: Optional[Union[str, int]] = None,
@@ -778,7 +687,7 @@ class SlackModule(_ModuleBase, _MessageBase[Slack]):
 
     def mark_message_processing_finished(
         self,
-        channel: MessageChannel,
+        channel: NotificationChannel,
         source: str,
         userid: Optional[Union[str, int]] = None,
         message_id: Optional[Union[str, int]] = None,
@@ -808,7 +717,7 @@ class SlackModule(_ModuleBase, _MessageBase[Slack]):
             emoji=str(emoji),
         )
 
-    def send_direct_message(self, message: Notification) -> Optional[MessageResponse]:
+    def send_direct_message(self, message: Message) -> Optional[MessageResponse]:
         """
         直接发送消息并返回消息ID等信息
         :param message: 消息体
@@ -863,7 +772,7 @@ class SlackModule(_ModuleBase, _MessageBase[Slack]):
                     return MessageResponse(
                         message_id=message_id,
                         chat_id=channel_id,
-                        channel=MessageChannel.Slack,
+                        channel=NotificationChannel.Slack,
                         source=conf.name,
                         success=True,
                     )

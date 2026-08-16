@@ -31,7 +31,7 @@ from app.runtime.extensions.plugin_manager import PluginManager
 from app.db import SessionFactory
 from app.db.oper.agenttask import AgentTaskOper
 from app.db.models.downloadhistory import DownloadHistory, DownloadFiles
-from app.db.models.message import Message
+from app.db.models.message import Message as MessageModel
 from app.db.models.siteuserdata import SiteUserData
 from app.db.models.transferhistory import TransferHistory
 from app.db.oper.systemconfig import SystemConfigOper
@@ -42,7 +42,7 @@ from app.adapters.external.server import MoviePilotServerHelper
 from app.runtime.extensions.service_registry import ServiceConfigHelper
 from app.application.site.sites import SitesHelper  # pylint: disable=no-name-in-module
 from app.runtime.log import logger
-from app.schemas import Notification, NotificationType, Workflow
+from app.schemas import Message, MessageType, Workflow
 from app.schemas.types import EventType, SystemConfigKey
 from app.runtime.gc import get_memory_usage
 from app.runtime.reload import ConfigReloadMixin
@@ -51,7 +51,8 @@ from app.runtime.scheduling import TimerUtils
 
 lock = threading.Lock()
 SCHEDULER_PROGRESS_PREFIX = "scheduler"
-AGENT_TASK_JOB_PREFIX = "agent-task"
+# Agent 自主定时任务前缀下沉到 application 门面，此处保留兼容导出。
+from app.application.scheduling import AGENT_TASK_JOB_PREFIX  # noqa: E402
 
 
 class SchedulerChain(ChainBase):
@@ -198,7 +199,7 @@ class SchedulerChain(ChainBase):
                 "name": "message",
                 "retention_days": message_days,
                 "cutoff": message_cutoff,
-                "handler": lambda db: Message.delete_before(
+                "handler": lambda db: MessageModel.delete_before(
                     db=db,
                     before_time=message_cutoff,
                     limit=batch_size,
@@ -299,6 +300,7 @@ class Scheduler(ConfigReloadMixin, metaclass=SingletonClass):
     }
 
     def __init__(self):
+        """创建调度器状态；后台任务由应用生命周期显式启动。"""
         # 定时服务
         self._scheduler = None
         # 退出事件
@@ -313,10 +315,6 @@ class Scheduler(ConfigReloadMixin, metaclass=SingletonClass):
         self._auth_count = 0
         # 用户认证失败消息发送
         self._auth_message = False
-        # 对账上个进程未收口的 Agent 任务
-        self._reconcile_agent_task_interruptions()
-        # 初始化
-        self.init()
 
     def on_config_changed(self) -> None:
         """
@@ -407,6 +405,9 @@ class Scheduler(ConfigReloadMixin, metaclass=SingletonClass):
         # 调试模式不启动定时服务
         if settings.DEV:
             return
+
+        # 对账上个进程未收口的 Agent 任务；进程内重复初始化不会重复改写状态。
+        self._reconcile_agent_task_interruptions()
 
         with lock:
             # 各服务的运行状态
@@ -1220,10 +1221,14 @@ class Scheduler(ConfigReloadMixin, metaclass=SingletonClass):
         :param trigger_source: 触发入口，scheduled-自动调度，manual-显式立即执行
         :return: 执行是否成功及结果摘要
         """
-        from app.agent.orchestrator import agent_manager
+        from app.agent.runtime_loader import get_running_agent_manager
 
         try:
-            return await agent_manager.execute_scheduled_task(
+            manager = get_running_agent_manager()
+            if manager is None:
+                logger.warning("智能助手服务未运行，跳过 Agent 定时任务")
+                return False, "智能助手服务未运行"
+            return await manager.execute_scheduled_task(
                 task_id,
                 trigger_source=trigger_source,
             )
@@ -1536,9 +1541,13 @@ class Scheduler(ConfigReloadMixin, metaclass=SingletonClass):
         """
         智能体心跳唤醒：检查并执行待处理的定时任务
         """
-        from app.agent.orchestrator import agent_manager
+        from app.agent.runtime_loader import get_running_agent_manager
 
-        await agent_manager.heartbeat_check_jobs()
+        manager = get_running_agent_manager()
+        if manager is None:
+            logger.debug("智能助手服务未运行，跳过心跳任务")
+            return
+        await manager.heartbeat_check_jobs()
 
     def user_auth(self):
         """
@@ -1567,8 +1576,8 @@ class Scheduler(ConfigReloadMixin, metaclass=SingletonClass):
             self._auth_count = 0
             logger.info(f"{msg} 用户认证成功")
             SchedulerChain().post_message(
-                Notification(
-                    mtype=NotificationType.Manual,
+                Message(
+                    mtype=MessageType.Manual,
                     title="MoviePilot用户认证成功",
                     text=f"使用站点：{msg}，如有插件使用异常，请重启MoviePilot。",
                     link=settings.MP_DOMAIN("#/site"),

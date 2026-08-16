@@ -1,13 +1,14 @@
 import base64
 import re
 from datetime import datetime
-from typing import Callable, List, Optional, Tuple, Union, Dict
+from typing import Callable, Optional, Tuple, Union, Dict
 from urllib.parse import urljoin
 
 from app.application.site.sites import SitesHelper  # pylint: disable=no-name-in-module
 from lxml import etree
 
 from app.chain import ChainBase
+from app.chain._interaction import InteractionChainMixin
 from app.runtime.config import global_vars, settings
 from app.runtime.events import Event, eventmanager
 from app.db.models.site import Site
@@ -17,14 +18,11 @@ from app.adapters.network.browser import PlaywrightHelper
 from app.adapters.network.cloudflare import under_challenge
 from app.application.security.cookie import CookieHelper
 from app.adapters.external.cookiecloud import CookieCloudHelper
-from app.application.messaging.site import (
-    SiteInteractionHandler,
-    site_interaction_manager,
-)
+from app.application.messaging.site import SiteInteractionHandler
 from app.application.rss import RssHelper
 from app.runtime.log import logger
-from app.schemas import MessageChannel, Notification, SiteUserData
-from app.schemas.types import EventType, NotificationType
+from app.schemas import NotificationChannel, Message, SiteUserData
+from app.schemas.types import EventType, MessageType
 from app.adapters.network.http import RequestUtils
 from app.domain.site import SiteUtils
 from app.domain import site as site_rules
@@ -33,12 +31,13 @@ from app.foundation import url as url_tools
 from app.foundation.dom import DomUtils
 
 
-
-class SiteChain(ChainBase):
+class SiteChain(InteractionChainMixin, ChainBase):
     """
     站点管理处理链
     """
 
+    # 交互处理器类注入，供 InteractionChainMixin 的 parse_callback 委托
+    _interaction_handler_type = SiteInteractionHandler
 
     def __init__(self):
         """初始化站点管理处理链及特殊站点测试器"""
@@ -77,8 +76,8 @@ class SiteChain(ChainBase):
             # 低分享率警告
             if userdata.ratio and float(userdata.ratio) < 1 and not bool(
                     re.search(r"(贵宾|VIP?)", userdata.user_level or "", re.IGNORECASE)):
-                self.post_message(Notification(
-                    mtype=NotificationType.SiteMessage,
+                self.post_message(Message(
+                    mtype=MessageType.SiteMessage,
                     title=f"【站点分享率低预警】",
                     text=f"站点 {site.get('name')} 分享率 {userdata.ratio}，请注意！"
                 ))
@@ -94,8 +93,8 @@ class SiteChain(ChainBase):
         if not userdata.message_unread:
             return
         if not userdata.message_unread_contents:
-            self.post_message(Notification(
-                mtype=NotificationType.SiteMessage,
+            self.post_message(Message(
+                mtype=MessageType.SiteMessage,
                 title=f"站点 {site.get('name')} 收到 "
                       f"{userdata.message_unread} 条新消息，请登陆查看",
                 link=site.get("url")
@@ -108,9 +107,9 @@ class SiteChain(ChainBase):
                 continue
             msg_title = f"【站点 {site.get('name')} 消息】"
             msg_text = f"时间：{date}\n标题：{head}\n内容：\n{content}"
-            self.post_message(Notification(
+            self.post_message(Message(
                 source=message_source,
-                mtype=NotificationType.SiteMessage,
+                mtype=MessageType.SiteMessage,
                 title=msg_title,
                 text=msg_text,
                 link=site.get("url")
@@ -752,67 +751,7 @@ class SiteChain(ChainBase):
         """构造 /sites 交互处理器，Cookie 更新动作由本链提供。"""
         return SiteInteractionHandler(messenger=self, cookie_updater=self.update_cookie)
 
-    def remote_list(
-            self,
-            arg_str: str = "",
-            channel: MessageChannel = None,
-            userid: Union[str, int] = None,
-            source: Optional[str] = None,
-    ):
-        """
-        /sites 统一入口，委托交互处理器。
-        """
-        return self._interaction_handler().remote_list(
-            arg_str=arg_str, channel=channel, userid=userid, source=source
-        )
-
-    @staticmethod
-    def parse_callback(callback_data: str) -> Optional[Tuple[str, str]]:
-        """
-        解析 /sites 按钮回调。
-        """
-        return SiteInteractionHandler.parse_callback(callback_data)
-
-    def handle_callback_interaction(
-            self,
-            callback_data: str,
-            channel: MessageChannel,
-            source: str,
-            userid: Union[str, int],
-            username: str,
-            original_message_id: Optional[Union[str, int]] = None,
-            original_chat_id: Optional[str] = None,
-    ) -> bool:
-        """委托交互处理器处理按钮回调。"""
-        return self._interaction_handler().handle_callback_interaction(
-            callback_data=callback_data,
-            channel=channel,
-            source=source,
-            userid=userid,
-            username=username,
-            original_message_id=original_message_id,
-            original_chat_id=original_chat_id,
-        )
-
-    def handle_text_interaction(
-            self,
-            channel: MessageChannel,
-            source: str,
-            userid: Union[str, int],
-            username: str,
-            text: str,
-    ) -> bool:
-        """委托交互处理器处理文本输入。"""
-        return self._interaction_handler().handle_text_interaction(
-            channel=channel,
-            source=source,
-            userid=userid,
-            username=username,
-            text=text,
-        )
-
-
-    def remote_disable(self, arg_str: str, channel: MessageChannel,
+    def remote_disable(self, arg_str: str, channel: NotificationChannel,
                        userid: Union[str, int] = None, source: Optional[str] = None):
         """
         禁用站点
@@ -826,7 +765,7 @@ class SiteChain(ChainBase):
         siteoper = SiteOper()
         site = siteoper.get(site_id)
         if not site:
-            self.post_message(Notification(
+            self.post_message(Message(
                 channel=channel,
                 title=f"站点编号 {site_id} 不存在！",
                 userid=userid,
@@ -839,7 +778,7 @@ class SiteChain(ChainBase):
         # 重新发送消息
         self.remote_list(channel=channel, userid=userid, source=source)
 
-    def remote_enable(self, arg_str: str, channel: MessageChannel,
+    def remote_enable(self, arg_str: str, channel: NotificationChannel,
                       userid: Union[str, int] = None, source: Optional[str] = None):
         """
         启用站点
@@ -855,7 +794,7 @@ class SiteChain(ChainBase):
             site_id = int(arg_str)
             site = siteoper.get(site_id)
             if not site:
-                self.post_message(Notification(
+                self.post_message(Message(
                     channel=channel,
                     title=f"站点编号 {site_id} 不存在！",
                     userid=userid,
@@ -899,7 +838,7 @@ class SiteChain(ChainBase):
             return True, msg
         return False, "未知错误"
 
-    def remote_cookie(self, arg_str: str, channel: MessageChannel,
+    def remote_cookie(self, arg_str: str, channel: NotificationChannel,
                       userid: Union[str, int] = None, source: Optional[str] = None):
         """
         使用用户名密码更新站点Cookie
@@ -907,7 +846,7 @@ class SiteChain(ChainBase):
         err_title = "请输入正确的命令格式：/site_cookie [id] [username] [password] [2fa_code/secret]，" \
                     "[id]为站点编号，[uername]为站点用户名，[password]为站点密码，[2fa_code/secret]为站点二步验证码或密钥"
         if not arg_str:
-            self.post_message(Notification(
+            self.post_message(Message(
                 channel=channel,
                 source=source,
                 title=err_title,
@@ -921,7 +860,7 @@ class SiteChain(ChainBase):
         if len(args) == 4:
             two_step_code = args[3]
         elif len(args) != 3:
-            self.post_message(Notification(
+            self.post_message(Message(
                 channel=channel,
                 source=source,
                 title=err_title,
@@ -930,7 +869,7 @@ class SiteChain(ChainBase):
             return
         site_id = args[0]
         if not site_id.isdigit():
-            self.post_message(Notification(
+            self.post_message(Message(
                 channel=channel,
                 source=source,
                 title=err_title,
@@ -942,14 +881,14 @@ class SiteChain(ChainBase):
         # 站点信息
         site_info = SiteOper().get(site_id)
         if not site_info:
-            self.post_message(Notification(
+            self.post_message(Message(
                 channel=channel,
                 source=source,
                 title=f"站点编号 {site_id} 不存在！",
                 userid=userid,
                 save_history=False))
             return
-        self.post_message(Notification(
+        self.post_message(Message(
             channel=channel,
             source=source,
             title=f"开始更新【{site_info.name}】Cookie&UA ...",
@@ -966,7 +905,7 @@ class SiteChain(ChainBase):
                                          two_step_code=two_step_code)
         if not status:
             logger.error(msg)
-            self.post_message(Notification(
+            self.post_message(Message(
                 channel=channel,
                 source=source,
                 title=f"【{site_info.name}】 Cookie&UA更新失败！",
@@ -974,20 +913,20 @@ class SiteChain(ChainBase):
                 userid=userid,
                 save_history=False))
         else:
-            self.post_message(Notification(
+            self.post_message(Message(
                 channel=channel,
                 source=source,
                 title=f"【{site_info.name}】 Cookie&UA更新成功",
                 userid=userid,
                 save_history=False))
 
-    def remote_refresh_userdatas(self, channel: MessageChannel,
+    def remote_refresh_userdatas(self, channel: NotificationChannel,
                                  userid: Union[str, int] = None, source: Optional[str] = None):
         """
         刷新所有站点用户数据
         """
         logger.info("收到命令，开始刷新站点数据 ...")
-        self.post_message(Notification(
+        self.post_message(Message(
             channel=channel,
             source=source,
             title="开始刷新站点数据 ...",
@@ -1030,7 +969,7 @@ class SiteChain(ChainBase):
                                           f"总上传：{size_tools.format_compact_size(incUploads)}\n"
                                           f"总下载：{size_tools.format_compact_size(incDownloads)}\n"
                                           f"————————————")
-                self.post_message(Notification(
+                self.post_message(Message(
                     channel=channel,
                     source=source,
                     title="【站点数据统计】",
@@ -1039,7 +978,7 @@ class SiteChain(ChainBase):
                     save_history=False
                 ))
         else:
-            self.post_message(Notification(
+            self.post_message(Message(
                 channel=channel,
                 source=source,
                 title="没有刷新到任何站点数据！",

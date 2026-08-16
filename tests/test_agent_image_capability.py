@@ -4,7 +4,7 @@ from app.agent import MoviePilotAgent
 from app.agent.llm import AgentCapabilityManager, LLMHelper
 from app.chain.message import MessageChain
 from app.runtime.config import settings
-from app.schemas.types import MessageChannel
+from app.schemas.types import NotificationChannel
 
 
 def test_llm_supports_image_input_uses_model_catalog_text_only(monkeypatch):
@@ -69,14 +69,16 @@ def test_handle_ai_message_routes_text_only_model_images_to_files(monkeypatch):
             }
         ],
     ) as prepare_files, patch(
-        "app.chain.message.agent_manager.process_message", new_callable=AsyncMock
-    ) as process_message, patch(
+        "app.chain.message.get_running_agent_manager"
+    ) as get_running_manager, patch(
         "app.chain.message.asyncio.run_coroutine_threadsafe",
         side_effect=lambda coro, _loop: coro.close(),
     ):
+        process_message = AsyncMock()
+        get_running_manager.return_value.process_message = process_message
         chain._handle_ai_message(
             text="/ai 帮我看看这张图",
-            channel=MessageChannel.Telegram,
+            channel=NotificationChannel.Telegram,
             source="telegram-test",
             userid="10001",
             username="tester",

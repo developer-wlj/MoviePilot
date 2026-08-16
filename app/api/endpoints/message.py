@@ -1,9 +1,10 @@
+from __future__ import annotations
+
 import json
 import time
-from typing import Union, Any, List, Optional
+from typing import Protocol, Union, Any, List, Optional
 
 from fastapi import BackgroundTasks, Depends, Request
-from pywebpush import WebPushException, webpush
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import PlainTextResponse
 
@@ -20,14 +21,20 @@ from app.api.deps import get_current_active_superuser
 from app.runtime.extensions.service_registry import ServiceConfigHelper
 from app.runtime.log import logger
 from app.adapters.external.wechat_crypt import WXBizMsgCrypt
-from app.schemas.types import MessageChannel, SystemConfigKey
+from app.schemas.types import NotificationChannel, SystemConfigKey
 
 router = ResponseAPIRouter()
 
 _WNS_DEFAULT_TTL = 86400
 
 
-def is_webpush_subscription_gone(error: WebPushException) -> bool:
+class WebPushError(Protocol):
+    """Web Push 订阅状态判断所需的最小异常协议。"""
+
+    response: Any  # 推送服务响应，状态码字段由具体 SDK 提供
+
+
+def is_webpush_subscription_gone(error: WebPushError) -> bool:
     """判断 Web Push 订阅是否已在浏览器或推送服务侧失效。"""
     response: Any = getattr(error, "response", None)
     status_code = getattr(response, "status_code", None) or getattr(
@@ -64,18 +71,18 @@ def _normalize_notification_clear_timestamp(value: Any) -> int:
     return normalized_value if normalized_value > 0 else 0
 
 
-def _get_notification_clear_before() -> schemas.NotificationClearBefore:
+def _get_notification_clear_before() -> schemas.MessageClearBefore:
     """
     读取通知中心清理时间配置。
     """
     value = SystemConfigOper().get(SystemConfigKey.NotificationClearBefore)
     if isinstance(value, dict):
-        return schemas.NotificationClearBefore(
+        return schemas.MessageClearBefore(
             all=_normalize_notification_clear_timestamp(value.get("all")),
             system=_normalize_notification_clear_timestamp(value.get("system")),
             media=_normalize_notification_clear_timestamp(value.get("media")),
         )
-    return schemas.NotificationClearBefore(
+    return schemas.MessageClearBefore(
         all=_normalize_notification_clear_timestamp(value),
     )
 
@@ -166,7 +173,7 @@ async def web_message(
                 images = [images]
 
     MessageChain().handle_message(
-        channel=MessageChannel.Web,
+        channel=NotificationChannel.Web,
         source=current_user.name,
         userid=current_user.name,
         username=current_user.name,
@@ -197,7 +204,7 @@ async def get_web_message(
     return ret_messages
 
 
-@router.get("/notification", summary="获取通知消息", response_model=List[schemas.NotificationHistoryItem])
+@router.get("/notification", summary="获取通知消息", response_model=List[schemas.MessageHistoryItem])
 async def get_notification_message(
     _: schemas.TokenPayload = Depends(verify_token),
     db: AsyncSession = Depends(get_async_db),
@@ -215,16 +222,16 @@ async def get_notification_message(
         system_clear_before=_format_notification_clear_time(clear_before.system),
         media_clear_before=_format_notification_clear_time(clear_before.media),
     )
-    return [schemas.NotificationHistoryItem(**message.to_dict()) for message in messages]
+    return [schemas.MessageHistoryItem(**message.to_dict()) for message in messages]
 
 
 @router.delete(
     "/notification",
     summary="清理通知消息",
-    response_model=schemas.Response[schemas.NotificationClearData],
+    response_model=schemas.Response[schemas.MessageClearData],
 )
 async def clear_notification_message(
-    scope: schemas.NotificationClearScope = schemas.NotificationClearScope.All,
+    scope: schemas.MessageClearScope = schemas.MessageClearScope.All,
     _: schemas.TokenPayload = Depends(verify_token),
 ):
     """
@@ -359,6 +366,8 @@ def send_notification(
     """
     发送webpush通知
     """
+    from pywebpush import WebPushException, webpush
+
     for sub in global_vars.get_subscriptions():
         try:
             webpush(

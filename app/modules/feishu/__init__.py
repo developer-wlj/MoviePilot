@@ -3,24 +3,24 @@ from typing import Any, List, Optional, Tuple, Union
 from app.domain.context import Context, MediaInfo
 from app.application.messaging.agent import register_channel_admin_resolver, resolve_config_principal_ids
 from app.runtime.log import logger
-from app.modules import _ModuleBase, _MessageBase
+from app.modules._base import _MessageChannelModuleBase
 from app.modules.feishu.feishu import Feishu
-from app.schemas import CommingMessage, MessageChannel, MessageResponse, Notification
+from app.schemas import IncomingMessage, NotificationChannel, MessageResponse, Message
 from app.schemas.types import ModuleType
 
 
 register_channel_admin_resolver(
-    MessageChannel.Feishu,
+    NotificationChannel.Feishu,
     lambda config: resolve_config_principal_ids(
         config, "FEISHU_ADMINS", "FEISHU_OPEN_ID"
     ),
 )
 
 
-class FeishuModule(_ModuleBase, _MessageBase[Feishu]):
+class FeishuModule(_MessageChannelModuleBase[Feishu]):
     def init_module(self) -> None:
         super().init_service(service_name=Feishu.__name__.lower(), service_type=Feishu)
-        self._channel = MessageChannel.Feishu
+        self._channel = NotificationChannel.Feishu
 
     @staticmethod
     def get_name() -> str:
@@ -31,12 +31,19 @@ class FeishuModule(_ModuleBase, _MessageBase[Feishu]):
         return ModuleType.Notification
 
     @staticmethod
-    def get_subtype() -> MessageChannel:
-        return MessageChannel.Feishu
+    def get_subtype() -> NotificationChannel:
+        return NotificationChannel.Feishu
 
     @staticmethod
     def get_priority() -> int:
         return 2
+
+    def _commands_enabled(self, config: Optional[dict]) -> bool:
+        """
+        飞书机器人无斜杠命令概念，lark_oapi Client 也不提供命令注册/删除 API，
+        跳过命令注册，避免基类默认钩子调用不存在的 client.register_commands。
+        """
+        return False
 
     def stop(self) -> None:
         """停止模块"""
@@ -46,22 +53,13 @@ class FeishuModule(_ModuleBase, _MessageBase[Feishu]):
             except Exception as err:
                 logger.error(f"停止飞书模块实例失败：{err}")
 
-    def test(self) -> Optional[Tuple[bool, str]]:
-        if not self.get_instances():
-            return None
-        for name, client in self.get_instances().items():
-            state = client.get_state()
-            if not state:
-                return False, f"飞书 {name} 未就绪"
-        return True, ""
-
     def init_setting(self) -> Tuple[str, Union[str, bool]]:
         """通知模块通过系统通知配置控制实例化，这里不额外设置环境开关。"""
         return None
 
     @staticmethod
     def _resolve_message_target(
-            message: Notification,
+            message: Message,
     ) -> Tuple[Optional[str], Optional[str], Optional[str]]:
         """解析发送目标：交互式回复优先回到原会话（群聊@回复必须回原群），其次 open_id，最后回退 user_id 或 chat_id。"""
         userid = str(message.userid).strip() if message.userid else None
@@ -94,7 +92,7 @@ class FeishuModule(_ModuleBase, _MessageBase[Feishu]):
 
     def message_parser(
             self, source: str, body: Any, form: Any, args: Any
-    ) -> Optional[CommingMessage]:
+    ) -> Optional[IncomingMessage]:
         client_config = self.get_config(source)
         if not client_config:
             return None
@@ -103,7 +101,7 @@ class FeishuModule(_ModuleBase, _MessageBase[Feishu]):
             return None
         return client.parse_message(body)
 
-    def post_message(self, message: Notification, **kwargs) -> None:
+    def post_message(self, message: Message, **kwargs) -> None:
         for conf in self.get_configs().values():
             if not self.check_message(message, conf.name):
                 continue
@@ -156,7 +154,7 @@ class FeishuModule(_ModuleBase, _MessageBase[Feishu]):
                         original_message_id=str(message.original_message_id) if message.original_message_id else None,
                     )
 
-    def post_medias_message(self, message: Notification, medias: List[MediaInfo]) -> None:
+    def post_medias_message(self, message: Message, medias: List[MediaInfo]) -> None:
         for conf in self.get_configs().values():
             if not self.check_message(message, conf.name):
                 continue
@@ -171,7 +169,7 @@ class FeishuModule(_ModuleBase, _MessageBase[Feishu]):
                     receive_id_type=receive_id_type,
                 )
 
-    def post_torrents_message(self, message: Notification, torrents: List[Context]) -> None:
+    def post_torrents_message(self, message: Message, torrents: List[Context]) -> None:
         for conf in self.get_configs().values():
             if not self.check_message(message, conf.name):
                 continue
@@ -188,7 +186,7 @@ class FeishuModule(_ModuleBase, _MessageBase[Feishu]):
 
     def edit_message(
             self,
-            channel: MessageChannel,
+            channel: NotificationChannel,
             source: str,
             message_id: Union[str, int],
             chat_id: Union[str, int],
@@ -214,7 +212,7 @@ class FeishuModule(_ModuleBase, _MessageBase[Feishu]):
                 return True
         return False
 
-    def send_direct_message(self, message: Notification) -> Optional[MessageResponse]:
+    def send_direct_message(self, message: Message) -> Optional[MessageResponse]:
         for conf in self.get_configs().values():
             if not self.check_message(message, conf.name):
                 continue
@@ -285,7 +283,7 @@ class FeishuModule(_ModuleBase, _MessageBase[Feishu]):
                 return MessageResponse(
                     message_id=result.get("message_id"),
                     chat_id=result.get("chat_id"),
-                    channel=MessageChannel.Feishu,
+                    channel=NotificationChannel.Feishu,
                     source=conf.name,
                     metadata=result.get("metadata"),
                     success=True,
@@ -395,7 +393,7 @@ class FeishuModule(_ModuleBase, _MessageBase[Feishu]):
 
     def mark_message_processing_started(
             self,
-            channel: MessageChannel,
+            channel: NotificationChannel,
             source: str,
             userid: Optional[Union[str, int]] = None,
             message_id: Optional[Union[str, int]] = None,
@@ -431,7 +429,7 @@ class FeishuModule(_ModuleBase, _MessageBase[Feishu]):
 
     def mark_message_processing_finished(
             self,
-            channel: MessageChannel,
+            channel: NotificationChannel,
             source: str,
             userid: Optional[Union[str, int]] = None,
             message_id: Optional[Union[str, int]] = None,

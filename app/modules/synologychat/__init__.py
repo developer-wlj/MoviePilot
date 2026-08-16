@@ -9,20 +9,22 @@ from app.application.messaging.agent import (
     resolve_config_principal_ids,
 )
 from app.runtime.log import logger
-from app.modules import _ModuleBase, _MessageBase
+from app.modules._base import _MessageChannelModuleBase
 from app.modules.synologychat.synologychat import SynologyChat
-from app.schemas import MessageChannel, CommingMessage, Notification
+from app.schemas import NotificationChannel, IncomingMessage, Message
 from app.schemas.types import ModuleType
 from app.adapters.network.http import RequestUtils
 
 
 register_channel_admin_resolver(
-    MessageChannel.SynologyChat,
+    NotificationChannel.SynologyChat,
     lambda config: resolve_config_principal_ids(config, "SYNOLOGYCHAT_ADMINS"),
 )
 
 
-class SynologyChatModule(_ModuleBase, _MessageBase[SynologyChat]):
+class SynologyChatModule(_MessageChannelModuleBase[SynologyChat]):
+    # 管理员配置键，与渠道 resolver 保持一致
+    _admin_config_key = "SYNOLOGYCHAT_ADMINS"
     _IMAGE_SUFFIXES = (
         ".png",
         ".jpg",
@@ -54,7 +56,7 @@ class SynologyChatModule(_ModuleBase, _MessageBase[SynologyChat]):
         """
         super().init_service(service_name=SynologyChat.__name__.lower(),
                              service_type=SynologyChat)
-        self._channel = MessageChannel.SynologyChat
+        self._channel = NotificationChannel.SynologyChat
 
     @staticmethod
     def get_name() -> str:
@@ -68,11 +70,11 @@ class SynologyChatModule(_ModuleBase, _MessageBase[SynologyChat]):
         return ModuleType.Notification
 
     @staticmethod
-    def get_subtype() -> MessageChannel:
+    def get_subtype() -> NotificationChannel:
         """
         获取模块子类型
         """
-        return MessageChannel.SynologyChat
+        return NotificationChannel.SynologyChat
 
     @staticmethod
     def get_priority() -> int:
@@ -84,50 +86,8 @@ class SynologyChatModule(_ModuleBase, _MessageBase[SynologyChat]):
     def stop(self):
         pass
 
-    def test(self) -> Optional[Tuple[bool, str]]:
-        """
-        测试模块连接性
-        """
-        if not self.get_instances():
-            return None
-        for name, client in self.get_instances().items():
-            state = client.get_state()
-            if not state:
-                return False, f"Synology Chat {name} 未就绪"
-        return True, ""
-
     def init_setting(self) -> Tuple[str, Union[str, bool]]:
         pass
-
-    @staticmethod
-    def _get_admins(config: Optional[dict]) -> List[str]:
-        """
-        解析 Synology Chat 管理员配置，兼容逗号分隔和首尾空白。
-        """
-        return [
-            admin.strip()
-            for admin in str((config or {}).get("SYNOLOGYCHAT_ADMINS") or "").split(",")
-            if admin.strip()
-        ]
-
-    @classmethod
-    def _should_reject_admin_command(
-            cls,
-            config: Optional[dict],
-            *user_ids: Optional[Union[str, int]],
-    ) -> bool:
-        """
-        判断 Synology Chat 斜杠命令是否应因非管理员身份被拒绝。
-        """
-        admins = cls._get_admins(config)
-        if not admins:
-            return False
-        candidates = [
-            str(user_id).strip()
-            for user_id in user_ids
-            if user_id is not None and str(user_id).strip()
-        ]
-        return not any(candidate in admins for candidate in candidates)
 
     @staticmethod
     def _send_admin_denied(
@@ -140,7 +100,7 @@ class SynologyChatModule(_ModuleBase, _MessageBase[SynologyChat]):
             client.send_msg(title="只有管理员才有权限执行此命令", userid=str(userid))
 
     def message_parser(self, source: str, body: Any, form: Any,
-                       args: Any) -> Optional[CommingMessage]:
+                       args: Any) -> Optional[IncomingMessage]:
         """
         解析消息内容，返回字典，注意以下约定值：
         userid: 用户ID
@@ -189,10 +149,10 @@ class SynologyChatModule(_ModuleBase, _MessageBase[SynologyChat]):
                     f"images={len(images) if images else 0}, audios={len(audio_refs) if audio_refs else 0}, "
                     f"files={len(files) if files else 0}"
                 )
-                return CommingMessage(channel=MessageChannel.SynologyChat, source=client_config.name,
+                return IncomingMessage(channel=NotificationChannel.SynologyChat, source=client_config.name,
                                       userid=user_id, username=user_name,
                                       is_channel_admin=matches_channel_admin(
-                                          MessageChannel.SynologyChat,
+                                          NotificationChannel.SynologyChat,
                                           client_config.config,
                                           user_id,
                                       ), text=text or "",
@@ -204,12 +164,12 @@ class SynologyChatModule(_ModuleBase, _MessageBase[SynologyChat]):
     @classmethod
     def _extract_images(
         cls, message: dict
-    ) -> Optional[List[CommingMessage.MessageImage]]:
+    ) -> Optional[List[IncomingMessage.MessageImage]]:
         images = []
         for key in ("file_url", "image_url", "pic_url"):
             value = message.get(key)
             if isinstance(value, str) and cls._looks_like_image(value):
-                images.append(CommingMessage.MessageImage(ref=value))
+                images.append(IncomingMessage.MessageImage(ref=value))
 
         for key in ("attachments", "files"):
             raw_value = message.get(key)
@@ -222,12 +182,12 @@ class SynologyChatModule(_ModuleBase, _MessageBase[SynologyChat]):
             items = parsed if isinstance(parsed, list) else [parsed]
             for item in items:
                 if isinstance(item, str) and cls._looks_like_image(item):
-                    images.append(CommingMessage.MessageImage(ref=item))
+                    images.append(IncomingMessage.MessageImage(ref=item))
                 elif isinstance(item, dict):
                     url = item.get("url") or item.get("file_url") or item.get("image_url")
                     if isinstance(url, str) and cls._looks_like_image(url):
                         images.append(
-                            CommingMessage.MessageImage(
+                            IncomingMessage.MessageImage(
                                 ref=url,
                                 name=item.get("name") or item.get("filename"),
                                 mime_type=item.get("content_type")
@@ -306,7 +266,7 @@ class SynologyChatModule(_ModuleBase, _MessageBase[SynologyChat]):
     @classmethod
     def _extract_files(
         cls, message: dict
-    ) -> Optional[List[CommingMessage.MessageAttachment]]:
+    ) -> Optional[List[IncomingMessage.MessageAttachment]]:
         files = []
         for key in ("attachments", "files"):
             raw_value = message.get(key)
@@ -336,7 +296,7 @@ class SynologyChatModule(_ModuleBase, _MessageBase[SynologyChat]):
                 if is_image or is_audio:
                     continue
                 files.append(
-                    CommingMessage.MessageAttachment(
+                    IncomingMessage.MessageAttachment(
                         ref=f"synology://file/{quote(url, safe='')}",
                         name=item.get("name") or item.get("filename"),
                         mime_type=item.get("content_type") or item.get("mime_type"),
@@ -367,7 +327,7 @@ class SynologyChatModule(_ModuleBase, _MessageBase[SynologyChat]):
             return resp.content
         return None
 
-    def post_message(self, message: Notification, **kwargs) -> None:
+    def post_message(self, message: Message, **kwargs) -> None:
         """
         发送消息
         :param message: 消息体
@@ -388,7 +348,7 @@ class SynologyChatModule(_ModuleBase, _MessageBase[SynologyChat]):
                 client.send_msg(title=message.title, text=message.text,
                                 image=message.image, userid=userid, link=message.link)
 
-    def post_medias_message(self, message: Notification, medias: List[MediaInfo]) -> None:
+    def post_medias_message(self, message: Message, medias: List[MediaInfo]) -> None:
         """
         发送媒体信息选择列表
         :param message: 消息体
@@ -403,7 +363,7 @@ class SynologyChatModule(_ModuleBase, _MessageBase[SynologyChat]):
                 client.send_medias_msg(title=message.title, medias=medias,
                                        userid=message.userid)
 
-    def post_torrents_message(self, message: Notification, torrents: List[Context]) -> None:
+    def post_torrents_message(self, message: Message, torrents: List[Context]) -> None:
         """
         发送种子信息选择列表
         :param message: 消息体

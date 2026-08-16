@@ -1,11 +1,15 @@
+from app.application.scheduling import register_scheduler_class
 from app.scheduler import Scheduler
+
+# 导入期即向 application 门面注册调度器类，保证工具调用时不依赖静态边。
+register_scheduler_class(Scheduler)
 
 
 def init_scheduler():
     """
     初始化定时器
     """
-    Scheduler()
+    Scheduler().init()
 
 
 def stop_scheduler():

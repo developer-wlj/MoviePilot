@@ -1,4 +1,3 @@
-import copy
 import json
 import re
 import xml.dom.minidom
@@ -6,21 +5,19 @@ from typing import Optional, Union, List, Tuple, Any, Dict
 from urllib.parse import quote
 
 from app.domain.context import Context, MediaInfo
-from app.runtime.events import eventmanager
 from app.application.messaging.agent import (
     matches_channel_admin,
     register_channel_admin_resolver,
     resolve_config_principal_ids,
 )
 from app.runtime.log import logger
-from app.modules import _ModuleBase, _MessageBase
+from app.modules._base import _MessageChannelModuleBase
 from app.adapters.external.wechat_crypt import WXBizMsgCrypt
 from app.modules.wechat.wechat import WeChat
 from app.modules.wechat.wechatbot import WeChatBot
-from app.schemas import MessageChannel, CommingMessage, Notification, CommandRegisterEventData
-from app.schemas.types import ModuleType, ChainEventType
+from app.schemas import NotificationChannel, IncomingMessage, Message
+from app.schemas.types import ModuleType
 from app.foundation.dom import DomUtils
-from app.foundation.collections import DictUtils
 
 
 def _resolve_wechat_admin_ids(config: Optional[dict]) -> set[str]:
@@ -31,10 +28,15 @@ def _resolve_wechat_admin_ids(config: Optional[dict]) -> set[str]:
     return resolve_config_principal_ids(config, *config_keys)
 
 
-register_channel_admin_resolver(MessageChannel.Wechat, _resolve_wechat_admin_ids)
+register_channel_admin_resolver(NotificationChannel.Wechat, _resolve_wechat_admin_ids)
 
 
-class WechatModule(_ModuleBase, _MessageBase[WeChat]):
+class WechatModule(_MessageChannelModuleBase[WeChat]):
+
+    # 管理员配置键，与渠道 resolver 保持一致
+    _admin_config_key = "WECHAT_ADMINS"
+    # 命令注册事件源标识固定为 WeChat（get_name 为“企业微信”）
+    _command_origin = "WeChat"
 
     def init_module(self) -> None:
         """
@@ -42,7 +44,7 @@ class WechatModule(_ModuleBase, _MessageBase[WeChat]):
         """
         super().init_service(service_name=WeChat.__name__.lower(),
                              service_type=self._create_client)
-        self._channel = MessageChannel.Wechat
+        self._channel = NotificationChannel.Wechat
 
     @staticmethod
     def get_name() -> str:
@@ -56,11 +58,11 @@ class WechatModule(_ModuleBase, _MessageBase[WeChat]):
         return ModuleType.Notification
 
     @staticmethod
-    def get_subtype() -> MessageChannel:
+    def get_subtype() -> NotificationChannel:
         """
         获取模块的子类型
         """
-        return MessageChannel.Wechat
+        return NotificationChannel.Wechat
 
     @staticmethod
     def get_priority() -> int:
@@ -82,56 +84,17 @@ class WechatModule(_ModuleBase, _MessageBase[WeChat]):
     def _is_bot_mode(config: dict) -> bool:
         return (config or {}).get("WECHAT_MODE", "app") == "bot"
 
-    @staticmethod
-    def _get_admins(config: Optional[dict]) -> List[str]:
-        """
-        解析企业微信管理员配置，兼容逗号分隔和首尾空白。
-        """
-        return [
-            admin.strip()
-            for admin in str((config or {}).get("WECHAT_ADMINS") or "").split(",")
-            if admin.strip()
-        ]
-
-    @classmethod
-    def _should_reject_admin_command(
-            cls, config: Optional[dict], user_id: Optional[str]
-    ) -> bool:
-        """
-        判断企业微信菜单或斜杠命令是否应因非管理员身份被拒绝。
-        """
-        admins = cls._get_admins(config)
-        if not admins:
-            return False
-        return not matches_channel_admin(
-            MessageChannel.Wechat,
-            config,
-            user_id,
-        )
-
     @classmethod
     def _create_client(cls, conf):
         if cls._is_bot_mode(conf.config):
             return WeChatBot(name=conf.name, **conf.config)
         return WeChat(name=conf.name, **conf.config)
 
-    def test(self) -> Optional[Tuple[bool, str]]:
-        """
-        测试模块连接性
-        """
-        if not self.get_instances():
-            return None
-        for name, client in self.get_instances().items():
-            state = client.get_state()
-            if not state:
-                return False, f"企业微信 {name} 未就绪"
-        return True, ""
-
     def init_setting(self) -> Tuple[str, Union[str, bool]]:
         pass
 
     def message_parser(self, source: str, body: Any, form: Any,
-                       args: Any) -> Optional[CommingMessage]:
+                       args: Any) -> Optional[IncomingMessage]:
         """
         解析消息内容，返回字典，注意以下约定值：
         userid: 用户ID
@@ -229,9 +192,9 @@ class WechatModule(_ModuleBase, _MessageBase[WeChat]):
                 media_id = DomUtils.tag_value(root_node, "MediaId")
                 pic_url = DomUtils.tag_value(root_node, "PicUrl")
                 if media_id:
-                    images = [CommingMessage.MessageImage(ref=f"wxwork://media_id/{media_id}")]
+                    images = [IncomingMessage.MessageImage(ref=f"wxwork://media_id/{media_id}")]
                 elif pic_url:
-                    images = [CommingMessage.MessageImage(ref=pic_url)]
+                    images = [IncomingMessage.MessageImage(ref=pic_url)]
                 logger.info(
                     f"收到来自 {client_config.name} 的微信图片消息：userid={user_id}, images={len(images) if images else 0}"
                 )
@@ -250,7 +213,7 @@ class WechatModule(_ModuleBase, _MessageBase[WeChat]):
                 file_name = DomUtils.tag_value(root_node, "FileName")
                 if media_id:
                     files = [
-                        CommingMessage.MessageAttachment(
+                        IncomingMessage.MessageAttachment(
                             ref=f"wxwork://file_media_id/{media_id}",
                             name=file_name,
                         )
@@ -269,10 +232,10 @@ class WechatModule(_ModuleBase, _MessageBase[WeChat]):
 
             if content or images or audio_refs or files:
                 # 处理消息内容
-                return CommingMessage(channel=MessageChannel.Wechat, source=client_config.name,
+                return IncomingMessage(channel=NotificationChannel.Wechat, source=client_config.name,
                                       userid=user_id, username=user_id,
                                       is_channel_admin=matches_channel_admin(
-                                          MessageChannel.Wechat,
+                                          NotificationChannel.Wechat,
                                           client_config.config,
                                           user_id,
                                       ), text=content or "",
@@ -281,7 +244,7 @@ class WechatModule(_ModuleBase, _MessageBase[WeChat]):
             logger.error(f"微信消息处理发生错误：{str(err)}")
         return None
 
-    def _parse_bot_message(self, source: str, body: Any, client_config) -> Optional[CommingMessage]:
+    def _parse_bot_message(self, source: str, body: Any, client_config) -> Optional[IncomingMessage]:
         try:
             if isinstance(body, bytes):
                 msg_json = json.loads(body)
@@ -314,7 +277,7 @@ class WechatModule(_ModuleBase, _MessageBase[WeChat]):
             download_url = file_payload.get("download_url")
             if download_url:
                 files = [
-                    CommingMessage.MessageAttachment(
+                    IncomingMessage.MessageAttachment(
                         ref=f"wxbot://file/{quote(download_url, safe='')}",
                         name=file_payload.get("name") or file_payload.get("filename"),
                         mime_type=file_payload.get("content_type")
@@ -340,13 +303,13 @@ class WechatModule(_ModuleBase, _MessageBase[WeChat]):
             f"收到来自 {client_config.name} 的企业微信智能机器人消息："
             f"userid={sender}, text={text}, images={len(images) if images else 0}"
         )
-        return CommingMessage(
-            channel=MessageChannel.Wechat,
+        return IncomingMessage(
+            channel=NotificationChannel.Wechat,
             source=client_config.name,
             userid=sender,
             username=sender,
             is_channel_admin=matches_channel_admin(
-                MessageChannel.Wechat,
+                NotificationChannel.Wechat,
                 client_config.config,
                 sender,
             ),
@@ -356,7 +319,7 @@ class WechatModule(_ModuleBase, _MessageBase[WeChat]):
             files=files,
         )
 
-    def post_message(self, message: Notification, **kwargs) -> None:
+    def post_message(self, message: Message, **kwargs) -> None:
         """
         发送消息
         :param message: 消息内容
@@ -425,7 +388,7 @@ class WechatModule(_ModuleBase, _MessageBase[WeChat]):
             return client.download_media_bytes(media_id)
         return None
 
-    def post_medias_message(self, message: Notification, medias: List[MediaInfo]) -> None:
+    def post_medias_message(self, message: Message, medias: List[MediaInfo]) -> None:
         """
         发送媒体信息选择列表
         :param message: 消息内容
@@ -442,7 +405,7 @@ class WechatModule(_ModuleBase, _MessageBase[WeChat]):
                 # 再发送内容
                 client.send_medias_msg(medias=medias, userid=message.userid)
 
-    def post_torrents_message(self, message: Notification, torrents: List[Context]) -> None:
+    def post_torrents_message(self, message: Message, torrents: List[Context]) -> None:
         """
         发送种子信息选择列表
         :param message: 消息内容
@@ -457,54 +420,22 @@ class WechatModule(_ModuleBase, _MessageBase[WeChat]):
                 client.send_torrents_msg(title=message.title, torrents=torrents,
                                          userid=message.userid, link=message.link)
 
-    def register_commands(self, commands: Dict[str, dict]):
+    def _commands_enabled(self, config: Optional[dict]) -> bool:
         """
-        注册命令，实现这个函数接收系统可用的命令菜单
-        :param commands: 命令字典
+        菜单注册前置条件：智能机器人模式无传统菜单，缺少解密参数时无法调用菜单 API。
         """
-        for client_config in self.get_configs().values():
-            if self._is_bot_mode(client_config.config):
-                logger.debug(f"{client_config.name} 为智能机器人模式，跳过传统菜单初始化")
-                continue
-            # 如果没有配置消息解密相关参数，则也没有必要进行菜单初始化
-            if not client_config.config.get("WECHAT_ENCODING_AESKEY") or not client_config.config.get("WECHAT_TOKEN"):
-                logger.debug(f"{client_config.name} 缺少消息解密参数，跳过后续菜单初始化")
-                continue
+        if self._is_bot_mode(config):
+            logger.debug("智能机器人模式，跳过传统菜单初始化")
+            return False
+        if not config.get("WECHAT_ENCODING_AESKEY") or not config.get("WECHAT_TOKEN"):
+            logger.debug("缺少消息解密参数，跳过菜单初始化")
+            return False
+        return True
 
-            client = self.get_instance(client_config.name)
-            if not client:
-                continue
+    def _delete_commands(self, client) -> None:
+        """企业微信使用自定义菜单 API 清理命令。"""
+        client.delete_menus()
 
-            # 触发事件，允许调整命令数据，这里需要进行深复制，避免实例共享
-            scoped_commands = copy.deepcopy(commands)
-            event = eventmanager.send_event(
-                ChainEventType.CommandRegister,
-                CommandRegisterEventData(commands=scoped_commands, origin="WeChat", service=client_config.name)
-            )
-
-            # 如果事件返回有效的 event_data，使用事件中调整后的命令
-            if event and event.event_data:
-                event_data: CommandRegisterEventData = event.event_data
-                # 如果事件被取消，跳过命令注册，并清理菜单
-                if event_data.cancel:
-                    client.delete_menus()
-                    logger.debug(
-                        f"Command registration for {client_config.name} canceled by event: {event_data.source}"
-                    )
-                    continue
-                scoped_commands = event_data.commands or {}
-                if not scoped_commands:
-                    logger.debug("Filtered commands are empty, skipping registration.")
-                    client.delete_menus()
-
-            # scoped_commands 必须是 commands 的子集
-            filtered_scoped_commands = DictUtils.filter_keys_to_subset(scoped_commands, commands)
-            # 如果 filtered_scoped_commands 为空，则跳过注册
-            if not filtered_scoped_commands:
-                logger.debug("Filtered commands are empty, skipping registration.")
-                client.delete_menus()
-                continue
-            # 对比调整后的命令与当前命令
-            if filtered_scoped_commands != commands:
-                logger.debug(f"Command set has changed, Updating new commands: {filtered_scoped_commands}")
-            client.create_menus(filtered_scoped_commands)
+    def _apply_commands(self, client, commands: Dict[str, dict]) -> None:
+        """企业微信使用自定义菜单 API 注册命令。"""
+        client.create_menus(commands)

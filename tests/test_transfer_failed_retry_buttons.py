@@ -15,7 +15,7 @@ from app.chain.message import MessageChain
 from app.chain.transfer import TransferChain
 from app.application.messaging.interaction import InteractionContext
 from app.runtime.config import settings
-from app.schemas.types import MessageChannel
+from app.schemas.types import NotificationChannel
 
 
 class TestTransferFailedRetryButtons(unittest.TestCase):
@@ -42,7 +42,7 @@ class TestTransferFailedRetryButtons(unittest.TestCase):
             with patch.object(chain, "post_message") as post_message:
                 chain.remote_transfer(
                     "12",
-                    channel=MessageChannel.Telegram,
+                    channel=NotificationChannel.Telegram,
                     userid="10001",
                     source="telegram-test",
                 )
@@ -59,7 +59,7 @@ class TestTransferFailedRetryButtons(unittest.TestCase):
             chain._handle_callback(
                 callback_data="transfer_retry_12",
                 context=InteractionContext(
-                    channel=MessageChannel.Telegram,
+                    channel=NotificationChannel.Telegram,
                     source="telegram-test",
                     user_id="10001",
                     username="tester",
@@ -68,7 +68,7 @@ class TestTransferFailedRetryButtons(unittest.TestCase):
 
         transfer_cls.return_value.handle_failed_transfer_callback.assert_called_once_with(
             callback_data="transfer_retry_12",
-            channel=MessageChannel.Telegram,
+            channel=NotificationChannel.Telegram,
             source="telegram-test",
             userid="10001",
             username="tester",
@@ -81,7 +81,7 @@ class TestTransferFailedRetryButtons(unittest.TestCase):
             with patch.object(chain, "post_message") as post_message:
                 handled = chain.handle_failed_transfer_callback(
                     callback_data="transfer_retry_12",
-                    channel=MessageChannel.Telegram,
+                    channel=NotificationChannel.Telegram,
                     source="telegram-test",
                     userid="10001",
                     username="tester",
@@ -132,16 +132,19 @@ class TestTransferFailedRetryButtons(unittest.TestCase):
 
         with patch.object(settings, "AI_AGENT_ENABLE", True):
             with patch(
-                "app.chain.transfer.TransferHistoryOper"
+                "app.chain._transfer.TransferHistoryOper"
             ) as history_oper_cls, patch(
-                "app.chain.transfer.asyncio.run_coroutine_threadsafe",
+                "app.chain._transfer.build_manual_redo_prompt",
+                return_value="retry transfer prompt",
+            ), patch(
+                "app.chain._transfer.asyncio.run_coroutine_threadsafe",
                 side_effect=_close_pending_coro,
             ) as run_task:
                 history_oper_cls.return_value.get.return_value = history
                 with patch.object(chain, "post_message") as post_message:
                     chain.handle_failed_transfer_callback(
                         callback_data="transfer_ai_retry_34",
-                        channel=MessageChannel.Telegram,
+                        channel=NotificationChannel.Telegram,
                         source="telegram-test",
                         userid="10001",
                         username="tester",
@@ -200,14 +203,20 @@ class TestTransferFailedRetryButtons(unittest.TestCase):
         async def fake_async_post_message(*args, **kwargs):
             return None
 
+        from app.agent.prompt.transfer_redo import build_manual_redo_prompt
+
+        manager = SimpleNamespace(run_background_prompt=fake_run_background_prompt)
         with patch.object(settings, "AI_AGENT_ENABLE", True):
             with patch(
-                "app.chain.transfer.TransferHistoryOper"
+                "app.chain._transfer.TransferHistoryOper"
             ) as history_oper_cls, patch(
-                "app.chain.transfer.agent_manager.run_background_prompt",
-                side_effect=fake_run_background_prompt,
+                "app.chain._transfer.build_manual_redo_prompt",
+                side_effect=build_manual_redo_prompt,
             ), patch(
-                "app.chain.transfer.asyncio.run_coroutine_threadsafe",
+                "app.chain._transfer.get_running_agent_manager",
+                return_value=manager,
+            ), patch(
+                "app.chain._transfer.asyncio.run_coroutine_threadsafe",
                 side_effect=_run_pending_coro,
             ):
                 history_oper_cls.return_value.get.return_value = history
@@ -216,7 +225,7 @@ class TestTransferFailedRetryButtons(unittest.TestCase):
                 ):
                     chain.handle_failed_transfer_callback(
                         callback_data="transfer_ai_retry_35",
-                        channel=MessageChannel.Telegram,
+                        channel=NotificationChannel.Telegram,
                         source="telegram-test",
                         userid="10001",
                         username="tester",

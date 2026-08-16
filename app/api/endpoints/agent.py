@@ -20,10 +20,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import schemas
 from app.api.response import ResponseAPIRouter
-from app.agent.callback import StreamingHandler
-from app.agent.orchestrator import MoviePilotAgent, ReplyMode, agent_manager
+from app.agent.contracts import ReplyMode, build_display_message
 from app.agent.llm.capability import AgentCapabilityManager
 from app.agent.mcp import agent_mcp_manager
+from app.agent.runtime_loader import (
+    get_moviepilot_agent_type,
+    get_running_agent_manager,
+)
 from app.chain.message import MessageChain
 from app.command import Command
 from app.runtime.config import global_vars, settings
@@ -44,7 +47,7 @@ from app.application.messaging.agent import (
 from app.application.messaging.router import has_pending_interaction
 from app.runtime.localization import LocaleHelper
 from app.runtime.log import logger
-from app.schemas.types import EventType, MessageChannel
+from app.schemas.types import EventType, NotificationChannel
 
 router = ResponseAPIRouter()
 
@@ -62,9 +65,9 @@ WEB_AGENT_STREAM_COALESCE_MAX_CHARS = 256
 WEB_AGENT_STREAM_HEARTBEAT_SECONDS = 15.0
 WEB_AGENT_STREAM_QUEUE_MAX_SIZE = 64
 _WEB_AGENT_FILE_REGISTRY: dict[str, dict[str, Any]] = {}
-_WEB_AGENT_NOTICE_QUEUES: dict[str, list[Queue[schemas.Notification]]] = {}
-_WEB_AGENT_NOTICE_LOCK = Lock()
-_WEB_AGENT_NOTICE_LISTENER_REGISTERED = False
+_WEB_AGENT_MESSAGE_QUEUES: dict[str, list[Queue[schemas.Message]]] = {}
+_WEB_AGENT_MESSAGE_LOCK = Lock()
+_WEB_AGENT_MESSAGE_LISTENER_REGISTERED = False
 _WEB_AGENT_BACKGROUND_TASKS: set[asyncio.Task] = set()
 
 
@@ -254,7 +257,7 @@ async def test_agent_mcp_server(
         )
 
 
-class _WebAgentStreamingHandler(StreamingHandler):
+class _WebAgentStreamingHandlerMixin:
     """
     Web 前端专用流式处理器，将工具提示和文本统一回调给 SSE。
     """
@@ -342,7 +345,28 @@ class _WebAgentStreamingHandler(StreamingHandler):
         return True
 
 
-class _WebAgentMoviePilotAgent(MoviePilotAgent):
+def _get_web_agent_streaming_handler_type() -> type:
+    """首次构造 Web Agent 时才解析完整流式处理器实现。"""
+    global _WEB_AGENT_STREAMING_HANDLER_TYPE
+    if _WEB_AGENT_STREAMING_HANDLER_TYPE is not None:
+        return _WEB_AGENT_STREAMING_HANDLER_TYPE
+    with _WEB_AGENT_STREAMING_HANDLER_TYPE_LOCK:
+        if _WEB_AGENT_STREAMING_HANDLER_TYPE is None:
+            from app.agent.callback import StreamingHandler
+
+            _WEB_AGENT_STREAMING_HANDLER_TYPE = type(
+                "_RuntimeWebAgentStreamingHandler",
+                (_WebAgentStreamingHandlerMixin, StreamingHandler),
+                {"__module__": __name__},
+            )
+        return _WEB_AGENT_STREAMING_HANDLER_TYPE
+
+
+_WEB_AGENT_STREAMING_HANDLER_TYPE_LOCK = Lock()
+_WEB_AGENT_STREAMING_HANDLER_TYPE: Optional[type] = None
+
+
+class _WebAgentMoviePilotAgentMixin:
     """
     Web 前端专用 Agent，强制使用流式推理。
     """
@@ -350,12 +374,14 @@ class _WebAgentMoviePilotAgent(MoviePilotAgent):
     def __init__(
         self,
         *args: Any,
-        notification_callback: Optional[Callable[[schemas.Notification], None]] = None,
+        message_callback: Optional[Callable[[schemas.Message], None]] = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
-        self._notification_callback = notification_callback
-        self.stream_handler = _WebAgentStreamingHandler(self._emit_output)
+        self._message_callback = message_callback
+        self.stream_handler = _get_web_agent_streaming_handler_type()(
+            self._emit_output
+        )
 
     def _should_stream(self) -> bool:
         """Web 对话实时输出，复用会话执行后台任务时改用非流式广播。"""
@@ -363,16 +389,16 @@ class _WebAgentMoviePilotAgent(MoviePilotAgent):
             return False
         return True
 
-    def set_notification_callback(
+    def set_message_callback(
             self,
-            notification_callback: Optional[Callable[[schemas.Notification], None]],
+            message_callback: Optional[Callable[[schemas.Message], None]],
     ) -> None:
         """
         更新 Web SSE 通知回调，复用 Agent 实例时指向当前请求队列。
 
-        :param notification_callback: 当前请求的 Web 通知回调
+        :param message_callback: 当前请求的 Web 通知回调
         """
-        self._notification_callback = notification_callback
+        self._message_callback = message_callback
 
     def set_output_callback(self, output_callback: Optional[Callable[[str], None]]) -> None:
         """
@@ -381,7 +407,9 @@ class _WebAgentMoviePilotAgent(MoviePilotAgent):
         :param output_callback: 当前请求的输出回调
         """
         self.output_callback = output_callback
-        if output_callback and isinstance(self.stream_handler, _WebAgentStreamingHandler):
+        if output_callback and isinstance(
+            self.stream_handler, _WebAgentStreamingHandlerMixin
+        ):
             self.stream_handler.set_emit_callback(self._emit_output)
 
     async def _is_system_admin_context(self) -> bool:
@@ -400,7 +428,7 @@ class _WebAgentMoviePilotAgent(MoviePilotAgent):
     async def _build_tool_context(self, should_dispatch_reply: bool) -> dict[str, object]:
         """向工具上下文注入 Web SSE 通知回调。"""
         context = await super()._build_tool_context(should_dispatch_reply)
-        context["notification_callback"] = self._notification_callback
+        context["message_callback"] = self._message_callback
         return context
 
     def _handle_stream_text(self, text: str) -> None:
@@ -418,6 +446,30 @@ class _WebAgentMoviePilotAgent(MoviePilotAgent):
             self.output_callback(text)
         except Exception as e:
             logger.debug(f"Web智能体输出回调失败: {e}")
+
+
+def _build_web_agent_type(agent_base_type: type) -> type:
+    """为 Web 通道组合唯一的运行时 Agent 类型。"""
+    return type(
+        "_RuntimeWebAgentMoviePilotAgent",
+        (_WebAgentMoviePilotAgentMixin, agent_base_type),
+        {"__module__": __name__},
+    )
+
+
+_WEB_AGENT_TYPE_LOCK = Lock()
+_WEB_AGENT_TYPE: Optional[type] = None
+
+
+def _get_web_agent_type() -> type:
+    """在真实 Web Agent 调用边界 single-flight 解析运行时类型。"""
+    global _WEB_AGENT_TYPE
+    if _WEB_AGENT_TYPE is not None:
+        return _WEB_AGENT_TYPE
+    with _WEB_AGENT_TYPE_LOCK:
+        if _WEB_AGENT_TYPE is None:
+            _WEB_AGENT_TYPE = _build_web_agent_type(get_moviepilot_agent_type())
+        return _WEB_AGENT_TYPE
 
 
 def _build_web_agent_session_id(user: User, session_id: Optional[str]) -> str:
@@ -582,7 +634,7 @@ def _save_web_agent_display_snapshot(
             channel=(
                 existing_chat.channel
                 if existing_chat and existing_chat.channel
-                else MessageChannel.WebAgent
+                else NotificationChannel.WebAgent
             ),
             source=(
                 existing_chat.source
@@ -982,14 +1034,14 @@ def _merge_web_agent_prompt_with_transcript(prompt: str, transcript: Optional[st
     return "\n".join(merged_parts).strip()
 
 
-def _build_web_agent_choice_event(notification: schemas.Notification) -> Optional[dict]:
+def _build_web_agent_choice_event(message: schemas.Message) -> Optional[dict]:
     """
     将带按钮通知转换为 Web Agent 选择卡片事件。
 
-    :param notification: Agent 工具发出的按钮通知
+    :param message: Agent 工具发出的按钮通知
     :return: 选择卡片事件，按钮为空时返回 None
     """
-    button_rows = normalize_web_agent_button_rows(notification.buttons)
+    button_rows = normalize_web_agent_button_rows(message.buttons)
     buttons = [button for row in button_rows for button in row]
     if not buttons:
         return None
@@ -1003,8 +1055,8 @@ def _build_web_agent_choice_event(notification: schemas.Notification) -> Optiona
         "type": "choice",
         "choice": {
             "id": choice_id or uuid.uuid4().hex,
-            "title": notification.title,
-            "prompt": notification.text or "",
+            "title": message.title,
+            "prompt": message.text or "",
             "buttons": buttons,
             "button_rows": button_rows,
         },
@@ -1062,30 +1114,30 @@ def _resolve_web_agent_choice_payload(callback_data: str, user_id: str) -> Optio
     }
 
 
-def _build_web_agent_notification_events(
-    notification: schemas.Notification,
+def _build_web_agent_message_events(
+    message: schemas.Message,
 ) -> list[dict]:
     """
     将 Agent 工具通知转换为 Web SSE 事件。
 
-    :param notification: 工具产生的通知消息
+    :param message: 工具产生的通知消息
     :return: 前端可直接应用到当前助手消息的事件列表
     """
     events = []
-    choice_event = _build_web_agent_choice_event(notification)
+    choice_event = _build_web_agent_choice_event(message)
     if choice_event:
         events.append(choice_event)
 
     text_parts = [
         str(item).strip()
-        for item in (notification.title, notification.text)
+        for item in (message.title, message.text)
         if str(item or "").strip()
     ]
     if text_parts and not choice_event:
         events.append({"type": "delta", "content": "\n\n".join(text_parts)})
 
-    if notification.image:
-        image_ref = notification.image
+    if message.image:
+        image_ref = message.image
         image_path = Path(image_ref).expanduser()
         attachment = None
         if not image_ref.startswith(("http://", "https://", "data:", "blob:")):
@@ -1096,12 +1148,12 @@ def _build_web_agent_notification_events(
             attachment = _build_web_agent_url_attachment(
                 image_ref,
                 kind="image",
-                name=notification.title or image_path.name or "image",
+                name=message.title or image_path.name or "image",
             )
         events.append({"type": "attachment", "attachment": attachment})
 
-    if notification.voice_path:
-        audio_path = _prepare_web_agent_audio_attachment_path(notification.voice_path)
+    if message.voice_path:
+        audio_path = _prepare_web_agent_audio_attachment_path(message.voice_path)
         attachment = _register_web_agent_file(
             str(audio_path),
             file_name=audio_path.name,
@@ -1111,10 +1163,10 @@ def _build_web_agent_notification_events(
         if attachment:
             events.append({"type": "attachment", "attachment": attachment})
 
-    if notification.file_path:
+    if message.file_path:
         attachment = _register_web_agent_file(
-            notification.file_path,
-            file_name=notification.file_name or Path(notification.file_path).name,
+            message.file_path,
+            file_name=message.file_name or Path(message.file_path).name,
         )
         if attachment:
             events.append({"type": "attachment", "attachment": attachment})
@@ -1131,7 +1183,7 @@ def _build_web_agent_display_message_from_events(
     :param events: 已转换的 WebAgent SSE 事件列表
     :return: 可持久化的助手展示消息
     """
-    message = MoviePilotAgent.build_display_message(
+    message = build_display_message(
         role="assistant",
         status="streaming",
     )
@@ -1162,9 +1214,9 @@ def _has_web_agent_traditional_interaction(user_id: str) -> bool:
     return has_pending_interaction(user_id)
 
 
-def _extract_web_agent_notification_from_event_data(
+def _extract_web_agent_message_from_event_data(
     data: dict,
-) -> Optional[schemas.Notification]:
+) -> Optional[schemas.Message]:
     """
     从 NoticeMessage 事件数据中提取 WebAgent 通知。
 
@@ -1176,133 +1228,133 @@ def _extract_web_agent_notification_from_event_data(
 
     try:
         message = data.get("message")
-        if isinstance(message, schemas.Notification):
-            notification = message
+        if isinstance(message, schemas.Message):
+            message = message
         elif isinstance(message, dict):
-            notification_data = copy.deepcopy(message)
-            notification_data.pop("type", None)
-            notification = schemas.Notification(**notification_data)
+            message_data = copy.deepcopy(message)
+            message_data.pop("type", None)
+            message = schemas.Message(**message_data)
         else:
-            notification_data = copy.deepcopy(data)
-            notification_data.pop("type", None)
-            notification_data.pop("current_time", None)
-            notification = schemas.Notification(**notification_data)
+            message_data = copy.deepcopy(data)
+            message_data.pop("type", None)
+            message_data.pop("current_time", None)
+            message = schemas.Message(**message_data)
     except Exception as err:
         logger.debug(f"解析WebAgent通知事件失败: {err}")
         return None
 
-    channel = notification.channel
-    channel_value = channel.value if isinstance(channel, MessageChannel) else channel
-    if channel_value != MessageChannel.WebAgent.value:
+    channel = message.channel
+    channel_value = channel.value if isinstance(channel, NotificationChannel) else channel
+    if channel_value != NotificationChannel.WebAgent.value:
         return None
-    return notification
+    return message
 
 
-def _is_web_agent_notice_for_user(
-    notification: schemas.Notification,
+def _is_web_agent_message_for_user(
+    message: schemas.Message,
     user_id: str,
 ) -> bool:
     """
     判断 NoticeMessage 事件是否属于当前 WebAgent 用户。
 
-    :param notification: NoticeMessage 中的通知消息
+    :param message: NoticeMessage 中的通知消息
     :param user_id: 当前登录用户 ID
     :return: 可被本次 WebAgent 请求消费时返回 True
     """
     try:
-        target_user = notification.userid
+        target_user = message.userid
         return target_user is None or str(target_user) == str(user_id)
     except Exception:
         return False
 
 
-def _get_web_agent_notice_user_id(notification: schemas.Notification) -> Optional[str]:
+def _get_web_agent_message_user_id(message: schemas.Message) -> Optional[str]:
     """
     从 NoticeMessage 事件中解析 WebAgent 目标用户。
 
-    :param notification: NoticeMessage 中的通知消息
+    :param message: NoticeMessage 中的通知消息
     :return: 用户 ID 字符串，事件不属于 WebAgent 时返回 None
     """
     try:
-        channel = notification.channel
-        channel_value = channel.value if isinstance(channel, MessageChannel) else channel
-        if channel_value != MessageChannel.WebAgent.value:
+        channel = message.channel
+        channel_value = channel.value if isinstance(channel, NotificationChannel) else channel
+        if channel_value != NotificationChannel.WebAgent.value:
             return None
-        user_id = notification.userid
+        user_id = message.userid
         return str(user_id) if user_id is not None else None
     except Exception:
         return None
 
 
-def _dispatch_web_agent_notice_event(event: Event) -> None:
+def _dispatch_web_agent_message_event(event: Event) -> None:
     """
     将 WebAgent NoticeMessage 分发给正在等待的请求队列。
 
     :param event: NoticeMessage 广播事件
     """
     data = event.event_data if isinstance(event.event_data, dict) else {}
-    notification = _extract_web_agent_notification_from_event_data(data)
-    if not notification:
+    message = _extract_web_agent_message_from_event_data(data)
+    if not message:
         return
-    with _WEB_AGENT_NOTICE_LOCK:
-        user_id = _get_web_agent_notice_user_id(notification)
+    with _WEB_AGENT_MESSAGE_LOCK:
+        user_id = _get_web_agent_message_user_id(message)
         if user_id is None:
             queues = [
-                notice_queue
-                for user_queues in _WEB_AGENT_NOTICE_QUEUES.values()
-                for notice_queue in user_queues
+                message_queue
+                for user_queues in _WEB_AGENT_MESSAGE_QUEUES.values()
+                for message_queue in user_queues
             ]
         else:
-            queues = list(_WEB_AGENT_NOTICE_QUEUES.get(user_id) or [])
-    for notice_queue in queues:
-        notice_queue.put(notification)
+            queues = list(_WEB_AGENT_MESSAGE_QUEUES.get(user_id) or [])
+    for message_queue in queues:
+        message_queue.put(message)
 
 
-def _ensure_web_agent_notice_listener() -> None:
+def _ensure_web_agent_message_listener() -> None:
     """
     确保 WebAgent NoticeMessage 全局监听器已注册。
     """
-    global _WEB_AGENT_NOTICE_LISTENER_REGISTERED
-    if _WEB_AGENT_NOTICE_LISTENER_REGISTERED:
+    global _WEB_AGENT_MESSAGE_LISTENER_REGISTERED
+    if _WEB_AGENT_MESSAGE_LISTENER_REGISTERED:
         return
-    with _WEB_AGENT_NOTICE_LOCK:
-        if _WEB_AGENT_NOTICE_LISTENER_REGISTERED:
+    with _WEB_AGENT_MESSAGE_LOCK:
+        if _WEB_AGENT_MESSAGE_LISTENER_REGISTERED:
             return
         EventManager().add_event_listener(
             EventType.NoticeMessage,
-            _dispatch_web_agent_notice_event,
+            _dispatch_web_agent_message_event,
         )
-        _WEB_AGENT_NOTICE_LISTENER_REGISTERED = True
+        _WEB_AGENT_MESSAGE_LISTENER_REGISTERED = True
 
 
-def _attach_web_agent_notice_queue(user_id: str, notice_queue: Queue[schemas.Notification]) -> None:
+def _attach_web_agent_message_queue(user_id: str, message_queue: Queue[schemas.Message]) -> None:
     """
     为当前 WebAgent 请求挂载通知收集队列。
 
     :param user_id: 当前用户 ID
-    :param notice_queue: 用于接收通知事件的队列
+    :param message_queue: 用于接收通知事件的队列
     """
-    _ensure_web_agent_notice_listener()
-    with _WEB_AGENT_NOTICE_LOCK:
-        _WEB_AGENT_NOTICE_QUEUES.setdefault(str(user_id), []).append(notice_queue)
+    _ensure_web_agent_message_listener()
+    with _WEB_AGENT_MESSAGE_LOCK:
+        _WEB_AGENT_MESSAGE_QUEUES.setdefault(str(user_id), []).append(message_queue)
 
 
-def _detach_web_agent_notice_queue(user_id: str, notice_queue: Queue[schemas.Notification]) -> None:
+def _detach_web_agent_message_queue(user_id: str, message_queue: Queue[schemas.Message]) -> None:
     """
     移除当前 WebAgent 请求的通知收集队列。
 
     :param user_id: 当前用户 ID
-    :param notice_queue: 需要移除的队列
+    :param message_queue: 需要移除的队列
     """
-    with _WEB_AGENT_NOTICE_LOCK:
-        queues = _WEB_AGENT_NOTICE_QUEUES.get(str(user_id))
+    with _WEB_AGENT_MESSAGE_LOCK:
+        queues = _WEB_AGENT_MESSAGE_QUEUES.get(str(user_id))
         if not queues:
             return
-        _WEB_AGENT_NOTICE_QUEUES[str(user_id)] = [
-            item for item in queues if item is not notice_queue
+        _WEB_AGENT_MESSAGE_QUEUES[str(user_id)] = [
+            item for item in queues if item is not message_queue
         ]
-        if not _WEB_AGENT_NOTICE_QUEUES[str(user_id)]:
-            _WEB_AGENT_NOTICE_QUEUES.pop(str(user_id), None)
+        if not _WEB_AGENT_MESSAGE_QUEUES[str(user_id)]:
+            _WEB_AGENT_MESSAGE_QUEUES.pop(str(user_id), None)
 
 
 def _build_web_agent_command_items() -> list[dict]:
@@ -1387,16 +1439,16 @@ async def _collect_web_agent_traditional_events(
     :param original_chat_id: WebAgent 原聊天 ID
     :return: 可直接发送给前端的 SSE 事件列表
     """
-    notice_queue: Queue[schemas.Notification] = Queue()
+    message_queue: Queue[schemas.Message] = Queue()
     edit_queue: Queue[dict] = Queue()
     user_id = str(current_user.id)
 
-    _attach_web_agent_notice_queue(user_id, notice_queue)
+    _attach_web_agent_message_queue(user_id, message_queue)
     attach_web_agent_edit_queue(user_id, edit_queue)
     try:
         await run_in_threadpool(
             MessageChain().handle_message,
-            channel=MessageChannel.WebAgent,
+            channel=NotificationChannel.WebAgent,
             source=WEB_AGENT_SOURCE,
             userid=user_id,
             username=current_user.name or user_id,
@@ -1424,19 +1476,19 @@ async def _collect_web_agent_traditional_events(
             wait_until = idle_deadline or deadline
             timeout = max(0.05, min(0.25, wait_until - now, deadline - now))
             try:
-                notification = await asyncio.to_thread(notice_queue.get, True, timeout)
+                message = await asyncio.to_thread(message_queue.get, True, timeout)
             except Empty:
                 if idle_deadline and time.monotonic() >= idle_deadline:
                     break
                 continue
 
-            if not _is_web_agent_notice_for_user(notification, user_id):
+            if not _is_web_agent_message_for_user(message, user_id):
                 continue
-            events.extend(_build_web_agent_notification_events(notification))
+            events.extend(_build_web_agent_message_events(message))
             idle_deadline = time.monotonic() + WEB_AGENT_TRADITIONAL_IDLE_TIMEOUT_SECONDS
         return events
     finally:
-        _detach_web_agent_notice_queue(user_id, notice_queue)
+        _detach_web_agent_message_queue(user_id, message_queue)
         detach_web_agent_edit_queue(user_id, edit_queue)
 
 
@@ -1725,7 +1777,8 @@ async def get_agent_chat_session(
         if server_session_id != session_id:
             chat = await _get_accessible_agent_chat(oper, server_session_id, current_user)
     if not chat:
-        if agent_manager.is_session_busy(server_session_id):
+        manager = get_running_agent_manager()
+        if manager and manager.is_session_busy(server_session_id):
             return schemas.Response(
                 success=True,
                 data={
@@ -1737,7 +1790,10 @@ async def get_agent_chat_session(
             )
         return schemas.Response(success=False, message="会话不存在或无权访问")
     data = AgentChatOper.to_detail(chat)
-    data["is_processing"] = agent_manager.is_session_busy(chat.session_id)
+    manager = get_running_agent_manager()
+    data["is_processing"] = bool(
+        manager and manager.is_session_busy(chat.session_id)
+    )
     return schemas.Response(success=True, data=data)
 
 
@@ -1836,7 +1892,8 @@ async def stop_web_agent_session_task(
     if chat and not _can_access_agent_chat(chat, current_user):
         return schemas.Response(success=False, message="会话不存在或无权访问")
 
-    stopped = await agent_manager.stop_current_task(server_session_id)
+    manager = get_running_agent_manager()
+    stopped = await manager.stop_current_task(server_session_id) if manager else False
     return schemas.Response(
         success=True,
         data={"stopped": stopped},
@@ -1881,10 +1938,11 @@ async def web_agent_stream(
     )
     is_secret_confirmation_control = (
         is_secret_confirmation_candidate
-        and agent_manager.matches_secret_confirmation(
+        and (manager := get_running_agent_manager()) is not None
+        and manager.matches_secret_confirmation(
             session_id,
             str(current_user.id),
-            channel=MessageChannel.WebAgent.value,
+            channel=NotificationChannel.WebAgent.value,
             source=WEB_AGENT_SOURCE,
         )
     )
@@ -1943,7 +2001,7 @@ async def web_agent_stream(
         display_messages = []
         if payload.echo_user:
             display_messages.append(
-                MoviePilotAgent.build_display_message(
+                build_display_message(
                     role="user",
                     content=display_prompt or prompt,
                     attachments=user_attachments,
@@ -2038,6 +2096,19 @@ async def web_agent_stream(
             media_type="text/event-stream",
         )
 
+    manager = get_running_agent_manager()
+    if manager is None:
+        return StreamingResponse(
+            iter([
+                _build_web_agent_sse(
+                    "error",
+                    {"message": "智能助手服务尚未就绪，请稍后重试。"},
+                    locale=locale,
+                )
+            ]),
+            media_type="text/event-stream",
+        )
+
     transcript = _transcribe_web_agent_audio_refs(payload.audio_refs or [])
     prompt = _merge_web_agent_prompt_with_transcript(prompt, transcript)
     display_prompt = _merge_web_agent_prompt_with_transcript(display_prompt, transcript)
@@ -2077,7 +2148,7 @@ async def web_agent_stream(
     )
     display_messages = []
     if payload.echo_user and not is_secret_confirmation_control:
-        user_display_message = MoviePilotAgent.build_display_message(
+        user_display_message = build_display_message(
             role="user",
             content=display_prompt or prompt,
             attachments=user_attachments,
@@ -2085,7 +2156,7 @@ async def web_agent_stream(
         if payload.choice_selection:
             user_display_message["choice_selection"] = payload.choice_selection
         display_messages.append(user_display_message)
-    assistant_display_message = MoviePilotAgent.build_display_message(
+    assistant_display_message = build_display_message(
         role="assistant",
         status="streaming",
     )
@@ -2099,11 +2170,11 @@ async def web_agent_stream(
             _apply_web_agent_display_event(item, assistant_display_message)
             event_publisher.publish(item)
 
-    def notification_callback(notification: schemas.Notification) -> None:
+    def message_callback(message: schemas.Message) -> None:
         """
         接收 Agent 工具主动发送的 Web 通知。
         """
-        for item in _build_web_agent_notification_events(notification):
+        for item in _build_web_agent_message_events(message):
             _apply_web_agent_display_event(item, assistant_display_message)
             event_publisher.publish(item)
 
@@ -2132,14 +2203,17 @@ async def web_agent_stream(
         async def run_agent() -> None:
             """后台执行 Agent，并将结果写入事件队列。"""
             try:
-                await agent_manager.process_message(
+                runtime_manager = get_running_agent_manager()
+                if runtime_manager is None:
+                    raise RuntimeError("智能助手服务尚未就绪，请稍后重试。")
+                await runtime_manager.process_message(
                     session_id=session_id,
                     user_id=str(current_user.id),
                     message=prompt,
                     images=payload.images or [],
                     files=files or None,
                     has_audio_input=has_audio_input,
-                    channel=MessageChannel.WebAgent.value,
+                    channel=NotificationChannel.WebAgent.value,
                     source=WEB_AGENT_SOURCE,
                     username=current_user.name,
                     reply_mode=ReplyMode.CAPTURE_ONLY,
@@ -2150,10 +2224,13 @@ async def web_agent_stream(
                         if protected_transport_supported
                         else None
                     ),
-                    notification_callback=notification_callback,
-                    agent_factory=_WebAgentMoviePilotAgent,
+                    message_callback=message_callback,
+                    agent_factory=_get_web_agent_type(),
                     wait_for_completion=True,
                 )
+            except asyncio.CancelledError:
+                # 显式停止会话沿用正常终止语义；服务关闭会由 manager 的稳定异常分支处理。
+                pass
             except Exception as err:
                 logger.error(f"Web智能助手执行失败: {str(err)}")
                 error_event = {

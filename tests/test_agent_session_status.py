@@ -10,7 +10,7 @@ from langchain_core.messages import AIMessage
 from app.agent.middleware.usage import UsageMiddleware
 from app.agent import AgentManager
 from app.chain.message import MessageChain
-from app.schemas.types import MessageChannel
+from app.schemas.types import NotificationChannel
 
 
 class TestAgentSessionStatus(unittest.TestCase):
@@ -94,13 +94,13 @@ class TestAgentSessionStatus(unittest.TestCase):
 
         with (
             patch(
-                "app.chain.message.agent_manager.get_session_status",
-                return_value=status,
+                "app.chain.message.get_running_agent_manager",
+                return_value=SimpleNamespace(get_session_status=lambda **_: status),
             ),
             patch.object(chain, "post_message") as post_message,
         ):
             chain.remote_session_status(
-                channel=MessageChannel.Telegram,
+                channel=NotificationChannel.Telegram,
                 userid="10001",
                 source="telegram-test",
             )
@@ -121,7 +121,7 @@ class TestAgentSessionStatus(unittest.TestCase):
 
         with patch.object(chain, "post_message") as post_message:
             chain.remote_session_status(
-                channel=MessageChannel.Telegram,
+                channel=NotificationChannel.Telegram,
                 userid="10001",
                 source="telegram-test",
             )

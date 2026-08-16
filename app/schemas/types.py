@@ -22,6 +22,13 @@ MUSIC_SUBSCRIBABLE_TYPES = frozenset({
     MUSIC_ENTITY_ALBUM,
 })
 
+
+class ReplyMode(str, Enum):
+    """Agent 最终回复的投递策略，供编排层与调用层共享。"""
+
+    DISPATCH = "dispatch"
+    CAPTURE_ONLY = "capture_only"
+
 # ListenBrainz 音乐探索能力的参数取值域契约，供入口层校验、链层与模块实现共用
 # ListenBrainz 全站统计支持的周期，取值与官方统计页面完全一致
 LISTENBRAINZ_CHART_RANGES = (
@@ -436,7 +443,7 @@ class MediaImageType(Enum):
 
 
 # 消息类型
-class NotificationType(Enum):
+class MessageType(Enum):
     # 资源下载
     Download = "资源下载"
     # 整理入库
@@ -472,10 +479,10 @@ class ContentType(str, Enum):
     DownloadAdded = "downloadAdded"
 
 
-# 消息渠道
-class MessageChannel(Enum):
+# 通知渠道
+class NotificationChannel(Enum):
     """
-    消息渠道
+    通知渠道
     """
     Wechat = "微信"
     Feishu = "飞书"

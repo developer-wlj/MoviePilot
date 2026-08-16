@@ -5,6 +5,8 @@ import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+from app.agent.tools.catalog import ToolCatalogSnapshot
+from app.agent.tools.factory import MoviePilotToolFactory
 from app.agent.tools.impl.edit_file import EditFileTool
 from app.agent.tools.impl.list_directory import ListDirectoryTool
 from app.agent.tools.impl.query_downloaders import QueryDownloadersTool
@@ -17,7 +19,7 @@ from app.agent import MoviePilotAgent
 from app.runtime.config import settings
 from app.modules.feishu import FeishuModule
 from app.modules.telegram import TelegramModule
-from app.schemas.types import MessageChannel
+from app.schemas.types import NotificationChannel
 
 
 # 渠道模块在导入时注册管理员解析器，权限回查测试需显式加载对应模块。
@@ -28,10 +30,16 @@ def test_non_admin_manager_exposes_resource_flow_helper_tools():
     """普通用户应能看到搜索、订阅、下载流程所需的辅助工具。"""
     site_tool = QuerySitesTool(session_id="session-1", user_id="10001")
     downloader_tool = QueryDownloadersTool(session_id="session-1", user_id="10001")
+    catalog = ToolCatalogSnapshot.from_tools(
+        [site_tool, downloader_tool],
+        plugin_revision=0,
+        factory_revision="test",
+    )
 
-    with patch(
-        "app.agent.tools.manager.MoviePilotToolFactory.create_tools",
-        return_value=[site_tool, downloader_tool],
+    with patch.object(
+        MoviePilotToolFactory,
+        "create_catalog",
+        return_value=catalog,
     ):
         manager = MoviePilotToolsManager(is_admin=False)
 
@@ -48,10 +56,14 @@ def test_non_admin_manager_exposes_restricted_file_tools():
         EditFileTool(session_id="session-1", user_id="10001"),
         ListDirectoryTool(session_id="session-1", user_id="10001"),
     ]
+    catalog = ToolCatalogSnapshot.from_tools(
+        tools, plugin_revision=0, factory_revision="test"
+    )
 
-    with patch(
-        "app.agent.tools.manager.MoviePilotToolFactory.create_tools",
-        return_value=tools,
+    with patch.object(
+        MoviePilotToolFactory,
+        "create_catalog",
+        return_value=catalog,
     ):
         manager = MoviePilotToolsManager(is_admin=False)
 
@@ -350,7 +362,7 @@ def test_channel_agent_admin_user_id_does_not_bypass_user_lookup():
     agent = MoviePilotAgent(
         session_id="session-1",
         user_id="admin",
-        channel=MessageChannel.Telegram.value,
+        channel=NotificationChannel.Telegram.value,
         source="telegram-main",
         username="normal-user",
     )
@@ -371,7 +383,7 @@ def test_channel_agent_rejects_local_admin_username_without_trusted_principal():
     agent = MoviePilotAgent(
         session_id="session-1",
         user_id="10002",
-        channel=MessageChannel.Telegram.value,
+        channel=NotificationChannel.Telegram.value,
         source="telegram-main",
         username="admin",
     )
@@ -394,7 +406,7 @@ def test_channel_agent_accepts_trusted_admin_principal_without_local_user():
     agent = MoviePilotAgent(
         session_id="session-1",
         user_id="10001",
-        channel=MessageChannel.Telegram.value,
+        channel=NotificationChannel.Telegram.value,
         source="telegram-main",
         username="renamed-user",
     )
@@ -413,7 +425,7 @@ def test_tool_explicit_non_admin_context_does_not_fallback_to_channel_lookup():
     """Agent 已判定为非管理员时，工具不得通过旧权限查询重新授权。"""
     tool = QuerySitesTool(session_id="session-1", user_id="10002")
     tool.set_message_attr(
-        channel=MessageChannel.Telegram.value,
+        channel=NotificationChannel.Telegram.value,
         source="telegram-main",
         username="admin",
     )
@@ -434,7 +446,7 @@ def test_channel_primary_id_defaults_to_admin_without_admin_list():
     """渠道主ID未配置到管理员名单时仍默认为管理员。"""
     tool = QuerySitesTool(session_id="session-1", user_id="10001")
     tool.set_message_attr(
-        channel=MessageChannel.Telegram.value,
+        channel=NotificationChannel.Telegram.value,
         source="telegram-main",
         username="owner",
     )
@@ -457,7 +469,7 @@ def test_channel_primary_id_mismatch_remains_non_admin():
     """非主ID用户且不在管理员名单时不能获得管理员权限。"""
     tool = QuerySitesTool(session_id="session-1", user_id="10002")
     tool.set_message_attr(
-        channel=MessageChannel.Telegram.value,
+        channel=NotificationChannel.Telegram.value,
         source="telegram-main",
         username="other",
     )
@@ -480,7 +492,7 @@ def test_feishu_primary_open_id_defaults_to_admin():
     """飞书渠道主ID使用默认接收人 OPEN_ID 判断管理员身份。"""
     tool = QuerySitesTool(session_id="session-1", user_id="ou_owner")
     tool.set_message_attr(
-        channel=MessageChannel.Feishu.value,
+        channel=NotificationChannel.Feishu.value,
         source="feishu-main",
         username="owner",
     )
@@ -503,7 +515,7 @@ def test_channel_primary_id_still_prefers_admin_list():
     """管理员名单命中优先于主ID兜底。"""
     tool = QuerySitesTool(session_id="session-1", user_id="10001")
     tool.set_message_attr(
-        channel=MessageChannel.Telegram.value,
+        channel=NotificationChannel.Telegram.value,
         source="telegram-main",
         username="owner",
     )

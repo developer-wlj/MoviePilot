@@ -12,7 +12,7 @@ sys.modules.setdefault("psutil", ModuleType("psutil"))
 
 from app.chain.message import MessageChain
 from app.application.messaging.message import MessageQueueManager
-from app.schemas import Notification
+from app.schemas import Message
 from app.foundation.identity import (
     SYSTEM_INTERNAL_USER_ID,
     is_internal_user_id,
@@ -29,14 +29,14 @@ class TestSystemNotificationDispatch(unittest.TestCase):
 
     def test_post_message_normalizes_internal_userid_before_queueing(self):
         chain = MessageChain()
-        message = Notification(
+        message = Message(
             userid=SYSTEM_INTERNAL_USER_ID,
             username="admin",
             title="后台报告",
             text="任务完成",
         )
 
-        with patch("app.chain.MessageTemplateHelper.render", return_value=message), patch.object(
+        with patch("app.chain._messaging.MessageTemplateHelper.render", return_value=message), patch.object(
             chain.messagehelper, "put"
         ), patch.object(chain.messageoper, "add"), patch.object(
             chain.eventmanager, "send_event"
@@ -54,7 +54,7 @@ class TestSystemNotificationDispatch(unittest.TestCase):
 
     def test_send_direct_message_normalizes_internal_userid(self):
         chain = MessageChain()
-        message = Notification(
+        message = Message(
             userid=SYSTEM_INTERNAL_USER_ID,
             username="admin",
             title="后台报告",

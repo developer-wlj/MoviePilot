@@ -5,12 +5,11 @@ from abc import ABCMeta, abstractmethod
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from pathlib import Path
-from typing import Any, Callable, ClassVar, Optional
+from typing import TYPE_CHECKING, Any, Callable, ClassVar, Optional, Protocol
 
 from langchain_core.tools import BaseTool
 from pydantic import PrivateAttr
 
-from app.agent.callback import StreamingHandler
 from app.agent.policy.sanitizer import (
     summarize_error,
     summarize_input,
@@ -22,8 +21,56 @@ from app.runtime.config import settings
 from app.application.messaging.agent import matches_channel_admin
 from app.runtime.extensions.service_registry import ServiceConfigHelper
 from app.runtime.log import logger
-from app.schemas import Notification
-from app.schemas.types import MessageChannel, NotificationType
+from app.schemas import Message
+from app.schemas.types import NotificationChannel, MessageType
+
+if TYPE_CHECKING:
+    from app.agent.callback import StreamingHandler as _StreamingHandlerProtocol
+else:
+    class _StreamingHandlerProtocol(Protocol):
+        """工具执行仅依赖的流式缓冲合同。"""
+
+        @property
+        def is_streaming(self) -> bool:
+            """是否正在收集流式输出。"""
+            ...
+
+        @property
+        def is_auto_flushing(self) -> bool:
+            """是否由渠道编辑能力自动刷新缓冲。"""
+            ...
+
+        @property
+        def last_buffer_char(self) -> str:
+            """返回缓冲区最后一个字符。"""
+            ...
+
+        def emit(self, token: str) -> str:
+            """追加流式文本并返回实际追加内容。"""
+            ...
+
+        async def take(self) -> str:
+            """取出并清空当前缓冲内容。"""
+            ...
+
+        def record_tool_call(
+            self,
+            tool_name: str,
+            tool_message: Optional[str] = None,
+            tool_kwargs: Optional[dict[str, Any]] = None,
+        ) -> None:
+            """记录一次待汇总的工具调用。"""
+            ...
+
+
+
+def __getattr__(name: str) -> Any:
+    """显式访问历史 StreamingHandler 符号时返回 canonical 实现。"""
+    if name == "StreamingHandler":
+        from app.agent.callback import StreamingHandler
+
+        return StreamingHandler
+    raise AttributeError(f"module 'app.agent.tools.base' has no attribute {name!r}")
 
 
 class ToolChain(ChainBase):
@@ -206,7 +253,7 @@ class MoviePilotTool(BaseTool, metaclass=ABCMeta):
     _channel: Optional[str] = PrivateAttr(default=None)
     _source: Optional[str] = PrivateAttr(default=None)
     _username: Optional[str] = PrivateAttr(default=None)
-    _stream_handler: Optional[StreamingHandler] = PrivateAttr(default=None)
+    _stream_handler: Optional[_StreamingHandlerProtocol] = PrivateAttr(default=None)
     _require_admin: bool = PrivateAttr(default=False)
     _agent_context: dict = PrivateAttr(default_factory=dict)
 
@@ -387,7 +434,9 @@ class MoviePilotTool(BaseTool, metaclass=ABCMeta):
         self._source = source
         self._username = username
 
-    def set_stream_handler(self, stream_handler: StreamingHandler):
+    def set_stream_handler(
+        self, stream_handler: Optional[_StreamingHandlerProtocol]
+    ) -> None:
         """
         设置回调处理器
         """
@@ -563,7 +612,7 @@ class MoviePilotTool(BaseTool, metaclass=ABCMeta):
         user_id_str = str(self._user_id) if self._user_id else None
 
         try:
-            channel = MessageChannel(self._channel)
+            channel = NotificationChannel(self._channel)
         except ValueError:
             return False
 
@@ -581,47 +630,47 @@ class MoviePilotTool(BaseTool, metaclass=ABCMeta):
 
         return False
 
-    async def send_notification_message(self, notification: Notification) -> None:
+    async def send_message(self, message: Message) -> None:
         """
-        发送工具通知消息。
+        发送工具消息。
 
         WebAgent 渠道没有后端模块实例，前端流式面板通过 Agent 上下文中的
-        回调直接接收通知；无渠道的后台任务清空渠道侧定位信息后交由消息链广播，
+        回调直接接收消息；无渠道的后台任务清空渠道侧定位信息后交由消息链广播，
         其它渠道继续走统一消息链。
         """
-        callback = self._agent_context.get("notification_callback")
+        callback = self._agent_context.get("message_callback")
         if (
-            self._channel == MessageChannel.WebAgent.value
+            self._channel == NotificationChannel.WebAgent.value
             and callable(callback)
         ):
-            callback(notification)
+            callback(message)
             return
 
         if not self._channel or not self._source:
-            notification = notification.model_copy(
+            message = message.model_copy(
                 update={
                     "channel": None,
                     "source": None,
                     "userid": None,
-                    "username": notification.username
+                    "username": message.username
                     or self._username
                     or settings.SUPERUSER,
                     "original_message_id": None,
                     "original_chat_id": None,
                 }
             )
-        elif not notification.original_chat_id:
+        elif not message.original_chat_id:
             # 工具回调消息默认回填当前会话的原会话 ID，
             # 保证群聊 @ 机器人时按钮选择、消息发送等交互消息回复到原群，而不是私聊窗口。
             original_chat_id = str(
                 self._agent_context.get("original_chat_id") or ""
             ).strip() or None
             if original_chat_id:
-                notification = notification.model_copy(
+                message = message.model_copy(
                     update={"original_chat_id": original_chat_id}
                 )
 
-        await ToolChain().async_post_message(notification)
+        await ToolChain().async_post_message(message)
 
     async def send_tool_message(
         self, message: str, title: str = "", image: Optional[str] = None
@@ -629,11 +678,11 @@ class MoviePilotTool(BaseTool, metaclass=ABCMeta):
         """
         发送工具消息
         """
-        await self.send_notification_message(
-            Notification(
+        await self.send_message(
+            Message(
                 channel=self._channel,
                 source=self._source,
-                mtype=NotificationType.Agent,
+                mtype=MessageType.Agent,
                 userid=self._user_id,
                 username=self._username,
                 title=title,
@@ -642,3 +691,10 @@ class MoviePilotTool(BaseTool, metaclass=ABCMeta):
                 save_history=False,
             )
         )
+
+
+# 普通导入保持 callback 冷态；显式导入或历史星号导入仍解析真实类。
+__all__ = sorted(
+    {name for name in globals() if not name.startswith("_")}
+    | {"StreamingHandler"}
+)

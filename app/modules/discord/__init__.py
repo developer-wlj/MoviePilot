@@ -1,27 +1,24 @@
-import copy
 import json
 from typing import Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import quote, unquote
 
 from app.domain.context import MediaInfo, Context
-from app.runtime.events import eventmanager
 from app.application.messaging.agent import (
     matches_channel_admin,
     register_channel_admin_resolver,
     resolve_config_principal_ids,
 )
 from app.runtime.log import logger
-from app.modules import _ModuleBase, _MessageBase
+from app.modules._base import _MessageChannelModuleBase
 from app.schemas import (
     CommandRegisterEventData,
-    CommingMessage,
-    MessageChannel,
+    IncomingMessage,
+    NotificationChannel,
     MessageResponse,
-    Notification,
+    Message,
 )
-from app.schemas.types import ChainEventType, ModuleType
+from app.schemas.types import ModuleType
 from app.adapters.network.http import RequestUtils
-from app.foundation.collections import DictUtils
 
 try:
     from app.modules.discord.discord import Discord
@@ -31,12 +28,14 @@ except Exception as err:  # ImportError or other load issues
 
 
 register_channel_admin_resolver(
-    MessageChannel.Discord,
+    NotificationChannel.Discord,
     lambda config: resolve_config_principal_ids(config, "DISCORD_ADMINS"),
 )
 
 
-class DiscordModule(_ModuleBase, _MessageBase[Discord]):
+class DiscordModule(_MessageChannelModuleBase[Discord]):
+    # 管理员配置键，与渠道 resolver 保持一致
+    _admin_config_key = "DISCORD_ADMINS"
     _IMAGE_SUFFIXES = (
         ".png",
         ".jpg",
@@ -72,7 +71,7 @@ class DiscordModule(_ModuleBase, _MessageBase[Discord]):
         super().init_service(
             service_name=Discord.__name__.lower(), service_type=Discord
         )
-        self._channel = MessageChannel.Discord
+        self._channel = NotificationChannel.Discord
 
     @staticmethod
     def get_name() -> str:
@@ -86,11 +85,11 @@ class DiscordModule(_ModuleBase, _MessageBase[Discord]):
         return ModuleType.Notification
 
     @staticmethod
-    def get_subtype() -> MessageChannel:
+    def get_subtype() -> NotificationChannel:
         """
         获取模块子类型
         """
-        return MessageChannel.Discord
+        return NotificationChannel.Discord
 
     @staticmethod
     def get_priority() -> int:
@@ -107,50 +106,8 @@ class DiscordModule(_ModuleBase, _MessageBase[Discord]):
             except Exception as err:
                 logger.error(f"停止Discord模块实例失败：{err}")
 
-    def test(self) -> Optional[Tuple[bool, str]]:
-        """
-        测试模块连接性
-        """
-        if not self.get_instances():
-            return None
-        for name, client in self.get_instances().items():
-            state = client.get_state()
-            if not state:
-                return False, f"Discord {name} Bot 未就绪"
-        return True, ""
-
     def init_setting(self) -> Tuple[str, Union[str, bool]]:
         pass
-
-    @staticmethod
-    def _get_admins(config: Optional[dict]) -> List[str]:
-        """
-        解析 Discord 管理员配置，兼容逗号分隔和首尾空白。
-        """
-        return [
-            admin.strip()
-            for admin in str((config or {}).get("DISCORD_ADMINS") or "").split(",")
-            if admin.strip()
-        ]
-
-    @classmethod
-    def _should_reject_admin_command(
-            cls,
-            config: Optional[dict],
-            *user_ids: Optional[Union[str, int]],
-    ) -> bool:
-        """
-        判断 Discord 命令或命令型按钮回调是否应因非管理员身份被拒绝。
-        """
-        admins = cls._get_admins(config)
-        if not admins:
-            return False
-        candidates = [
-            str(user_id).strip()
-            for user_id in user_ids
-            if user_id is not None and str(user_id).strip()
-        ]
-        return not any(candidate in admins for candidate in candidates)
 
     @staticmethod
     def _send_admin_denied(
@@ -170,7 +127,7 @@ class DiscordModule(_ModuleBase, _MessageBase[Discord]):
 
     def message_parser(
         self, source: str, body: Any, form: Any, args: Any
-    ) -> Optional[CommingMessage]:
+    ) -> Optional[IncomingMessage]:
         """
         解析消息内容，返回字典，注意以下约定值：
         userid: 用户ID
@@ -213,13 +170,13 @@ class DiscordModule(_ModuleBase, _MessageBase[Discord]):
                     f"收到来自 {client_config.name} 的 Discord 按钮回调："
                     f"userid={userid}, username={username}, callback_data={callback_data}"
                 )
-                return CommingMessage(
-                    channel=MessageChannel.Discord,
+                return IncomingMessage(
+                    channel=NotificationChannel.Discord,
                     source=client_config.name,
                     userid=userid,
                     username=username,
                     is_channel_admin=matches_channel_admin(
-                        MessageChannel.Discord, client_config.config, userid
+                        NotificationChannel.Discord, client_config.config, userid
                     ),
                     text=f"CALLBACK:{callback_data}",
                     is_callback=True,
@@ -247,13 +204,13 @@ class DiscordModule(_ModuleBase, _MessageBase[Discord]):
                     f"images={len(images) if images else 0}, audios={len(audio_refs) if audio_refs else 0}, "
                     f"files={len(files) if files else 0}"
                 )
-                return CommingMessage(
-                    channel=MessageChannel.Discord,
+                return IncomingMessage(
+                    channel=NotificationChannel.Discord,
                     source=client_config.name,
                     userid=userid,
                     username=username,
                     is_channel_admin=matches_channel_admin(
-                        MessageChannel.Discord, client_config.config, userid
+                        NotificationChannel.Discord, client_config.config, userid
                     ),
                     text=text,
                     chat_id=str(chat_id) if chat_id else None,
@@ -266,7 +223,7 @@ class DiscordModule(_ModuleBase, _MessageBase[Discord]):
     @staticmethod
     def _extract_images(
         msg_json: dict,
-    ) -> Optional[List[CommingMessage.MessageImage]]:
+    ) -> Optional[List[IncomingMessage.MessageImage]]:
         """
         从Discord消息中提取图片URL
         """
@@ -286,7 +243,7 @@ class DiscordModule(_ModuleBase, _MessageBase[Discord]):
                 or filename.endswith(DiscordModule._IMAGE_SUFFIXES)
             ):
                 images.append(
-                    CommingMessage.MessageImage(
+                    IncomingMessage.MessageImage(
                         ref=url,
                         name=attachment.get("filename"),
                         mime_type=attachment.get("content_type"),
@@ -317,7 +274,7 @@ class DiscordModule(_ModuleBase, _MessageBase[Discord]):
     @classmethod
     def _extract_files(
         cls, msg_json: dict
-    ) -> Optional[List[CommingMessage.MessageAttachment]]:
+    ) -> Optional[List[IncomingMessage.MessageAttachment]]:
         """
         从 Discord 消息中提取非图片/非音频文件。
         """
@@ -343,7 +300,7 @@ class DiscordModule(_ModuleBase, _MessageBase[Discord]):
             if is_image or is_audio:
                 continue
             files.append(
-                CommingMessage.MessageAttachment(
+                IncomingMessage.MessageAttachment(
                     ref=f"discord://file/{quote(url, safe='')}",
                     name=attachment.get("filename"),
                     mime_type=attachment.get("content_type"),
@@ -366,7 +323,7 @@ class DiscordModule(_ModuleBase, _MessageBase[Discord]):
             return resp.content
         return None
 
-    def post_message(self, message: Notification, **kwargs) -> None:
+    def post_message(self, message: Message, **kwargs) -> None:
         """
         发送通知消息
         :param message: 消息通知对象
@@ -441,7 +398,7 @@ class DiscordModule(_ModuleBase, _MessageBase[Discord]):
                 )
 
     def post_medias_message(
-        self, message: Notification, medias: List[MediaInfo]
+        self, message: Message, medias: List[MediaInfo]
     ) -> None:
         """
         发送媒体信息选择列表
@@ -464,7 +421,7 @@ class DiscordModule(_ModuleBase, _MessageBase[Discord]):
                 )
 
     def post_torrents_message(
-        self, message: Notification, torrents: List[Context]
+        self, message: Message, torrents: List[Context]
     ) -> None:
         """
         发送种子信息选择列表
@@ -488,7 +445,7 @@ class DiscordModule(_ModuleBase, _MessageBase[Discord]):
 
     def delete_message(
         self,
-        channel: MessageChannel,
+        channel: NotificationChannel,
         source: str,
         message_id: str,
         chat_id: Optional[str] = None,
@@ -516,7 +473,7 @@ class DiscordModule(_ModuleBase, _MessageBase[Discord]):
 
     def edit_message(
         self,
-        channel: MessageChannel,
+        channel: NotificationChannel,
         source: str,
         message_id: Union[str, int],
         chat_id: Union[str, int],
@@ -556,57 +513,9 @@ class DiscordModule(_ModuleBase, _MessageBase[Discord]):
                     return True
         return False
 
-    def register_commands(self, commands: Dict[str, dict]) -> None:
-        """
-        注册命令，实现这个函数接收系统可用的命令菜单。
-
-        :param commands: 命令字典
-        """
-        for client_config in self.get_configs().values():
-            client = self.get_instance(client_config.name)
-            if not client:
-                continue
-
-            scoped_commands = copy.deepcopy(commands)
-            event = eventmanager.send_event(
-                ChainEventType.CommandRegister,
-                CommandRegisterEventData(
-                    commands=scoped_commands,
-                    origin="Discord",
-                    service=client_config.name,
-                ),
-            )
-
-            if event and event.event_data:
-                event_data: CommandRegisterEventData = event.event_data
-                if event_data.cancel:
-                    client.delete_commands()
-                    logger.debug(
-                        f"Command registration for {client_config.name} canceled by event: {event_data.source}"
-                    )
-                    continue
-                scoped_commands = event_data.commands or {}
-                if not scoped_commands:
-                    logger.debug("Filtered commands are empty, skipping registration.")
-                    client.delete_commands()
-
-            filtered_scoped_commands = DictUtils.filter_keys_to_subset(
-                scoped_commands,
-                commands,
-            )
-            if not filtered_scoped_commands:
-                logger.debug("Filtered commands are empty, skipping registration.")
-                client.delete_commands()
-                continue
-            if filtered_scoped_commands != commands:
-                logger.debug(
-                    f"Command set has changed, Updating new commands: {filtered_scoped_commands}"
-                )
-            client.register_commands(filtered_scoped_commands)
-
     def mark_message_processing_started(
         self,
-        channel: MessageChannel,
+        channel: NotificationChannel,
         source: str,
         userid: Optional[Union[str, int]] = None,
         message_id: Optional[Union[str, int]] = None,
@@ -642,7 +551,7 @@ class DiscordModule(_ModuleBase, _MessageBase[Discord]):
 
     def mark_message_processing_finished(
         self,
-        channel: MessageChannel,
+        channel: NotificationChannel,
         source: str,
         userid: Optional[Union[str, int]] = None,
         message_id: Optional[Union[str, int]] = None,
@@ -667,7 +576,7 @@ class DiscordModule(_ModuleBase, _MessageBase[Discord]):
             chat_id=str(target_chat_id) if target_chat_id else None,
         )
 
-    def send_direct_message(self, message: Notification) -> Optional[MessageResponse]:
+    def send_direct_message(self, message: Message) -> Optional[MessageResponse]:
         """
         直接发送消息并返回消息ID等信息
         :param message: 消息体
@@ -716,7 +625,7 @@ class DiscordModule(_ModuleBase, _MessageBase[Discord]):
                         return MessageResponse(
                             message_id=str(message_id) if message_id else None,
                             chat_id=str(chat_id) if chat_id else None,
-                            channel=MessageChannel.Discord,
+                            channel=NotificationChannel.Discord,
                             source=conf.name,
                             success=True,
                         )

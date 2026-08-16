@@ -15,23 +15,26 @@ from app.application.messaging.agent import (
     resolve_config_principal_ids,
 )
 from app.runtime.log import logger
-from app.modules import _ModuleBase, _MessageBase
+from app.modules._base import _MessageChannelModuleBase
 from app.modules.qqbot.qqbot import QQBot
-from app.schemas import CommingMessage, MessageChannel, Notification
+from app.schemas import IncomingMessage, NotificationChannel, Message
 from app.schemas.types import ModuleType
 from app.adapters.network.http import RequestUtils
 
 
 register_channel_admin_resolver(
-    MessageChannel.QQ,
+    NotificationChannel.QQ,
     lambda config: resolve_config_principal_ids(
         config, "QQBOT_ADMINS", "QQ_OPENID"
     ),
 )
 
 
-class QQBotModule(_ModuleBase, _MessageBase[QQBot]):
+class QQBotModule(_MessageChannelModuleBase[QQBot]):
     """QQ Bot 通知模块"""
+
+    # 管理员配置键，与渠道 resolver 保持一致
+    _admin_config_key = "QQBOT_ADMINS"
 
     _IMAGE_SUFFIXES = (
         ".png",
@@ -60,7 +63,7 @@ class QQBotModule(_ModuleBase, _MessageBase[QQBot]):
 
     def init_module(self) -> None:
         super().init_service(service_name=QQBot.__name__.lower(), service_type=QQBot)
-        self._channel = MessageChannel.QQ
+        self._channel = NotificationChannel.QQ
 
     @staticmethod
     def get_name() -> str:
@@ -71,12 +74,19 @@ class QQBotModule(_ModuleBase, _MessageBase[QQBot]):
         return ModuleType.Notification
 
     @staticmethod
-    def get_subtype() -> MessageChannel:
-        return MessageChannel.QQ
+    def get_subtype() -> NotificationChannel:
+        return NotificationChannel.QQ
 
     @staticmethod
     def get_priority() -> int:
         return 10
+
+    def _commands_enabled(self, config: Optional[dict]) -> bool:
+        """
+        QQ 机器人客户端未提供命令注册/删除 API，跳过命令注册，
+        避免基类默认钩子调用不存在的 client.register_commands。
+        """
+        return False
 
     def stop(self) -> None:
         """停止模块"""
@@ -86,45 +96,8 @@ class QQBotModule(_ModuleBase, _MessageBase[QQBot]):
             except Exception as err:
                 logger.error(f"停止QQ Bot模块实例失败：{err}")
 
-    def test(self) -> Optional[Tuple[bool, str]]:
-        if not self.get_instances():
-            return None
-        for name, client in self.get_instances().items():
-            if not client.get_state():
-                return False, f"QQ Bot {name} 未就绪"
-        return True, ""
-
     def init_setting(self) -> Tuple[str, Union[str, bool]]:
         pass
-
-    @staticmethod
-    def _get_admins(config: Optional[dict]) -> List[str]:
-        """
-        解析 QQ 管理员配置，兼容逗号分隔和首尾空白。
-        """
-        return [
-            admin.strip()
-            for admin in str((config or {}).get("QQBOT_ADMINS") or "").split(",")
-            if admin.strip()
-        ]
-
-    @classmethod
-    def _should_reject_admin_command(
-            cls,
-            config: Optional[dict],
-            *user_ids: Optional[Union[str, int]],
-    ) -> bool:
-        """
-        判断 QQ 斜杠命令是否应因非管理员身份被拒绝。
-        """
-        admins = cls._get_admins(config)
-        if not admins:
-            return False
-        return not matches_channel_admin(
-            MessageChannel.QQ,
-            config,
-            *user_ids,
-        )
 
     @staticmethod
     def _send_admin_denied(
@@ -138,7 +111,7 @@ class QQBotModule(_ModuleBase, _MessageBase[QQBot]):
 
     def message_parser(
         self, source: str, body: Any, form: Any, args: Any
-    ) -> Optional[CommingMessage]:
+    ) -> Optional[IncomingMessage]:
         """
         解析 Gateway 转发的 QQ 消息
         body 格式: {"type": "C2C_MESSAGE_CREATE"|"GROUP_AT_MESSAGE_CREATE", "content": "...", "author": {...}, "id": "...", ...}
@@ -181,13 +154,13 @@ class QQBotModule(_ModuleBase, _MessageBase[QQBot]):
                 f"text={(content or '')[:50]}..., images={len(images) if images else 0}, "
                 f"audios={len(audio_refs) if audio_refs else 0}, files={len(files) if files else 0}"
             )
-            return CommingMessage(
-                channel=MessageChannel.QQ,
+            return IncomingMessage(
+                channel=NotificationChannel.QQ,
                 source=client_config.name,
                 userid=user_openid,
                 username=user_openid,
                 is_channel_admin=matches_channel_admin(
-                    MessageChannel.QQ,
+                    NotificationChannel.QQ,
                     client_config.config,
                     user_openid,
                 ),
@@ -212,13 +185,13 @@ class QQBotModule(_ModuleBase, _MessageBase[QQBot]):
                 f"text={(content or '')[:50]}..., images={len(images) if images else 0}, "
                 f"audios={len(audio_refs) if audio_refs else 0}, files={len(files) if files else 0}"
             )
-            return CommingMessage(
-                channel=MessageChannel.QQ,
+            return IncomingMessage(
+                channel=NotificationChannel.QQ,
                 source=client_config.name,
                 userid=userid,
                 username=member_openid or group_openid,
                 is_channel_admin=matches_channel_admin(
-                    MessageChannel.QQ,
+                    NotificationChannel.QQ,
                     client_config.config,
                     member_openid,
                 ),
@@ -232,8 +205,8 @@ class QQBotModule(_ModuleBase, _MessageBase[QQBot]):
     @classmethod
     def _extract_images(
         cls, msg_body: dict
-    ) -> Optional[List[CommingMessage.MessageImage]]:
-        images: List[CommingMessage.MessageImage] = []
+    ) -> Optional[List[IncomingMessage.MessageImage]]:
+        images: List[IncomingMessage.MessageImage] = []
         attachments = msg_body.get("attachments") or []
         if isinstance(attachments, list):
             for attachment in attachments:
@@ -254,7 +227,7 @@ class QQBotModule(_ModuleBase, _MessageBase[QQBot]):
                 ).lower()
                 if content_type.startswith("image/") or filename.endswith(cls._IMAGE_SUFFIXES):
                     images.append(
-                        CommingMessage.MessageImage(
+                        IncomingMessage.MessageImage(
                             ref=url,
                             name=attachment.get("filename") or attachment.get("name"),
                             mime_type=attachment.get("content_type")
@@ -266,18 +239,18 @@ class QQBotModule(_ModuleBase, _MessageBase[QQBot]):
         for key in ("image", "image_url", "pic_url"):
             value = msg_body.get(key)
             if isinstance(value, str) and value.startswith("http"):
-                images.append(CommingMessage.MessageImage(ref=value))
+                images.append(IncomingMessage.MessageImage(ref=value))
 
         extra_images = msg_body.get("images")
         if isinstance(extra_images, list):
             for item in extra_images:
                 if isinstance(item, str) and item.startswith("http"):
-                    images.append(CommingMessage.MessageImage(ref=item))
+                    images.append(IncomingMessage.MessageImage(ref=item))
                 elif isinstance(item, dict):
                     url = item.get("url") or item.get("image_url")
                     if isinstance(url, str) and url.startswith("http"):
                         images.append(
-                            CommingMessage.MessageImage(
+                            IncomingMessage.MessageImage(
                                 ref=url,
                                 name=item.get("name") or item.get("filename"),
                                 mime_type=item.get("content_type")
@@ -325,8 +298,8 @@ class QQBotModule(_ModuleBase, _MessageBase[QQBot]):
     @classmethod
     def _extract_files(
         cls, msg_body: dict
-    ) -> Optional[List[CommingMessage.MessageAttachment]]:
-        files: List[CommingMessage.MessageAttachment] = []
+    ) -> Optional[List[IncomingMessage.MessageAttachment]]:
+        files: List[IncomingMessage.MessageAttachment] = []
         attachments = msg_body.get("attachments") or []
         if isinstance(attachments, list):
             for attachment in attachments:
@@ -352,7 +325,7 @@ class QQBotModule(_ModuleBase, _MessageBase[QQBot]):
                 if is_image or is_audio:
                     continue
                 files.append(
-                    CommingMessage.MessageAttachment(
+                    IncomingMessage.MessageAttachment(
                         ref=f"qq://file/{quote(url, safe='')}",
                         name=attachment.get("filename") or attachment.get("name"),
                         mime_type=attachment.get("content_type")
@@ -376,7 +349,7 @@ class QQBotModule(_ModuleBase, _MessageBase[QQBot]):
             return resp.content
         return None
 
-    def post_message(self, message: Notification, **kwargs) -> None:
+    def post_message(self, message: Message, **kwargs) -> None:
         for conf in self.get_configs().values():
             if not self.check_message(message, conf.name):
                 continue
@@ -400,7 +373,7 @@ class QQBotModule(_ModuleBase, _MessageBase[QQBot]):
                     targets=targets,
                 )
 
-    def post_medias_message(self, message: Notification, medias: List[MediaInfo]) -> None:
+    def post_medias_message(self, message: Message, medias: List[MediaInfo]) -> None:
         for conf in self.get_configs().values():
             if not self.check_message(message, conf.name):
                 continue
@@ -423,7 +396,7 @@ class QQBotModule(_ModuleBase, _MessageBase[QQBot]):
                 )
 
     def post_torrents_message(
-        self, message: Notification, torrents: List[Context]
+        self, message: Message, torrents: List[Context]
     ) -> None:
         for conf in self.get_configs().values():
             if not self.check_message(message, conf.name):
