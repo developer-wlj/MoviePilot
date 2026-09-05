@@ -870,6 +870,52 @@ def test_strip_artist_prefix_removes_signature_prefix():
     assert MusicBrainzModule._strip_artist_prefix("晴天", ["周杰伦"]) == "晴天"
 
 
+@pytest.mark.parametrize("artist,title", [("Lee", "Leeway"), ("Élan", "Élansong"), ("Мир", "Мирный")])
+def test_artist_prefix_cleanup_keeps_whole_words(artist, title):
+    """候选确认和后续检索式都不能从实际曲名的单词内部剥离艺术家。"""
+    assert MusicBrainzModule._strip_artist_prefix(title, [artist]) == title
+    meta = MetaMusic(title=title, artists=[artist])
+    candidate = MusicInfo(media_source="musicbrainz", media_id="correct", title=title, artists=[artist])
+    assert MusicBrainzModule._select_candidate(meta, [candidate], "musicbrainz") is candidate
+
+
+def test_recording_queries_do_not_shorten_title_words():
+    """首轮精确查询之后也必须保留完整曲名，不能换成错误的缩短词。"""
+    queries = MusicBrainzModule._recording_queries(MetaMusic(title="Leeway", artists=["Lee"]))
+    assert queries == ['recording:"Leeway" AND artist:"Lee"', 'recording:"Leeway"']
+
+
+@pytest.mark.parametrize("music_type", ["recording", "album"])
+def test_exact_title_precedes_derived_artist_signature(music_type):
+    """曲名确实包含艺名时，完整名称命中优先于去署名后的回退名称。"""
+    meta = MetaMusic(title="Lee Loves You", artists=["Lee"])
+    shortened = MusicInfo(media_source="musicbrainz", media_id="short", title="Loves You",
+                          music_type=music_type, artists=["Lee"])
+    original = MusicInfo(media_source="musicbrainz", media_id="original", title="Lee Loves You",
+                         music_type=music_type, artists=["Lee"])
+    if music_type == "recording":
+        meta.album = shortened.album = "Example Collection"
+        meta.year = shortened.year = 2001
+    if music_type == "album":
+        assert MusicBrainzModule._select_album_candidate(meta, [shortened, original]) is original
+    else:
+        assert MusicBrainzModule._select_candidate(meta, [shortened, original], "musicbrainz") is original
+
+
+@pytest.mark.parametrize("music_type", ["recording", "album"])
+def test_rejected_exact_title_does_not_hide_valid_signature_fallback(music_type):
+    """完整名称优先不能放过署名不符的候选，仍应采用有效的去署名回退。"""
+    meta = MetaMusic(title="Lee Loves You", artists=["Lee"])
+    invalid = MusicInfo(media_source="musicbrainz", media_id="wrong", music_type=music_type,
+                        title=meta.title, artists=["Other Artist"])
+    valid = MusicInfo(media_source="musicbrainz", media_id="right", music_type=music_type,
+                      title="Loves You", artists=["Lee"])
+    if music_type == "album":
+        assert MusicBrainzModule._select_album_candidate(meta, [invalid, valid]) is valid
+    else:
+        assert MusicBrainzModule._select_candidate(meta, [invalid, valid], "musicbrainz") is valid
+
+
 def test_select_album_candidate_matches_lead_token_structure():
     """条目「主体名 补充说明」结构与资源主体名首段一致时应弱匹配命中。"""
     meta = MetaMusic(title="许茹芸的爱情电影主题曲", artists=["许茹芸"], year=2003)

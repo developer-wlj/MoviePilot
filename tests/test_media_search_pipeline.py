@@ -86,24 +86,26 @@ def test_all_media_use_filtered_results_to_stop_keyword_search(monkeypatch, mtyp
 
 
 @pytest.mark.parametrize("mode", ["sync", "async", "stream"])
-@pytest.mark.parametrize("case", ["partial_album", "subtitle_version", "recognition_words"])
+@pytest.mark.parametrize("case", ["partial_album", "subtitle_version", "recognition_words", "artist_affix"])
 def test_music_resource_evidence_controls_shared_search_stop(monkeypatch, mode, case):
     """三种搜索入口均在完成识别词、版本与专辑范围验证后才允许停止换词。"""
     chain = SearchChain()
     chain.runtime_config = replace(chain.runtime_config, search_multiple_name=False)
     album_target = case == "partial_album"
+    artist = "Lee" if case == "artist_affix" else "周杰伦"
     target = MusicInfo(media_source=MediaSource.MusicBrainz, media_id="target",
                        music_type="album" if album_target else "recording",
-                       title="叶惠美" if album_target else "晴天", artists=["周杰伦"])
+                       title="叶惠美" if album_target else "way" if case == "artist_affix" else "晴天", artists=[artist])
     calls = []
 
     def search(**kwargs):
         """先返回待核验或需改名的资源，再提供正确身份的资源。"""
         calls.append(kwargs["keyword"])
         if len(calls) > 1:
-            return [TorrentInfo(title=f"周杰伦 - {target.title} FLAC", category=MediaType.MUSIC.value)]
+            return [TorrentInfo(title=f"{artist} - {target.title} FLAC", category=MediaType.MUSIC.value)]
+        first_title = "错误曲名" if case == "recognition_words" else "Leeway" if case == "artist_affix" else "晴天"
         return [TorrentInfo(
-            title="周杰伦 - 错误曲名 FLAC" if case == "recognition_words" else "周杰伦 - 晴天 FLAC",
+            title=f"{artist} - {first_title} FLAC",
             description="专辑：叶惠美" if album_target else "版本：Live" if case == "subtitle_version" else None,
             category=MediaType.MUSIC.value,
         )]

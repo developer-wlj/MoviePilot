@@ -155,15 +155,16 @@ def test_music_cache_key_prefers_media_id():
 
     cache.update(meta, _music_info())
 
-    assert next(iter(cache._cache.data)).startswith("[音乐:v2]")
+    assert next(iter(cache._cache.data)).startswith(f"[音乐:v{music_cache_module.PERSISTENCE_VERSION}]")
     renamed = MetaMusic(title="不同展示名", artists=["不同署名"], media_source="musicbrainz", media_id="rec-1")
     assert cache.get(renamed).media_id == "rec-1"
 
 
-def test_music_cache_rebuilds_legacy_identity_keys(monkeypatch):
-    """旧缓存未区分版本和实体范围，升级后不恢复其中可能串用的身份。"""
+@pytest.mark.parametrize("version", [1, 2])
+def test_music_cache_rebuilds_legacy_identity_keys(monkeypatch, version):
+    """旧缓存可能串用实体或保存了截断名称的错误身份，升级后不再恢复。"""
     file_cache = _FileCacheStub(pickle.dumps({
-        "version": 1, "items": {"[音乐]legacy": {"expires_at": 2000, "value": _music_info().to_dict()}},
+        "version": version, "items": {"[音乐]legacy": {"expires_at": 2000, "value": _music_info().to_dict()}},
     }))
     runtime_cache = _TTLCacheStub()
     _build_initialized_music_cache(monkeypatch, file_cache, runtime_cache)

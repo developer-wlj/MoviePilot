@@ -19,6 +19,7 @@ from app.domain.media import is_media_source_selected
 from app.domain.meta.metabase import MetaBase
 from app.domain.meta.metamusic import MetaMusic
 from app.domain.music import (
+    music_artist_affix_matches,
     music_artist_matches,
     music_base_title,
     music_isrc_matches,
@@ -478,19 +479,15 @@ class MusicBrainzModule(_ModuleBase):
 
     @classmethod
     def _strip_artist_prefix(cls, title: Optional[str], artists: Optional[list[str]]) -> str:
-        """剥离曲名开头的艺术家署名前缀（「许茹芸的爱情电影主题曲」）。
-
-        资源命名习惯把署名放在曲名前，条目不含该前缀；署名身份由
-        候选挑选阶段的艺术家要求保证，不会产生错误归属。前缀剥离后
-        无剩余文本时保留原标题（「合集 - 花开」类短标题保护）。
-        """
+        """剥离完整署名前缀，不截断单词；保留中文连写与“的/之”署名习惯。"""
         text = str(title or "").strip()
         for artist in artists or []:
             artist = str(artist or "").strip()
             if len(artist) < 2:
                 continue
-            if text.startswith(artist):
-                remainder = re.sub(r"^[的之]\s*", "", text[len(artist):]).strip()
+            if text.startswith(artist) and music_artist_affix_matches(text, artist):
+                remainder = text[len(artist):].lstrip(" \t-–—−－/|:：;；")
+                remainder = re.sub(r"^[的之]\s*", "", remainder).strip()
                 if remainder:
                     return remainder
         return text
@@ -1219,11 +1216,11 @@ class MusicBrainzModule(_ModuleBase):
     ) -> Optional[MusicInfo]:
         """优先采用同一 ISRC，其他候选须满足完整名称、已有署名和录音版本约束。"""
         normalized_source = cls._normalize_text(media_source).casefold()
-        # 资源标题携带的音质标记先剥离，再与候选曲名比对；
-        # 曲名开头的艺术家署名前缀是命名习惯，用主体名比对
-        clean_title = cls._strip_artist_prefix(cls._search_title(meta.title), meta.artists)
+        # 完整名称优先，去署名只产生回退名称，不能覆盖实际包含艺名的曲名。
+        original_title = cls._search_title(meta.title)
+        clean_title = cls._strip_artist_prefix(original_title, meta.artists)
         bare_title = music_base_title(clean_title)
-        ranked: list[tuple[int, MusicInfo]] = []
+        ranked: list[tuple[bool, int, MusicInfo]] = []
         for candidate in candidates:
             if normalized_source and str(candidate.media_source or "").casefold() != normalized_source:
                 continue
@@ -1235,7 +1232,8 @@ class MusicBrainzModule(_ModuleBase):
             # 多艺术家资源任一命中即可，联名候选不会因主艺术家顺序失配
             artist_match = music_artist_matches(candidate, meta.artists)
             titles = music_titles(candidate)
-            if clean_title and any(cls._same_text(clean_title, title) for title in titles):
+            exact_title = bool(original_title and any(cls._same_text(original_title, title) for title in titles))
+            if exact_title:
                 score += 4
                 title_match = True
             elif (
@@ -1256,12 +1254,12 @@ class MusicBrainzModule(_ModuleBase):
             if (
                 (meta.artists and not artist_match) or not title_match or not music_version_matches(candidate, meta)
             ):
-                score = 0
-            ranked.append((score, candidate))
+                continue
+            ranked.append((exact_title, score, candidate))
         if not ranked:
             return None
-        ranked.sort(key=lambda item: item[0], reverse=True)
-        return ranked[0][1] if ranked[0][0] > 0 else None
+        ranked.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        return ranked[0][2]
 
     @classmethod
     def _select_album_candidate(cls, meta: MetaMusic, albums: Iterable[MusicInfo]) -> Optional[MusicInfo]:
@@ -1270,26 +1268,28 @@ class MusicBrainzModule(_ModuleBase):
         专辑重名多，要求标题（含去括号弱匹配）与艺术家同时命中才返回，
         避免把音轨身份安到错误专辑上。
         """
-        clean_title = cls._strip_artist_prefix(
-            cls._search_title(meta.album or meta.title), meta.artists)
+        original_title = cls._search_title(meta.album or meta.title)
+        clean_title = cls._strip_artist_prefix(original_title, meta.artists)
         if not clean_title:
             return None
         # 去括号与卷号后缀后的本体名用于弱匹配（好歌茹芸, Vol. 3 -> 好歌茹芸）；
         # 资源带卷号时弱匹配要求候选卷号一致，避免 Ibiza Vol.1 误配 Vol.3
         bare_title = cls._strip_volume_suffix(cls._strip_parenthetical(clean_title))
         meta_volume = cls._volume_number(clean_title)
-        ranked: list[tuple[int, MusicInfo]] = []
+        ranked: list[tuple[bool, int, MusicInfo]] = []
         for album in albums:
             score = 0
             album_title = album.title or album.album
             artist_match = music_artist_matches(album, meta.artists)
             title_match = False
+            exact_title = False
             # 资源带卷号时候选卷号不一致（含其他分卷）直接排除，避免 Vol.1 误配 Vol.3
             if meta_volume and cls._volume_number(album_title) not in (None, meta_volume):
                 pass
-            elif any(cls._same_text(clean_title, title) for title in music_titles(album, album=True)):
+            elif any(cls._same_text(original_title, title) for title in music_titles(album, album=True)):
                 score += 4
                 title_match = True
+                exact_title = True
             elif (
                 artist_match
                 and bare_title
@@ -1333,11 +1333,12 @@ class MusicBrainzModule(_ModuleBase):
             if meta.year and album.year and int(meta.year) == int(album.year):
                 score += 1
             # 标题与艺术家缺一不可，仅有标题相似不能采信
-            ranked.append((score if title_match and artist_match and music_version_matches(album, meta) else 0, album))
+            if title_match and artist_match and music_version_matches(album, meta):
+                ranked.append((exact_title, score, album))
         if not ranked:
             return None
-        ranked.sort(key=lambda item: item[0], reverse=True)
-        return ranked[0][1] if ranked[0][0] > 0 else None
+        ranked.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        return ranked[0][2]
 
     @classmethod
     def _info_from_meta(cls, meta: MetaMusic) -> MusicInfo:

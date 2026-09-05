@@ -24,6 +24,36 @@ def test_music_match_rejects_other_titles(title):
     assert match_music_resource(MusicInfo(title="One", artists=["U2"]), title).status == "rejected"
 
 
+@pytest.mark.parametrize("artist,title,wrong_title", [
+    ("Lee", "Leeway", "way"),
+    ("Rise", "Surprise", "Surp"),
+    ("Lee", "HappyLee", "Happy"),
+    ("Élan", "Élansong", "song"),
+    ("Мир", "Мирный", "ный"),
+])
+def test_artist_affix_cannot_cut_into_a_title_word(artist, title, wrong_title):
+    """署名恰好是单词的一部分时，不得据此构造另一首歌的名称。"""
+    resource = f"{artist} - {title} FLAC"
+    assert match_music_resource(MusicInfo(title=title, artists=[artist]), resource).status == "exact"
+    assert match_music_resource(MusicInfo(title=wrong_title, artists=[artist]), resource).status == "rejected"
+
+
+@pytest.mark.parametrize("title", ["Lee - Song", "Song - Lee", "LEE: Song"])
+def test_artist_affix_preserves_explicit_signature_boundaries(title):
+    """已解析字段中的完整署名有分隔符时，仍可去掉署名参与匹配。"""
+    target = MusicInfo(title="Song", artists=["Lee"])
+    meta = MetaMusic(title=title, artists=["Lee"])
+    assert match_music_resource(target, title, meta=meta).status == "exact"
+
+
+def test_artist_affix_supports_existing_cjk_signature_style():
+    """中文连写及“的”字署名形式仍参与同一套资源名称比较。"""
+    target = MusicInfo(title="爱情电影主题曲", artists=["许茹芸"])
+    for title in ("许茹芸爱情电影主题曲", "许茹芸的爱情电影主题曲"):
+        meta = MetaMusic(title=title, artists=["许茹芸"])
+        assert match_music_resource(target, title, meta=meta).status == "exact"
+
+
 @pytest.mark.parametrize("artist", ["Jay Chou", "周杰倫"])
 def test_music_match_accepts_source_artist_aliases(artist):
     """同一艺术家来源别名和繁简署名均可命中。"""

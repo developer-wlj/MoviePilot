@@ -37,6 +37,7 @@ _COLLECTIVE_ARTISTS = ("Various Artists", "Various", "VA", "群星", "众艺人"
 _VERSION_YEAR = re.compile(r"(?<!\d)(?:19|20)\d{2}(?!\d)")
 _VERSION_DATE = re.compile(r"(?<!\d)((?:19|20)\d{2})(?:[-./]|年)\s*(\d{1,2})(?:[-./]|月)\s*(\d{1,2})日?(?!\d)")
 _ISRC = re.compile(r"[A-Z]{2}[A-Z0-9]{3}[0-9]{7}", re.IGNORECASE | re.ASCII)
+_CJK = re.compile(r"[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]")
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,10 +136,30 @@ def music_isrc_matches(music: MusicInfo, meta: MetaMusic) -> bool:
     return bool(expected and expected == _isrc_key(music.isrc))
 
 
+def _artist_match_text(text: str) -> str:
+    """归一署名比较文本但保留分隔符，避免紧凑名称丢失单词边界。"""
+    normalized = str(zhconv_convert(normalize("NFKD", text).casefold(), "zh-hans"))
+    return "".join(char for char in normalized if not combining(char))
+
+
+def music_artist_affix_matches(title: str, artist: str, *, suffix: bool = False) -> bool:
+    """核验首尾完整署名；保留中日韩连写习惯，但不能截断其它文字的单词。"""
+    key = music_text_key(artist)
+    if not key:
+        return False
+    text = _artist_match_text(title)
+    pattern = r"[\W_]*".join(re.escape(char) for char in key)
+    match = re.search(rf"{pattern}[\W_]*$" if suffix else rf"^[\W_]*{pattern}", text)
+    if not match:
+        return False
+    neighbor = text[match.start() - 1:match.start()] if suffix else text[match.end():match.end() + 1]
+    edge = key[0] if suffix else key[-1]
+    return not (neighbor.isalnum() and edge.isalnum() and not _CJK.search(neighbor + edge))
+
+
 def _contains_artist(text: str, artist: str) -> bool:
     """匹配完整署名，避免短拉丁艺名命中另一个人名的子串。"""
-    normalized = str(zhconv_convert(normalize("NFKD", text).casefold(), "zh-hans"))
-    normalized = "".join(char for char in normalized if not combining(char))
+    normalized = _artist_match_text(text)
     key = music_text_key(artist)
     if not key:
         return False
@@ -150,7 +171,7 @@ def _resource_names(primary: MetaMusic, artists: list[str], *, album: bool = Fal
                     album_suffixes: Optional[list[str]] = None) -> list[str]:
     """复用音乐命名解析器提取作品片段，去掉已确认的首尾艺术家署名。"""
     names: list[str] = []
-    artist_keys = [music_text_key(item) for item in artists if item]
+    artist_keys = [(item, music_text_key(item)) for item in artists if item]
     suffix_keys = {music_text_key(item) for item in album_suffixes or []}
     for value in (primary.title, primary.album if album else None):
         if not value:
@@ -161,15 +182,18 @@ def _resource_names(primary: MetaMusic, artists: list[str], *, album: bool = Fal
         if len(parts) > 1 and all(music_text_key(part) in suffix_keys for part in parts[1:]):
             variants.append(parts[0])
         for part in variants:
-            key = music_text_key(music_base_title(_TITLE_LABEL.sub("", part.strip())))
+            name = music_base_title(_TITLE_LABEL.sub("", part.strip()))
+            key = music_text_key(name)
             if not key:
                 continue
             names.append(key)
-            for artist in artist_keys:
-                if key.startswith(artist) and key != artist:
-                    names.append(key[len(artist):])
-                if key.endswith(artist) and key != artist:
-                    names.append(key[:-len(artist)])
+            for artist, artist_key in artist_keys:
+                if key.startswith(artist_key) and key != artist_key and music_artist_affix_matches(name, artist):
+                    remainder = re.sub(r"^[的之]", "", key[len(artist_key):])
+                    if remainder:
+                        names.append(remainder)
+                if key.endswith(artist_key) and key != artist_key and music_artist_affix_matches(name, artist, suffix=True):
+                    names.append(key[:-len(artist_key)])
     return names
 
 

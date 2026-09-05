@@ -16,7 +16,8 @@ from app.runtime.settings import get_runtime_setting
 from app.schemas.types import MUSIC_ENTITY_RECORDING
 
 lock = RLock()
-PERSISTENCE_VERSION = 2
+# 旧确认规则可能把署名重叠的曲名截断，不能继续复用其派生身份。
+PERSISTENCE_VERSION = 3
 PERSISTENCE_REGION = "recognize"
 PERSISTENCE_KEY = "musicbrainz"
 
