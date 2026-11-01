@@ -395,6 +395,9 @@ token exchange downloads retain their existing credential rules.
   operations; keep using the documented `search.*` operations. Web streams search
   sites concurrently and emit `append` previews before the final filtered page;
   only the completed result carries source state for advancing page numbers.
+- Recent `search.results` snapshots belong to the authenticated user; search again after
+  upgrading to populate them. Optional Web `done.diagnostics` uses `scope=page` for the current
+  page. Skipped rule groups do not increase the resource rejection count.
 - For list inspection, explicitly send the operation's documented pagination
   fields instead of requesting an unbounded legacy result. For optional legacy
   pagination, start with `query={"page":1,"count":20}`.

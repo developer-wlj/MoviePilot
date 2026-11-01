@@ -604,6 +604,10 @@ flowchart LR
   `pagination.py` 协调分页；`application/search/state.py` 拥有搜索状态，`session.py` 定义
   检查点端口，`domain/search.py` 表达收集与来源游标规则。页面候选和游标一起保存，
   检查点仅保存允许的资源字段，凭据与临时下载票据不进入快照。
+- **页诊断与最近上下文**：`manual.py` 的每次请求持有站点观察、过滤计数与规则适用性，
+  `schemas/search.py` 定义可选诊断合同；不保存原始错误或凭据。`state.py` 经注入缓存端口
+  按认证用户一次写入完整参数、结果和诊断，API 不拼接旧全局散键；普通搜索以空诊断
+  发布自己的完整记录，避免显示其它请求的过滤说明。
 - **音乐识别**：`application/audio.py` 读取本地标签与 CUE，`domain/meta/` 和音乐领域规则解释
   文件名、标签、目录、艺人、发行与曲目身份；`application/music/recognition.py` 经注入的
   来源 Port 有界回退，`observation.py` 记录本次来源结果和共享预算。Domain 不持有来源客户端。
@@ -817,7 +821,7 @@ flowchart LR
 | 指标 | 当前值 |
 |---|---:|
 | Python 模块 | 1144 |
-| 内部导入边 | 9,889 |
+| 内部导入边 | 9,901 |
 | 非平凡 SCC | 1（29 个模块的 TMDB vendor 精确 containment） |
 | Application / Chain 具体 Adapter 直连 | 0 / 0 |
 | Direct egress | 51（精确 policy 准入，Application / Chain 均为 0） |

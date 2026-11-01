@@ -34,6 +34,32 @@
 升级前历史没有来源标记，界面显示“未记录”，不会按当前订阅设置追溯推断。
 普通订阅的首次提交与洗版订阅补缺在活动中都标记为首次订阅。
 
+### 资源搜索诊断
+
+Web 影视精确与标题 SSE 的 `manual_paging=true` 模式在最终 `done` 事件增加可选
+`diagnostics`。V1 的 `scope=page` 仅覆盖当前页请求，续页沿用来源中的 `search_id`。
+旧后端可缺省此字段，客户端应兼容 `null` 和未知原因代码。普通资源 API 的 `data` 数组
+及 `GET /api/v1/search/last` 保持原合同。
+
+- `searched_sites` 提供实际调度来源的 `site_id`、`site_name`、`attempted`、`outcome`
+  和 `raw_count`。状态为 `success`、`empty`、`error`、`cooldown` 或 `unknown`；
+  未发请求的冷却标记为 `attempted=false`。别名请求和摘要补取的数量按站点累加。
+- `stage_counts` 包含候选数 `candidates` 和保留数 `retained`。`rejection_reasons`
+  使用 `{code,count}`：`filter_params`、`filter_rules`、`title_missing`、`scope_mismatch`、
+  `identity_mismatch`、`caller_filter`、`duplicate`。身份不符可能包含类型不符；
+  索引器内部未报告的丢弃原因不作推测。
+- `rule_groups` 包含 `name`、`status`、`reason`、`media_type` 和 `categories`。
+  `effective` 表示规则适用，`skipped` 不增加拒绝数。标题搜索沿用过滤器的空媒体上下文。
+- `warnings` 使用 `{code,rule_group?}`，代码包括 `rule_group_not_applicable`、
+  `rule_group_missing`、`provider_error`、`provider_cooldown`、`provider_outcome_unknown`。
+  原始异常、下载地址和凭据不进入诊断。
+
+`GET /api/v1/search/last/context` 按认证用户返回完整的 `params`、`results` 和可选
+`diagnostics`。同一用户并发搜索按完成顺序保存，异常或取消保留上次完整记录。普通
+影视、标题、字幕 API 和旧 SSE 完成后也保存结果（含空结果），`diagnostics=null`；
+字幕链接在读取时重新签名。旧全局缓存不迁移，升级后需重新搜索；首次搜索前返回
+空参数、空结果和 `diagnostics=null`。
+
 ### 大集合查询窗口
 
 `POST /api/v1/media/status` 接受 1 至 50 个媒体身份/标题/年份/季号查询，按输入顺序返回

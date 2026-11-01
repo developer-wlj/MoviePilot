@@ -328,6 +328,16 @@ _OPERATION_NOTES: dict[str, list[str]] = {
         "compare candidates by title, type, and year. Preserve the selected result's exact "
         "`media_source` + `media_id` for `search.torrents`.",
     ],
+    "search.results": [
+        "- `params` and `results` are saved together for the authenticated user. "
+        "Legacy global caches are not restored; search again after upgrading.",
+        "- Optional Web `manual_paging=true` diagnostics use `scope=page` for the current page. "
+        "`searched_sites` records attempted requests and outcomes; `stage_counts` and "
+        "`rejection_reasons` record observed filtering. Skipped rule groups do not increase "
+        "the resource rejection count.",
+        "- Ordinary searches and legacy streams save `diagnostics=null`, including empty results. "
+        "Errors and cancellation preserve the previous complete snapshot.",
+    ],
     "search.torrents": [
         "- **Agent note:** `media_id` is a **path** parameter and MUST be nested under "
         "`path_params`. Never flatten it to the top level or place it inside `query`, "
