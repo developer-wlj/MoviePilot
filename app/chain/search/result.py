@@ -498,7 +498,10 @@ class SearchResultOwner(_SearchOwnerBase):
             progress.update(value=99, text=f"正在对 {len(contexts)} 个资源进行排序，请稍候...")
             contexts = TorrentHelper.sort_torrents(contexts)
             contexts.sort(key=lambda context: not context.media_info_is_target)
+            before_deduplication = len(contexts)
             contexts = self._remove_duplicate(contexts)
+            if duplicates := before_deduplication - len(contexts):
+                counts["duplicate"] += duplicates
             logger.info(f"搜索完成，共 {len(contexts)} 个资源")
             progress.update(value=100, text=f"搜索完成，共 {len(contexts)} 个资源")
             return contexts
