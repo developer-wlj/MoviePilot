@@ -87,6 +87,13 @@ AppPush 的所有用户范围由 `tests/test_notification_routing_parity.py` 验
 
 ## 外部依赖：一律 mock，零真实网络
 
+AniList 直接访问官方 GraphQL 接口，不再探测 `trace.moe/anilist/`。中文数据集保存在
+`<CONFIG_DIR>/cache/anilist/anilist-chinese.json`，有效期 24 小时，同步、异步查询和重建客户端
+共用快照；配置 `GITHUB_PROXY` 时先直连镜像，失败再按 `PROXY` 访问原始 GitHub 地址。
+下载失败保留过期数据并在五分钟后重试，目录或文件读写失败时仍可使用已下载的内存数据。
+`tests/test_anilist_translations.py` 使用临时目录和下载替身验证重建客户端后的缓存复用、到期刷新、
+坏缓存、磁盘故障、镜像回退、同步异步并发去重及取消后释放锁；不据此推断真实代理耗时。
+
 高清杜比换域回归由 `tests/test_hddolby_spider.py`、`tests/test_hddolby_parser.py` 和
 `tests/test_site_connectivity.py` 验证：网页使用 `www.uhddolby.com` 时，搜索、用户资料和
 做种统计仍可按资源的 `api_url` 访问 `api.hddolby.com`，并保留站点代理和认证配置。

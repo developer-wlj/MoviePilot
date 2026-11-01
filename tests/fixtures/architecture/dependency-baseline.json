@@ -959,8 +959,8 @@
       "runtime_only": true
     }
   },
-  "edge_count": 9887,
-  "edge_sha256": "a6ce492847e6336c039524d2b4624ea88b8acdab99db9ab0825cdae99e703f66",
+  "edge_count": 9889,
+  "edge_sha256": "99db09bea0a36fa387eb552e2f97ca96ab6c289ebbab2305c7931f53fa0796f1",
   "edges": [
     "app -> app.foundation",
     "app -> app.foundation.environment",
@@ -7301,6 +7301,8 @@
     "app.modules.anilist.anilist -> app.adapters",
     "app.modules.anilist.anilist -> app.adapters.network",
     "app.modules.anilist.anilist -> app.adapters.network.http",
+    "app.modules.anilist.anilist -> app.foundation",
+    "app.modules.anilist.anilist -> app.foundation.url",
     "app.modules.anilist.anilist -> app.runtime",
     "app.modules.anilist.anilist -> app.runtime.cache",
     "app.modules.anilist.anilist -> app.runtime.log",
