@@ -7,7 +7,7 @@ import copy
 import threading
 from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Protocol
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Protocol
 from typing import Literal as TypingLiteral
 
 from pyparsing import (
@@ -37,8 +37,10 @@ from app.application.subscription.contract import (
 from app.domain.context import MediaInfo
 from app.schemas.common import JsonData
 from app.schemas.rule import CustomRule, FilterRuleGroup
-from app.schemas.search import SearchDiagnosticRuleGroup
 from app.schemas.types import SystemConfigKey
+
+if TYPE_CHECKING:
+    from app.schemas.search import SearchDiagnosticRuleGroup
 
 _RULE_GROUP_LIST_CONFIG_KEYS = (
     SystemConfigKey.SearchFilterRuleGroups,
@@ -555,7 +557,7 @@ class RuleHelper:
 
     def explain_rule_groups(
         self, *, media: Optional[MediaInfo], group_names: list[str],
-    ) -> list[SearchDiagnosticRuleGroup]:
+    ) -> list["SearchDiagnosticRuleGroup"]:
         """
         用现有规则选择策略说明所选规则的适用范围，不执行资源过滤。
 
@@ -565,6 +567,9 @@ class RuleHelper:
         """
         if not group_names:
             return []
+        # 搜索诊断在首次调用时加载，规则服务导入不扩大启动模块集合。
+        from app.schemas.search import SearchDiagnosticRuleGroup
+
         configured = {group.name: group for group in self.get_rule_groups()}
         effective = {group.name for group in self.get_rule_group_by_media(media=media, group_names=group_names)}
         result = []

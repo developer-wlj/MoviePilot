@@ -2,7 +2,7 @@
 搜索参数与结果缓存适配 owner。
 """
 
-from typing import Any, Dict, List, Optional, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
 
 from app.application.search.state import (
     SearchStateService,
@@ -11,11 +11,13 @@ from app.application.search.state import (
 )
 from app.chain.search.contract import _SearchOwnerBase
 from app.domain.context import Context, SubtitleInfo
-from app.schemas.search import SearchLastContextData
 from app.schemas.types import (
     MediaSource,
     MediaType,
 )
+
+if TYPE_CHECKING:
+    from app.schemas.search import SearchLastContextData
 
 
 class SearchCacheOwner(_SearchOwnerBase):
@@ -136,7 +138,7 @@ class SearchCacheOwner(_SearchOwnerBase):
         """
         return await self._search_state().async_load_params()
 
-    async def async_last_search_context(self, user_id: int) -> SearchLastContextData:
+    async def async_last_search_context(self, user_id: int) -> "SearchLastContextData":
         """
         读取已认证用户的原子搜索上下文，不与旧全局结果拼接。
 
@@ -145,7 +147,7 @@ class SearchCacheOwner(_SearchOwnerBase):
         """
         return await self._search_state().async_load_context(user_id)
 
-    async def async_save_search_context(self, user_id: int, context: SearchLastContextData) -> None:
+    async def async_save_search_context(self, user_id: int, context: "SearchLastContextData") -> None:
         """
         通过状态服务一次发布参数、结果和诊断。
 

@@ -2,11 +2,13 @@
 搜索参数与结果缓存的应用服务。
 """
 
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Optional
 
 from app.schemas.media import parse_media_key, resolve_media_identity
-from app.schemas.search import SearchLastContextData
 from app.schemas.types import MediaSource, MediaType
+
+if TYPE_CHECKING:
+    from app.schemas.search import SearchLastContextData
 
 
 def stringify_sites(sites: Optional[List[int]]) -> str:
@@ -147,7 +149,7 @@ class SearchStateService:
         """
         return normalize_search_params(await self._async_load_cache(self._params_key))
 
-    async def async_save_context(self, user_id: int, context: SearchLastContextData) -> None:
+    async def async_save_context(self, user_id: int, context: "SearchLastContextData") -> None:
         """
         一次写入当前用户的完整参数、结果与诊断，避免并发请求交叉拼接。
 
@@ -156,13 +158,15 @@ class SearchStateService:
         """
         await self._async_save_cache(context.model_dump(mode="json"), f"{self._params_key}_context_{user_id}")
 
-    async def async_load_context(self, user_id: int) -> SearchLastContextData:
+    async def async_load_context(self, user_id: int) -> "SearchLastContextData":
         """
         只读取指定用户的完整快照，不回退到无法归属的全局散键。
 
         :param user_id: 已由入口认证的用户主键
         :return: 完整快照；首次搜索前返回空参数和结果且诊断为 None
         """
+        from app.schemas.search import SearchLastContextData
+
         value = await self._async_load_cache(f"{self._params_key}_context_{user_id}")
         return SearchLastContextData.model_validate(value) if isinstance(value, dict) else SearchLastContextData()
 

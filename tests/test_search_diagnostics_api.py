@@ -204,3 +204,53 @@ async def test_last_subtitle_context_signs_again_without_modifying_saved_snapsho
     assert response.data.results[0].enclosure == "https://example.test/signed"
     assert snapshot.results[0].enclosure == "https://example.test/subtitle"
     assert signed[0][1]["purpose"] == endpoint.SecurityUtils.subtitle_download_purpose(1)
+
+
+@pytest.mark.asyncio
+async def test_real_search_chain_context_roundtrip_isolates_users_and_clears_diagnostics(monkeypatch):
+    """
+    经真实门面、缓存 owner 与状态服务读写，用户快照保持独立且普通搜索清除旧诊断。
+    """
+    from app.chain.search.facade import SearchChain
+    from app.domain.context import Context, TorrentInfo
+
+    chain = SearchChain()
+    stored = {}
+
+    async def save(value, key):
+        """
+        用独立内存端口替代文件缓存，不执行外部 I/O。
+        """
+        stored[key] = value
+
+    async def load(key):
+        """
+        只返回请求用户对应的完整记录。
+        """
+        return stored.get(key)
+
+    monkeypatch.setattr(chain, "async_save_cache", save)
+    monkeypatch.setattr(chain, "async_load_cache", load)
+    monkeypatch.setattr(endpoint, "SearchChain", lambda: chain)
+    snapshot = SearchLastContextData(params={"keyword": "First"}, diagnostics=SearchDiagnostics(
+        search_id="first-search", scope="page", stage_counts=SearchDiagnosticCounts(),
+    ))
+    await chain.async_save_search_context(61, snapshot)
+    first = await endpoint.search_latest_context(TokenPayload(sub=61))
+    missing = await endpoint.search_latest_context(TokenPayload(sub=62))
+    assert first.data.params == {"keyword": "First"}
+    assert first.data.diagnostics.search_id == "first-search"
+    assert missing.data.model_dump() == {"params": {}, "results": [], "diagnostics": None}
+
+    await chain.async_save_search_context(62, SearchLastContextData(params={"keyword": "Second"}))
+    monkeypatch.setattr(chain, "async_search_by_title", AsyncMock(return_value=[
+        Context(torrent_info=TorrentInfo(title="Updated result")),
+    ]))
+    await endpoint.search_by_title(keyword="Updated", _=TokenPayload(sub=61))
+    updated = await endpoint.search_latest_context(TokenPayload(sub=61))
+    second = await endpoint.search_latest_context(TokenPayload(sub=62))
+    assert updated.data.params["keyword"] == "Updated"
+    assert updated.data.diagnostics is None
+    assert updated.data.results[0].torrent_info.title == "Updated result"
+    assert second.data.params == {"keyword": "Second"}
+    assert second.data.results == []

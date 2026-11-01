@@ -9,7 +9,7 @@ import json
 from collections import Counter
 from contextlib import aclosing
 from functools import partial
-from typing import Any, AsyncGenerator, AsyncIterator, Callable, Literal, Optional, TypeVar, cast
+from typing import TYPE_CHECKING, Any, AsyncGenerator, AsyncIterator, Callable, Literal, Optional, TypeVar, cast
 from uuid import uuid4
 
 from app.application.configuration import get_configured_system_config
@@ -28,15 +28,10 @@ from app.domain.search import MAX_SEARCH_PAGES, search_page_signature, search_re
 from app.runtime.cache import Cache
 from app.runtime.execution import await_task_to_terminal
 from app.runtime.tasks import get_task_registry
-from app.schemas.search import (
-    SearchDiagnosticCounts,
-    SearchDiagnosticRejection,
-    SearchDiagnostics,
-    SearchDiagnosticSite,
-    SearchDiagnosticWarning,
-    SearchLastContextData,
-)
 from app.schemas.types import MediaType, SystemConfigKey
+
+if TYPE_CHECKING:
+    from app.schemas.search import SearchDiagnostics, SearchDiagnosticSite
 
 _PageResult = TypeVar("_PageResult")
 _PAGE_CACHE_REGION = "search.manual.pages"
@@ -45,10 +40,12 @@ _OUTCOME_PRIORITY = {"empty": 0, "success": 1, "unknown": 2, "cooldown": 3, "err
 
 
 def _site_diagnostic(site_id: str, site_name: Optional[str], observation: SiteSearchObservation,
-                     returned: int) -> SearchDiagnosticSite:
+                     returned: int) -> "SearchDiagnosticSite":
     """
     仅投影可信的请求结果与数量，不复制可能含凭据的原始错误。
     """
+    from app.schemas.search import SearchDiagnosticSite
+
     raw_count = observation.raw_count if observation.raw_count is not None else returned
     outcome: Literal["success", "empty", "error", "cooldown", "unknown"] = "unknown"
     if observation.outcome == "deferred":
@@ -114,9 +111,9 @@ class _ManualPage:
         self.search_id = search_id
         self.page_cache = Cache(ttl=RESTART_AFTER_SECONDS)
         self.counts: Counter[str] = Counter()
-        self.observations: list[SearchDiagnosticSite] = []
+        self.observations: list["SearchDiagnosticSite"] = []
 
-    def read(self, key: str, page: int) -> tuple[dict[str, Any], list[TorrentInfo], list[SearchDiagnosticSite]]:
+    def read(self, key: str, page: int) -> tuple[dict[str, Any], list[TorrentInfo], list["SearchDiagnosticSite"]]:
         """
         上一页摘要保留 36 小时；失效时先补上一页再取目标页，只有目标页交给原结果处理。
         """
@@ -126,7 +123,7 @@ class _ManualPage:
         facts: dict[str, Any] = {"source": source,
                                 "site_name": self.sources.sites.get(query["site"], {}).get("name"),
                                 "page": page, "can_continue": False, "error": None}
-        observations: list[SearchDiagnosticSite] = []
+        observations: list["SearchDiagnosticSite"] = []
         # 超过最大页数，或不支持分页的站点请求后续页时，直接按末页返回。
         if page >= MAX_SEARCH_PAGES or (page > 0 and not pageable):
             return facts, [], observations
@@ -173,13 +170,20 @@ class _ManualPage:
             diagnostics=self.counts,
         )
 
-    def diagnostics(self, contexts: list[Context]) -> SearchDiagnostics:
+    def diagnostics(self, contexts: list[Context]) -> "SearchDiagnostics":
         """
         在完整页处理后生成请求独有的诊断，规则跳过不会伪装成资源拒绝。
 
         :param contexts: 本页最终过滤结果
         :return: 仅描述本次页请求的安全诊断快照
         """
+        from app.schemas.search import (
+            SearchDiagnosticCounts,
+            SearchDiagnosticRejection,
+            SearchDiagnostics,
+            SearchDiagnosticWarning,
+        )
+
         rules = RuleHelper().explain_rule_groups(
             media=None if self.raw_title else self.media, group_names=self.plan.rule_groups or [],
         )
@@ -215,7 +219,7 @@ class _ManualPage:
 
 async def _read_pages(
     manual: _ManualPage, keys: list[str], page: int,
-) -> AsyncGenerator[tuple[str, dict[str, Any], list[TorrentInfo], list[SearchDiagnosticSite]], None]:
+) -> AsyncGenerator[tuple[str, dict[str, Any], list[TorrentInfo], list["SearchDiagnosticSite"]], None]:
     """
     复用有界并发和取消收口；同站点多个关键词按轮次串行，先完成的页立即交付。
     """
@@ -319,6 +323,8 @@ async def _page_events(manual: _ManualPage, params: dict[str, Any]) -> AsyncGene
             sites=params.get("sites"), result_type="torrent")
         manual.owner.save_last_search_params(**cache_params)
         if isinstance(params.get("user_id"), int):
+            from app.schemas.search import SearchLastContextData
+
             await manual.owner.async_save_search_context(params["user_id"], SearchLastContextData.model_validate({
                 "params": SearchStateService.build_params(**cache_params) or {},
                 "results": [context.to_dict() for context in contexts], "diagnostics": diagnostics,
